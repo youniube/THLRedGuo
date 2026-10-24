@@ -173,19 +173,10 @@ class _PlayerMenuState extends State<PlayerMenu> {
       color: colors.onSurfaceVariant,
       height: 1.5,
     );
-    final available = widget.qualities.isNotEmpty ? widget.qualities : const [1080, 720, 360];
-    final qualities = {
-      0,
-      1080,
-      720,
-      360,
-      ...available.where((quality) => quality > 0),
-    }.toList();
-    qualities.sort((a, b) {
-      if (a == 0) return -1;
-      if (b == 0) return 1;
-      return b.compareTo(a);
-    });
+    final qualities =
+        widget.qualities.where((quality) => quality > 0).toSet().toList()
+          ..sort((a, b) => b.compareTo(a));
+    qualities.insert(0, 0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -207,9 +198,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
                           setState(() {
                             _preferences = _preferences.copyWith(speed: speed);
                           });
-                          _run(
-                            () => widget.onPreferences(_preferences),
-                          );
+                          _run(() => widget.onPreferences(_preferences));
                         },
                 ),
             ],
@@ -223,8 +212,8 @@ class _PlayerMenuState extends State<PlayerMenu> {
             widget.local
                 ? '本集正在播放本地原画，画质偏好用于后续在线播放。'
                 : widget.actualQuality > 0
-                ? '当前播放 ${widget.actualQuality >= 1080 ? "1080P 超清" : (widget.actualQuality >= 720 ? "720P 高清" : "360P 标清")}（端侧超分锐化生效中）'
-                : '智能优选当前最高可用画质',
+                ? '当前播放 ${widget.actualQuality}P'
+                : '按源站默认画质播放',
             style: helperStyle,
           ),
           const SizedBox(height: 8),
@@ -235,17 +224,17 @@ class _PlayerMenuState extends State<PlayerMenu> {
               for (final quality in qualities)
                 ChoiceChip(
                   key: ValueKey('menu-quality-$quality'),
-                  label: Text(quality == 0 ? '自动（优先高清）' : '${quality}P'),
+                  label: Text(quality == 0 ? '自动（源站默认）' : '${quality}P'),
                   selected: quality == preferences.quality,
                   onSelected: _busy
                       ? null
                       : (_) {
                           setState(() {
-                            _preferences = _preferences.copyWith(quality: quality);
+                            _preferences = _preferences.copyWith(
+                              quality: quality,
+                            );
                           });
-                          _run(
-                            () => widget.onPreferences(_preferences),
-                          );
+                          _run(() => widget.onPreferences(_preferences));
                         },
                 ),
             ],
@@ -269,9 +258,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
               setState(() {
                 _preferences = _preferences.copyWith(enhancement: enhancement);
               });
-              _run(
-                () => widget.onPreferences(_preferences),
-              );
+              _run(() => widget.onPreferences(_preferences));
             },
             onCompare: widget.onCompareEnhancement ?? () {},
           ),
@@ -288,9 +275,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
                     setState(() {
                       _preferences = _preferences.copyWith(danmaku: value);
                     });
-                    _run(
-                      () => widget.onPreferences(_preferences),
-                    );
+                    _run(() => widget.onPreferences(_preferences));
                   },
           ),
           if (preferences.danmaku) ...[
@@ -335,13 +320,16 @@ class _PlayerMenuState extends State<PlayerMenu> {
                             style: const TextStyle(fontSize: 12),
                           ),
                         ),
-                        selected: (preferences.danmakuStyle.opacity - op).abs() < 0.05,
+                        selected:
+                            (preferences.danmakuStyle.opacity - op).abs() <
+                            0.05,
                         onSelected: _busy
                             ? null
                             : (_) {
                                 setState(() {
                                   _preferences = _preferences.copyWith(
-                                    danmakuStyle: preferences.danmakuStyle.copyWith(opacity: op),
+                                    danmakuStyle: preferences.danmakuStyle
+                                        .copyWith(opacity: op),
                                   );
                                 });
                                 _run(() => widget.onPreferences(_preferences));
@@ -388,9 +376,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
                     setState(() {
                       _preferences = _preferences.copyWith(preload: value);
                     });
-                    _run(
-                      () => widget.onPreferences(_preferences),
-                    );
+                    _run(() => widget.onPreferences(_preferences));
                   },
           ),
           const SizedBox(height: 8),
@@ -406,9 +392,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
                     setState(() {
                       _preferences = _preferences.copyWith(autoAdvance: value);
                     });
-                    _run(
-                      () => widget.onPreferences(_preferences),
-                    );
+                    _run(() => widget.onPreferences(_preferences));
                   },
           ),
           const SizedBox(height: 8),

@@ -180,14 +180,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     preload: _preloadEnabled,
     enhancement: _enhancement.preferences,
   );
+  int get _actualQuality {
+    if (_plan == null) return 0;
+    if (_openedIndex == _index) {
+      final size = videoDisplaySize(_player.state.videoParams);
+      if (size != null) return size.shortestSide.round();
+    }
+    return _plan!.quality;
+  }
+
   String get _qualityLabel {
     if (_plan?.offline == true) return '本地原画';
-    final q = _requestedQuality > 0
-        ? _requestedQuality
-        : (_plan?.quality ?? 720);
-    if (q >= 1080) return '1080P';
-    if (q >= 720) return '720P';
-    return '${q}P';
+    final quality = _actualQuality;
+    return quality > 0 ? '${quality}P' : '自动';
   }
 
   String get _session => _plan?.session ?? '';
@@ -570,8 +575,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         final arguments = call.arguments;
         final active = arguments is Map && arguments['active'] == true;
         final error = arguments is Map ? arguments['error'] as String? : null;
-        final position =
-            arguments is Map ? (arguments['position'] as num?)?.toInt() : null;
+        final position = arguments is Map
+            ? (arguments['position'] as num?)?.toInt()
+            : null;
 
         if (error != null && error.isNotEmpty) {
           _notice('画中画提示: $error');
@@ -1720,13 +1726,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (_mobile && section == PlayerMenuSection.quality) {
         final chosenQuality = await PlayerDialogHelper.openQualitySheet(
           context: context,
-          qualities: (_plan?.qualities != null && _plan!.qualities.isNotEmpty)
-              ? _plan!.qualities
-              : const [1080, 720, 360],
+          qualities: _plan?.qualities ?? const [],
           selectedQuality: _requestedQuality,
-          actualQuality:
-              _plan?.quality ??
-              (_requestedQuality > 0 ? _requestedQuality : 720),
+          actualQuality: _actualQuality,
           isLocal: _plan?.offline == true,
         );
         if (chosenQuality != null && chosenQuality != _requestedQuality) {
@@ -1772,6 +1774,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           currentIndex: _index,
           preferences: _preferences,
           plan: _plan,
+          actualQuality: _actualQuality,
           store: widget.store,
           danmaku: _danmaku,
           preloader: _preloader,

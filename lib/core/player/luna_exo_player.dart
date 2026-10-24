@@ -491,6 +491,25 @@ class LunaExoPlayer implements Player {
     final v = c.value;
 
     bool stateChanged = false;
+    final width = v.size.width.round();
+    final height = v.size.height.round();
+    if (width > 0 &&
+        height > 0 &&
+        (width != state.videoParams.w || height != state.videoParams.h)) {
+      final parameters = VideoParams(
+        w: width,
+        h: height,
+        dw: width,
+        dh: height,
+      );
+      state = state.copyWith(
+        width: width,
+        height: height,
+        videoParams: parameters,
+      );
+      _safeAdd(stream.videoParamsController, parameters);
+      stateChanged = true;
+    }
     if (v.isPlaying != state.playing) {
       DiaryService.add('[ExoPlayer] isPlaying 变为: ${v.isPlaying}');
       state = state.copyWith(playing: v.isPlaying);
