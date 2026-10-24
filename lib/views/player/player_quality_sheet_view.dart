@@ -27,7 +27,7 @@ class PlayerQualitySheetView extends StatelessWidget {
   }
 
   static String qualitySubtitle(int quality) {
-    if (quality == 0) return '使用源站默认播放策略，实际清晰度以视频为准';
+    if (quality == 0) return '优先选择已知高清资源，失败后尝试备用线路';
     if (quality >= 1080) return '源站提供的超清画质，画面细节更丰富';
     if (quality >= 720) return '高清画质，边缘清晰锐利，平衡效果与流畅度';
     return '低带宽省流首选，极速起播不卡顿';

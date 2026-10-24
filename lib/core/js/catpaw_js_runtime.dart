@@ -53,6 +53,7 @@ class CatPawPlayResult {
   final int expiresAt;
   final String danmakuId;
   final String errorCode;
+  final List<CatPawPlayResult> streams;
   const CatPawPlayResult({
     required this.url,
     required this.header,
@@ -64,6 +65,7 @@ class CatPawPlayResult {
     this.expiresAt = 0,
     this.danmakuId = '',
     this.errorCode = '',
+    this.streams = const [],
   });
 }
 
@@ -551,22 +553,19 @@ globalThis.__native_save_device = function(json) {
     String flag,
     String id, {
     List<dynamic>? flags,
+    Duration timeout = const Duration(seconds: 60),
   }) async {
     _assertReady();
     final flagsJson = jsonEncode(flags ?? []);
-    final dynamic res;
-    try {
-      res = await _evalAsync(
-        'typeof spider !== "undefined" && typeof spider.play === "function" ? spider.play(${jsonEncode(flag)}, ${jsonEncode(id)}, $flagsJson) : { parse: 0, url: "" }',
-        timeout: const Duration(seconds: 60),
-      );
-    } on CatPawSourceFailure catch (e) {
-      if (e.code == 'cancelled') {
-        return const CatPawPlayResult(url: '', header: {}, parse: 0);
-      }
-      rethrow;
-    }
+    final res = await _evalAsync(
+      'typeof spider !== "undefined" && typeof spider.play === "function" ? spider.play(${jsonEncode(flag)}, ${jsonEncode(id)}, $flagsJson) : { parse: 0, url: "" }',
+      timeout: timeout,
+    );
     final map = (res is Map) ? res : {};
+    return _playResult(map);
+  }
+
+  static CatPawPlayResult _playResult(Map map, {bool includeStreams = true}) {
     final url = map['url']?.toString() ?? '';
     final parse = (map['parse'] as num?)?.toInt() ?? 0;
     final contentKey =
@@ -598,6 +597,26 @@ globalThis.__native_save_device = function(json) {
               .map((value) => value.toInt())
               .where((value) => value > 0)
               .toList(),
+      streams: includeStreams && map['streams'] is List
+          ? [
+              for (final stream in (map['streams'] as List).whereType<Map>())
+                if (stream['url'] is String &&
+                    (stream['url'] as String).trim().isNotEmpty)
+                  _playResult({
+                    ...map,
+                    ...stream,
+                    'quality': stream['quality'] ?? 0,
+                    'mediaBytes': stream['mediaBytes'] ?? 0,
+                    'qualities': const [],
+                    'header': {
+                      if ((map['header'] ?? map['headers']) is Map)
+                        ...(map['header'] ?? map['headers']) as Map,
+                      if ((stream['header'] ?? stream['headers']) is Map)
+                        ...(stream['header'] ?? stream['headers']) as Map,
+                    },
+                  }, includeStreams: false),
+            ]
+          : const [],
     );
   }
 

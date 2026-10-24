@@ -1483,15 +1483,15 @@ class _PlayerScreenState extends State<PlayerScreen>
           _acceptErrors = true;
           _queueRecovery();
         } else {
-          if (prepared != null) {
-            await widget.repository.release(prepared.session);
-          }
           if (!widget.localOnly &&
               error is! FormatException &&
               error is! FileSystemException) {
             final failed = prepared ?? failedPlan ?? retained ?? recoveryPlan;
-            final action = _recovery.next(failed);
+            final noAlternative =
+                error is AppFailure && error.code == 'NO_ALTERNATIVE';
+            final action = _recovery.next(noAlternative ? null : failed);
             if (action != PlaybackRecoveryAction.stop) {
+              if (failed != null) _plan = failed;
               unawaited(
                 _play(
                   index,
@@ -1503,6 +1503,9 @@ class _PlayerScreenState extends State<PlayerScreen>
               );
               return;
             }
+          }
+          if (prepared != null) {
+            await widget.repository.release(prepared.session);
           }
           if (mounted && !_closed && ticket == _generation) {
             setState(() {
@@ -1523,11 +1526,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         await widget.repository.release(prepared.session);
       }
     } finally {
-      if (warmed != null && !installed) {
+      if (warmed != null && !installed && _plan?.session != warmed.session) {
         await widget.repository.release(warmed.session);
       }
-      if (retained != null &&
-          (!installed || _plan?.session != retained!.session)) {
+      if (retained != null && _plan?.session != retained!.session) {
         await widget.repository.release(retained!.session);
       }
     }
@@ -1735,7 +1737,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           await _setPreferences(_preferences.copyWith(quality: chosenQuality));
           if (mounted) {
             _notice(
-              '已切换清晰度为 ${PlayerQualitySheetView.qualityTitle(chosenQuality)}',
+              '已设置画质偏好为 ${PlayerQualitySheetView.qualityTitle(chosenQuality)}',
             );
           }
         }

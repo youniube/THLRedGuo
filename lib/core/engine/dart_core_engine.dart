@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/core/js/js_source_models.dart';
+import 'package:THLRedLook/core/player/js_playback.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/utils/media/cover_decoder.dart';
 
@@ -30,6 +31,8 @@ class DartCoreEngine {
   final http.Client client = http.Client();
   final Map<String, JsSourceMeta> _installedSources = {};
   final Map<String, String> _sourceScripts = {};
+  final Map<String, Iterator<Map<String, dynamic>>> _playbackSessions = {};
+  int _playbackEpoch = 0;
   String _activeSourceId = 'hongguo';
 
   // 资源与代理配置
@@ -268,9 +271,12 @@ class DartCoreEngine {
       case 'fallback':
         return _fallbackPlayback(input);
       case 'cancelPlayback':
+        _playbackEpoch++;
         _spiderPool.cancelPending();
         return true;
       case 'release':
+        _playbackSessions.remove(input['session']);
+        return true;
       case 'cancelRead':
         return true;
 
@@ -564,36 +570,6 @@ class DartCoreEngine {
     };
   }
 
-  List<Map<String, dynamic>> _parseChaptersFromVodPlayUrl(String playUrlRaw) {
-    if (playUrlRaw.trim().isEmpty) return <Map<String, dynamic>>[];
-    var line = playUrlRaw;
-    if (line.contains(r'$$$')) {
-      line = line.split(r'$$$').first;
-    }
-    final items = line.split('#');
-    final chapters = <Map<String, dynamic>>[];
-    var idx = 1;
-    for (final item in items) {
-      final trimmed = item.trim();
-      if (trimmed.isEmpty) continue;
-      String title = '第 $idx 集';
-      String playId = trimmed;
-      if (trimmed.contains(r'$')) {
-        final parts = trimmed.split(r'$');
-        title = parts[0].trim().isNotEmpty ? parts[0].trim() : title;
-        playId = parts.sublist(1).join(r'$').trim();
-      }
-      chapters.add({
-        'id': playId.isNotEmpty ? playId : '$idx',
-        'title': title,
-        'index': idx,
-        'raw': playId.isNotEmpty ? playId : '$idx',
-      });
-      idx++;
-    }
-    return chapters;
-  }
-
   Future<Map<String, dynamic>> _getCatalog(Map<String, dynamic> input) async {
     final source = input['source'] as String? ?? 'hongguo';
     final page = (input['page'] as num?)?.toInt() ?? 1;
@@ -782,7 +758,12 @@ class DartCoreEngine {
         fullDrama['description'] = spiderVod['vod_content'].toString();
       }
       final playUrlRaw = spiderVod['vod_play_url']?.toString() ?? '';
-      chapters.addAll(_parseChaptersFromVodPlayUrl(playUrlRaw));
+      chapters.addAll(
+        jsPlaybackChapters(
+          playUrlRaw,
+          spiderVod['vod_play_from']?.toString() ?? '',
+        ),
+      );
     }
 
     if (chapters.isEmpty) {
@@ -851,98 +832,111 @@ class DartCoreEngine {
     final sourceId = rawSourceId.trim();
     final episodeIndex = (input['index'] as num?)?.toInt() ?? 1;
     final chapter = input['chapter'];
-
+    final requestedQuality = (input['quality'] as num?)?.toInt() ?? 0;
+    final avoidUrl = input['avoidUrl']?.toString() ?? '';
+    final epoch = _playbackEpoch;
+    bool cancelled() => epoch != _playbackEpoch;
+    final clock = Stopwatch()..start();
+    final results = <CatPawPlayResult>[];
     Object? sourceFailure;
     final rt = await _getSpiderRuntime(source);
     if (rt != null) {
-      try {
-        var playTarget =
-            (chapter is Map
-                ? (chapter['raw'] ?? chapter['url'] ?? chapter['id'])
-                      ?.toString()
-                : null) ??
-            (chapter is String ? chapter : null) ??
-            '$episodeIndex';
-        if (!playTarget.startsWith('http://') &&
-            !playTarget.startsWith('https://') &&
-            !playTarget.contains('/') &&
-            !playTarget.contains('_') &&
-            sourceId.isNotEmpty) {
-          playTarget = '${sourceId}_$playTarget';
-        }
-        final flags = <Map<String, String>>[
-          if (input['avoidUrl'] is String &&
-              (input['avoidUrl'] as String).isNotEmpty)
-            {'avoidUrl': input['avoidUrl'] as String},
-        ];
-        var playRes = await rt.play('flag', playTarget, flags: flags);
-        if (playRes.url.isEmpty && sourceId.isNotEmpty) {
-          final fallbackTarget = '${sourceId}_$episodeIndex';
-          if (fallbackTarget != playTarget) {
-            playRes = await rt.play('flag', fallbackTarget, flags: flags);
+      final routes = chapter is Map && chapter['routes'] is List
+          ? (chapter['routes'] as List).whereType<Map>().toList()
+          : <Map>[];
+      if (routes.isEmpty) {
+        routes.add({
+          'raw': chapter is Map
+              ? chapter['raw'] ?? chapter['url'] ?? chapter['id']
+              : chapter,
+        });
+      }
+      for (final route in routes) {
+        if (cancelled()) throw CatPawSourceFailure.playback('cancelled');
+        final remaining = const Duration(seconds: 60) - clock.elapsed;
+        if (remaining <= Duration.zero) break;
+        try {
+          var playTarget = route['raw']?.toString() ?? '$episodeIndex';
+          if (!playTarget.startsWith('http://') &&
+              !playTarget.startsWith('https://') &&
+              !playTarget.contains('/') &&
+              !playTarget.contains('_') &&
+              sourceId.isNotEmpty) {
+            playTarget = '${sourceId}_$playTarget';
           }
+          final flags = <Map<String, dynamic>>[
+            {
+              'quality': requestedQuality,
+              if (avoidUrl.isNotEmpty) 'avoidUrl': avoidUrl,
+            },
+          ];
+          final flag = route['flag']?.toString() ?? 'flag';
+          var playRes = await rt.play(
+            flag,
+            playTarget,
+            flags: flags,
+            timeout: remaining,
+          );
+          if (playRes.url.isEmpty &&
+              playRes.streams.isEmpty &&
+              sourceId.isNotEmpty &&
+              routes.length == 1) {
+            final fallbackTarget = '${sourceId}_$episodeIndex';
+            final retryRemaining = const Duration(seconds: 60) - clock.elapsed;
+            if (fallbackTarget != playTarget &&
+                retryRemaining > Duration.zero) {
+              playRes = await rt.play(
+                flag,
+                fallbackTarget,
+                flags: flags,
+                timeout: retryRemaining,
+              );
+            }
+          }
+          if (playRes.url.isNotEmpty || playRes.streams.isNotEmpty) {
+            results.add(playRes);
+          } else {
+            sourceFailure = CatPawSourceFailure.playback(playRes.errorCode);
+          }
+        } catch (error) {
+          if (error is CatPawSourceFailure && error.code == 'cancelled') {
+            rethrow;
+          }
+          sourceFailure = error;
         }
-        if (playRes.url.isNotEmpty) {
-          final streamUrl = playRes.url;
-          final mimeType = streamUrl.contains('.m3u8')
-              ? 'application/x-mpegURL'
-              : 'video/mp4';
-          final detected = RegExp(
-            r'/(2160|1080|720|480|360)p[./]',
-          ).firstMatch(streamUrl);
-          final effectiveQuality = playRes.quality > 0
-              ? playRes.quality
-              : int.tryParse(detected?.group(1) ?? '') ?? 0;
-          return {
-            'url': streamUrl,
-            'session': 'sess_${DateTime.now().microsecondsSinceEpoch}_$source',
-            'headers': playRes.header,
-            'decryptionKey': playRes.decryptionKey,
-            'mediaBytes': playRes.mediaBytes,
-            'expiresAt': playRes.expiresAt,
-            'quality': effectiveQuality,
-            'qualities': playRes.qualities.isNotEmpty
-                ? playRes.qualities
-                : [if (effectiveQuality > 0) effectiveQuality],
-            'local': false,
-            'mimeType': mimeType,
-            'danmakuId': playRes.danmakuId,
-          };
-        }
-        sourceFailure = CatPawSourceFailure.playback(playRes.errorCode);
-      } catch (error) {
-        sourceFailure = error;
       }
     }
-
-    if (sourceFailure is CatPawSourceFailure &&
-        sourceFailure.code == 'cancelled') {
-      throw sourceFailure;
-    }
-    if (chapter is Map &&
+    if (results.isEmpty &&
+        chapter is Map &&
         chapter['url'] is String &&
         RegExp(
           r'^https?://.+\.(mp4|m3u8)(?:[?#]|$)',
           caseSensitive: false,
         ).hasMatch(chapter['url'] as String)) {
-      final streamUrl = chapter['url'] as String;
-      final mimeType = streamUrl.contains('.m3u8')
-          ? 'application/x-mpegURL'
-          : 'video/mp4';
-      final detected = RegExp(
-        r'/(2160|1080|720|480|360)p[./]',
-      ).firstMatch(streamUrl);
-      final effectiveQuality = int.tryParse(detected?.group(1) ?? '') ?? 0;
-      return {
-        'url': streamUrl,
-        'session': 'sess_${DateTime.now().microsecondsSinceEpoch}_$source',
-        'headers': const <String, String>{},
-        'quality': effectiveQuality,
-        'qualities': [if (effectiveQuality > 0) effectiveQuality],
-        'local': false,
-        'mimeType': mimeType,
-        'danmakuId': '',
-      };
+      results.add(
+        CatPawPlayResult(url: chapter['url'] as String, header: const {}),
+      );
+    }
+    final plans = await JsPlaybackResolver(client).resolve(
+      results,
+      requestedQuality: requestedQuality,
+      avoidUrl: avoidUrl,
+      cancelled: cancelled,
+      probeBudget: const Duration(seconds: 65) - clock.elapsed,
+    );
+    if (plans.isNotEmpty) {
+      final session = 'sess_${DateTime.now().microsecondsSinceEpoch}_$source';
+      final iterator = [
+        for (var index = 0; index < plans.length; index++)
+          {
+            ...plans[index],
+            'session': session,
+            'routeIndex': index,
+            'routeCount': plans.length,
+          },
+      ].iterator..moveNext();
+      _playbackSessions[session] = iterator;
+      return iterator.current;
     }
 
     if (sourceFailure != null) throw sourceFailure;
@@ -950,7 +944,14 @@ class DartCoreEngine {
   }
 
   Map<String, dynamic> _fallbackPlayback(Map<String, dynamic> input) {
-    throw StateError('无备用播放流');
+    final routes = _playbackSessions[input['session']];
+    while (routes != null && routes.moveNext()) {
+      final expiresAt = routes.current['expiresAt'] as int? ?? 0;
+      if (expiresAt <= 0 || expiresAt > DateTime.now().millisecondsSinceEpoch) {
+        return routes.current;
+      }
+    }
+    throw const CatPawSourceFailure('无备用播放流', code: 'NO_ALTERNATIVE');
   }
 
   Map<String, dynamic> _enqueueDownloads(Map<String, dynamic> input) {

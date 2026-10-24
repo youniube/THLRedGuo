@@ -224,7 +224,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
               for (final quality in qualities)
                 ChoiceChip(
                   key: ValueKey('menu-quality-$quality'),
-                  label: Text(quality == 0 ? '自动（源站默认）' : '${quality}P'),
+                  label: Text(quality == 0 ? '自动（优先高清）' : '${quality}P'),
                   selected: quality == preferences.quality,
                   onSelected: _busy
                       ? null

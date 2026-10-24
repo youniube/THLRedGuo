@@ -60,12 +60,73 @@ class _QualityPlayer extends LunaExoPlayer {
   }
 }
 
+class _FallbackRepository extends _QualityRepository {
+  _FallbackRepository(this.exhausted)
+    : super(
+        const PlaybackPlan(
+          url: 'https://synthetic.invalid/first.mp4',
+          session: 'original',
+          quality: 1080,
+          routeCount: 2,
+        ),
+      );
+
+  final bool exhausted;
+  final released = <String>[];
+  int fallbacks = 0;
+  int refreshes = 0;
+
+  @override
+  Future<PlaybackPlan> fallback(PlaybackPlan current) async {
+    fallbacks++;
+    expect(released, isNot(contains(current.session)));
+    if (exhausted) throw AppFailure('无备用播放流', code: 'NO_ALTERNATIVE');
+    return const PlaybackPlan(
+      url: 'https://synthetic.invalid/backup.mp4',
+      session: 'original',
+      quality: 720,
+      routeIndex: 1,
+      routeCount: 2,
+    );
+  }
+
+  @override
+  Future<PlaybackPlan> refreshPlayback(
+    Drama drama,
+    Episode episode,
+    PlaybackPlan current, {
+    int quality = 0,
+  }) async {
+    refreshes++;
+    return const PlaybackPlan(
+      url: 'https://synthetic.invalid/fresh.mp4',
+      session: 'fresh',
+      quality: 720,
+    );
+  }
+
+  @override
+  Future<void> release(String session) async => released.add(session);
+}
+
+class _FailingQualityPlayer extends _QualityPlayer {
+  int opens = 0;
+
+  @override
+  Future<void> open(Playable playable, {bool play = true}) async {
+    if (opens++ == 0) throw StateError('合成原生播放失败');
+    await super.open(playable, play: play);
+  }
+}
+
 Future<_QualityPlayer> _openPlayer(
   WidgetTester tester, {
   PlaybackPlan plan = const PlaybackPlan(
     url: 'https://synthetic.invalid/video.mp4',
   ),
   int requestedQuality = 0,
+  _QualityRepository? repository,
+  _QualityPlayer? player,
 }) async {
   tester.view.physicalSize = const Size(430, 1000);
   tester.view.devicePixelRatio = 1;
@@ -80,7 +141,7 @@ Future<_QualityPlayer> _openPlayer(
       preload: false,
     ),
   );
-  final player = _QualityPlayer();
+  final activePlayer = player ?? _QualityPlayer();
   await tester.pumpWidget(
     MaterialApp(
       home: PlayerScreen(
@@ -88,9 +149,9 @@ Future<_QualityPlayer> _openPlayer(
           Episode({'id': 'episode-1'}, 1),
         ]),
         initialIndex: 0,
-        repository: _QualityRepository(plan),
+        repository: repository ?? _QualityRepository(plan),
         store: store,
-        playerFactory: () => player,
+        playerFactory: () => activePlayer,
         videoBuilder: (controls) => controls,
       ),
     ),
@@ -98,13 +159,35 @@ Future<_QualityPlayer> _openPlayer(
   for (var i = 0; i < 8; i++) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  return player;
+  return activePlayer;
 }
 
 String _qualityLabel(WidgetTester tester) =>
     tester.widget<PlayerControls>(find.byType(PlayerControls)).qualityLabel;
 
 void main() {
+  for (final exhausted in [false, true]) {
+    testWidgets(exhausted ? '备用流耗尽时刷新地址，不重复尝试失效会话' : '原生播放失败自动切备用流，并保留当前会话', (
+      tester,
+    ) async {
+      final repository = _FallbackRepository(exhausted);
+      await _openPlayer(
+        tester,
+        repository: repository,
+        player: _FailingQualityPlayer(),
+      );
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      expect(repository.fallbacks, 1);
+      expect(repository.refreshes, exhausted ? 1 : 0);
+      expect(_qualityLabel(tester), '720P');
+      if (!exhausted) expect(repository.released, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
+  }
+
   testWidgets('JS 源未提供画质时显示自动，不把已保存的偏好当作实际画质', (tester) async {
     await _openPlayer(tester, requestedQuality: 1080);
 
