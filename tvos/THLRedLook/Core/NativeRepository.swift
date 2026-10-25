@@ -2,13 +2,16 @@ import Foundation
 
 public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStreamProviderProtocol, DanmakuProviderProtocol {
     public static let shared = NativeRepository()
-    private let bridge = NativeBridge.shared
+    static let preloading = NativeRepository(bridge: NativeBridge())
+    private let bridge: NativeBridge
+    private let playbackBridge = NativeBridge()
     private let danmakuBridge = NativeBridge()
+    private let feedBridge = NativeBridge()
 
-    public init() {}
+    public init(bridge: NativeBridge = .shared) { self.bridge = bridge }
 
     public func loadVideoFeed(page: Int, session: String) async throws -> VideoFeedPage {
-        let result = try await bridge.request(action: "feed", payload: ["source": "hongguo", "page": page, "session": session])
+        let result = try await feedBridge.request(action: "feed", payload: ["source": "hongguo", "page": page, "session": session])
         let data = try JSONSerialization.data(withJSONObject: result)
         return try JSONDecoder().decode(VideoFeedPage.self, from: data)
     }
@@ -77,12 +80,13 @@ public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStream
             freshDrama = drama.merge(with: decoded)
         }
 
+        let isHongguo = drama.source == "hongguo" || drama.id.hasPrefix("hongguo:") || freshDrama.source == "hongguo" || freshDrama.id.hasPrefix("hongguo:")
         var episodes = [Episode]()
         for (i, row) in chaptersRaw.enumerated() {
             let id = row["id"] as? String ?? "\(drama.id)_\(i + 1)"
             let title = row["title"] as? String ?? "第 \(i + 1) 集"
             let num = row["currentEpisode"] as? Int ?? (row["index"] as? Int) ?? (i + 1)
-            let vip = row["vip"] as? Bool ?? false
+            let vip = isHongguo ? false : (row["vip"] as? Bool ?? false)
             let raw = try? JSONSerialization.data(withJSONObject: row)
             episodes.append(Episode(id: id, title: title, number: num, vip: vip, raw: raw))
         }
@@ -156,7 +160,7 @@ public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStream
         if let chapter = episode?.rawChapter {
             payload["chapter"] = chapter
         }
-        let resp = try await bridge.request(action: "resolve", payload: payload)
+        let resp = try await playbackBridge.request(action: "resolve", payload: payload)
         let data = try JSONSerialization.data(withJSONObject: resp)
         let plan = try JSONDecoder().decode(PlaybackPlan.self, from: data)
         guard !plan.url.isEmpty else {

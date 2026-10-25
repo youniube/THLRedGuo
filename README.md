@@ -1,5 +1,14 @@
 # 糖葫芦Haw (THLRedLook)
 
+<p align="left">
+  <a href="https://github.com/never88gone/THLRedGuo/stargazers"><img src="https://img.shields.io/github/stars/never88gone/THLRedGuo?style=flat-square&logo=github&color=e02424" alt="GitHub Stars" /></a>
+  <a href="https://github.com/never88gone/THLRedGuo/network/members"><img src="https://img.shields.io/github/forks/never88gone/THLRedGuo?style=flat-square&logo=github" alt="GitHub Forks" /></a>
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20tvOS%20%7C%20Windows%20%7C%20macOS-blue?style=flat-square" alt="Supported Platforms" />
+  <a href="https://flutter.dev"><img src="https://img.shields.io/badge/Flutter-3.44+-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter SDK" /></a>
+  <a href="https://testflight.apple.com/join/rkvvdp7J"><img src="https://img.shields.io/badge/TestFlight-Public%20Beta-black?style=flat-square&logo=apple" alt="Apple TestFlight" /></a>
+  <a href="https://t.me/tanghulutvos"><img src="https://img.shields.io/badge/Telegram-Group-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Group" /></a>
+</p>
+
 > ⚠️ **免责声明 (Disclaimer)**：
 > 1. **仅供学习研究**：本项目仅供编程技术交流、Flutter 跨平台与 Apple tvOS 原生应用架构研究使用，严禁用于任何商业牟利或侵权用途；
 > 2. **纯客户端工具，无内容存储**：本项目为纯本地端侧播放器工具，无需注册登录即可直接使用；开发者不搭建、不运营任何流媒体服务器，不提供、不存储、不分发任何音视频资源；
@@ -69,9 +78,9 @@
 
 | 平台 | 形态与特性 | 构建与交付产物 |
 | :--- | :--- | :--- |
-| **Android** | 适配手机与折叠屏，支持竖屏短剧滑动手势、画中画（PiP）浮窗、arm64-v8a / armeabi-v7a / x86_64 三架构 | 原生 Flutter + NDK 编译，输出 APK / AAB |
+| **Android** | 适配手机、折叠屏与老旧设备，兼容 Android 7.1+（API 25+），支持竖屏短剧滑动手势、画中画（PiP）浮窗、arm64-v8a / armeabi-v7a / x86_64 三架构 | 原生 Flutter + NDK 编译，输出 APK / AAB |
 | **Android TV** | 自动识别大屏电视模式，锁定横屏影院布局，完整适配遥控器方向键与焦点移动 | 共用 Flutter 源码，自适应电视 UI 布局 |
-| **iOS** | 适配 iPhone / iPad，支持深色模式自适应、原生手势返回与后台低功耗下载 | Xcode 编译签名，输出 IPA 归档；支持 [Apple TestFlight](https://testflight.apple.com/join/rkvvdp7J) 一键安装 |
+| **iOS** | 适配 iPhone / iPad，原生画中画（PiP）小窗播放与后台接续、深色模式自适应、原生手势返回与低功耗下载 | Xcode 编译签名，输出 IPA 归档；支持 [Apple TestFlight](https://testflight.apple.com/join/rkvvdp7J) 一键安装 |
 | **macOS** | 桌面端大屏响应式三栏/分栏布局，键盘方向键与快捷键全面支持 | macOS App / PKG 安装包 |
 | **Windows** | 基于 `media_kit` / libmpv 硬件解码，集成专属 Shader 画质增强滤镜 | 独立免安装绿色包 / 便携目录（含完整 DLL 与运行环境） |
 | **Apple tvOS** | 独立原生工程（`tvos/`），纯 SwiftUI + Siri Remote 焦点引擎 + AVKit 原生渲染打造，具备完整客厅大屏交互与原生影院体验 | 独立 Xcode 工程，输出 tvOS IPA；支持 [Apple TestFlight](https://testflight.apple.com/join/rkvvdp7J) 一键安装 |
@@ -89,11 +98,15 @@
 - **本地搜索历史**：自动记录搜索词，支持一键点击历史词快捷重新检索或清理历史。
 
 ### 🎬 剧集详情与系列多季
-- **完整剧集信息展布**：清晰展示短剧海报封面、总集数、剧情简介与评分信息；
-- **系列多季聚拢展示**：优先使用红果 App 系列剧接口，按官方季号展示并切换；未上线季显示待上线状态，接口不可用时回退搜索匹配。
+- **海报大图与高清全屏预览**：剧集海报呈现放大至舒适比例，支持点击海报调起全屏查看与双指缩放；
+- **紧凑布局与多状态追剧**：标签移至海报右侧紧凑对齐，支持「想看 / 在看 / 已看」多档追剧状态底部弹窗管理；
+- **防眩光沉浸对比度**：采用多重深度渐变遮罩与独立半透明底衬，彻底消除背景海报高光对剧情简介和播放量的眩光干扰；
+- **系列多季聚拢展示**：优先使用官方系列剧接口按官方季号展示与切换，未上线季智能标识，接口不可用时平滑回退搜索关联。
 
 ### ⚡ 影院级视听与播放控制
-- **首页视频流推荐**：Flutter 与 tvOS 的独立“推荐”页面接入红果 App 首页推荐数据，手机上下滑动、电视遥控器上下键换剧，自动加载更多；tvOS 进入推荐后直接播放，返回时保留进度和焦点；支持选集、弹幕和本地追剧，离开页面自动停止播放并保存进度。
+- **系统级画中画 (PiP) 浮窗观影**：支持 iOS 与 Android 系统级原生画中画小窗播放，切出应用不中断观影，点击浮窗秒级还原跳转回播放器页面；
+- **沉浸式视频流推荐与无限翻页**：满宽贴底进度条直达屏幕边缘，去除多余按钮与翻页阻断，支持上下滑动平滑无限轮转切剧；
+- **iOS 加密短剧流式播放**：支持边加载边解密流式播放、平滑拖拽与连续切集，针对弱网与格式异常具备多级自愈机制；
 - **清晰度智能与手动切换**：Flutter 播放器按源返回的真实档位提供选择；自动模式优先已知高清资源，手选画质优先精确匹配，缺少该档时选择邻近可用档位。多线路按分集合并，播放失败后尝试备用资源；普通 HLS 主列表可展开画质，带独立音轨的主列表保留内核自适应。未知画质起播时显示“自动”，读取实际视频尺寸后更新标签；
 - **实时弹幕互动**：弹幕随播放时间轴滚动渲染，支持在播放菜单中随时开启或关闭弹幕；
 - **多种播放手势与偏好**：
@@ -180,3 +193,15 @@ flutter pub get
 # 启动本地调试（全平台支持）
 flutter run
 ```
+
+---
+
+## 📈 Star 历史趋势 (Star History)
+
+<a href="https://star-history.com/#never88gone/THLRedGuo&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=never88gone/THLRedGuo&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=never88gone/THLRedGuo&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=never88gone/THLRedGuo&type=Date" />
+ </picture>
+</a>

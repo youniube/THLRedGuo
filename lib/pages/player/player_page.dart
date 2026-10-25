@@ -16,6 +16,7 @@ import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/utils/diary/diary_service.dart';
 import 'package:THLRedLook/core/player/luna_exo_player.dart';
 import 'package:THLRedLook/core/player/encrypted_playback.dart';
+import 'package:THLRedLook/core/player/pip_manager.dart';
 import 'package:THLRedLook/core/danmaku/danmaku_controller.dart';
 import 'package:THLRedLook/views/download/download_picker.dart';
 import 'package:THLRedLook/pages/downloads/downloads_page.dart';
@@ -147,6 +148,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _pictureInPictureActive = false;
   bool _pictureInPictureRequested = false;
   bool _pictureInPictureHandlerInstalled = false;
+  int? _pipOriginalIndex;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
   String _loadingMessage = '正在准备播放';
   String? _error;
@@ -291,8 +293,11 @@ class _PlayerScreenState extends State<PlayerScreen>
             _acceptErrors &&
             _error == null) {
           final duration = _player.state.duration;
+          final currentPosition = _player.state.position > Duration.zero
+              ? _player.state.position
+              : Duration(milliseconds: (_resumePosition * 1000).round());
           if (duration <= Duration.zero ||
-              _player.state.position < duration - const Duration(seconds: 2)) {
+              currentPosition < duration - const Duration(seconds: 2)) {
             _queueRecovery();
           } else if (_autoAdvance &&
               _foreground &&
@@ -563,46 +568,99 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  void _syncPictureInPictureSession() {
+    _pictureInPictureHandlerInstalled = true;
+    _pipOriginalIndex ??= _index;
+    PipManager.instance.registerPictureInPictureSession(
+      detail: widget.detail,
+      episodeIndex: _index,
+      positionMs: _player.state.position.inMilliseconds,
+      quality: _requestedQuality,
+      speed: _speed,
+      localOnly: widget.localOnly,
+      onEpisodeAdvanced: (nextIndex) {
+        if (mounted && !_closed) {
+          setState(() {
+            _index = nextIndex;
+            _openedIndex = nextIndex;
+          });
+          _menuRevision.value++;
+          unawaited(_saveProgress(flush: true));
+        }
+      },
+      onRestoreCurrentPlayer: (positionMs) {
+        if (mounted && !_closed) {
+          final advanced =
+              _pipOriginalIndex != null && _pipOriginalIndex != _index;
+          _pipOriginalIndex = null;
+          _setPictureInPictureStatus(active: false);
+          if (advanced) {
+            unawaited(
+              _play(
+                _index,
+                position: positionMs > 0 ? positionMs / 1000.0 : 0.0,
+              ),
+            );
+          } else {
+            if (positionMs > 0) {
+              unawaited(_seekTo(Duration(milliseconds: positionMs)));
+            }
+            if (_playIntent && !_loading && _error == null) {
+              unawaited(_player.play());
+            }
+          }
+        }
+      },
+      onPictureInPictureStatusChanged: (active, error, position) {
+        if (mounted && !_closed) {
+          if (error != null && error.isNotEmpty) {
+            _notice('画中画提示: ${_localizePipError(error)}');
+          }
+          if (active) {
+            _pipOriginalIndex = _index;
+            if (Platform.isIOS && _player.state.playing) {
+              unawaited(_player.pause());
+            }
+          } else {
+            final advanced =
+                _pipOriginalIndex != null && _pipOriginalIndex != _index;
+            _pipOriginalIndex = null;
+            if (advanced) {
+              unawaited(
+                _play(
+                  _index,
+                  position:
+                      position != null && position > 0
+                          ? position / 1000.0
+                          : 0.0,
+                ),
+              );
+            } else {
+              if (position != null && position > 0) {
+                unawaited(_seekTo(Duration(milliseconds: position)));
+              }
+              if (_playIntent && !_loading && _error == null) {
+                unawaited(_player.play());
+              }
+            }
+          }
+          _setPictureInPictureStatus(
+            active: active,
+            requested: false,
+            delayHiddenPause: !active,
+          );
+        }
+      },
+    );
+  }
+
   void _configurePictureInPicture() {
     if (widget.feed) return;
     if (defaultTargetPlatform != TargetPlatform.android &&
         defaultTargetPlatform != TargetPlatform.iOS) {
       return;
     }
-    _pictureInPictureHandlerInstalled = true;
-    AppDevice.channel.setMethodCallHandler((call) async {
-      if (call.method == 'pictureInPictureChanged') {
-        final arguments = call.arguments;
-        final active = arguments is Map && arguments['active'] == true;
-        final error = arguments is Map ? arguments['error'] as String? : null;
-        final position = arguments is Map
-            ? (arguments['position'] as num?)?.toInt()
-            : null;
-
-        if (error != null && error.isNotEmpty) {
-          _notice('画中画提示: $error');
-        }
-
-        if (active) {
-          if (Platform.isIOS && _player.state.playing) {
-            unawaited(_player.pause());
-          }
-        } else {
-          if (position != null && position > 0) {
-            unawaited(_seekTo(Duration(milliseconds: position)));
-          }
-          if (_playIntent && !_loading && _error == null) {
-            unawaited(_player.play());
-          }
-        }
-
-        _setPictureInPictureStatus(
-          active: active,
-          requested: false,
-          delayHiddenPause: !active,
-        );
-      }
-    });
+    _syncPictureInPictureSession();
     unawaited(_refreshPictureInPictureStatus());
   }
 
@@ -711,6 +769,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  String _localizePipError(String? error) {
+    if (error == null || error.trim().isEmpty) {
+      return '无法启动画中画，请检查系统画中画设置或稍后重试';
+    }
+    final lower = error.toLowerCase();
+    if (lower.contains('cannot be completed') ||
+        lower.contains('could not be completed') ||
+        lower.contains('couldn’t be completed')) {
+      return '系统画中画启动未就绪，请稍后重试';
+    }
+    return error;
+  }
+
   Future<void> _enterPictureInPicture() async {
     if (_closed) return;
     if (!_canUsePictureInPicture) {
@@ -733,6 +804,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       setState(() => _panelOpen = false);
     }
     _interactions.cancel();
+    final wasPlaying = _player.state.playing;
+    if (Platform.isIOS && wasPlaying) {
+      await _player.pause();
+    }
     final rawRatio = _aspectRatio.isFinite && _aspectRatio > 0
         ? _aspectRatio
         : 16 / 9;
@@ -742,36 +817,83 @@ class _PlayerScreenState extends State<PlayerScreen>
     _notice('正在启动画中画...');
     _setPictureInPictureStatus(requested: true);
 
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _closed) return;
+
+    final mediaUrl = _plan?.url.isNotEmpty == true
+        ? _plan!.url
+        : (_player is LunaExoPlayer ? _player.mediaUri : '');
+    final headers = _plan?.headers ?? const <String, String>{};
+
+    String targetUrl = mediaUrl;
+    Map<String, String> targetHeaders = headers;
+    final isEncryptedStream =
+        Platform.isIOS &&
+        _plan != null &&
+        _plan!.decryptionKey.isNotEmpty &&
+        !_plan!.local;
+
+    if (isEncryptedStream) {
+      _notice('正在准备画中画视频...');
+      try {
+        final prepared = await _encryptedPlayback.prepare(
+          _plan!,
+          forceCache: true,
+          progress: (val) {
+            if (mounted && !_closed) {
+              _notice('正在准备画中画 ${(val * 100).round()}%');
+            }
+          },
+        );
+        if (_closed || !mounted) return;
+        targetUrl = prepared.url;
+        targetHeaders = prepared.headers;
+      } catch (e) {
+        debugPrint('[PiP-Dart] 准备画中画加密视频失败: $e');
+        _notice('准备画中画视频失败: $e');
+        _setPictureInPictureStatus(requested: false);
+        if (Platform.isIOS && wasPlaying && !_closed) {
+          unawaited(_player.play());
+        }
+        return;
+      }
+    }
+
     _pictureInPictureExitTimer?.cancel();
     _pictureInPictureExitTimer = Timer(const Duration(seconds: 8), () {
       if (!_closed && _pictureInPictureRequested && !_pictureInPictureActive) {
         _setPictureInPictureStatus(requested: false);
         _notice('无法进入画中画，请检查系统设置');
+        if (Platform.isIOS && wasPlaying && !_closed) {
+          unawaited(_player.play());
+        }
       }
     });
 
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || _closed) return;
     final sourceRect = _pictureInPictureSourceRect();
-    final mediaUrl = _plan?.url.isNotEmpty == true
-        ? _plan!.url
-        : (_player is LunaExoPlayer ? _player.mediaUri : '');
-    final headers = _plan?.headers ?? const <String, String>{};
     final arguments = <String, dynamic>{
       'width': width,
       'height': height,
-      if (mediaUrl.isNotEmpty) 'url': mediaUrl,
-      if (headers.isNotEmpty) 'headers': headers,
+      if (targetUrl.isNotEmpty) 'url': targetUrl,
+      if (targetHeaders.isNotEmpty) 'headers': targetHeaders,
       'title': widget.detail.drama.title,
+      'dramaId': widget.detail.drama.id,
+      'episodeIndex': _index,
+      'detail': widget.detail.toJson(),
       'position': _player.state.position.inMilliseconds,
       'speed': _speed,
     };
     if (sourceRect != null) arguments.addAll(sourceRect);
+    _syncPictureInPictureSession();
+    debugPrint(
+      '[PiP-Dart] enterPictureInPicture args: url=$targetUrl, pos=${arguments['position']}, sourceRect=$sourceRect',
+    );
     try {
       final status = await AppDevice.channel.invokeMapMethod<String, dynamic>(
         'enterPictureInPicture',
         arguments,
       );
+      debugPrint('[PiP-Dart] enterPictureInPicture return: $status');
       if (!mounted || _closed) return;
       final supported = status?['supported'] == true;
       final active = status?['active'] == true;
@@ -785,22 +907,37 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!supported) {
         _pictureInPictureExitTimer?.cancel();
         _notice('当前系统或设备不支持画中画');
+        if (Platform.isIOS && wasPlaying && !_closed) {
+          unawaited(_player.play());
+        }
       } else if (!active && !requested) {
         _pictureInPictureExitTimer?.cancel();
-        _notice(error ?? '无法启动画中画，请检查系统画中画设置或稍后重试');
+        _notice(_localizePipError(error));
+        if (Platform.isIOS && wasPlaying && !_closed) {
+          unawaited(_player.play());
+        }
       }
     } on PlatformException catch (e) {
       _pictureInPictureExitTimer?.cancel();
       _setPictureInPictureStatus(requested: false);
-      _notice(e.message ?? '无法进入画中画，请检查系统权限');
+      _notice(_localizePipError(e.message));
+      if (Platform.isIOS && wasPlaying && !_closed) {
+        unawaited(_player.play());
+      }
     } on MissingPluginException {
       _pictureInPictureExitTimer?.cancel();
       _setPictureInPictureStatus(supported: false, requested: false);
       _notice('当前平台不支持画中画');
+      if (Platform.isIOS && wasPlaying && !_closed) {
+        unawaited(_player.play());
+      }
     } catch (e) {
       _pictureInPictureExitTimer?.cancel();
       _setPictureInPictureStatus(requested: false);
       _notice('启动画中画异常: $e');
+      if (Platform.isIOS && wasPlaying && !_closed) {
+        unawaited(_player.play());
+      }
     }
   }
 
@@ -1104,6 +1241,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? PlaybackRecoveryAction.stop
         : _recovery.next(
             current,
+            decryptedStream: _encryptedPlayback.isStreamPlan(current),
             allowCache:
                 _player is LunaExoPlayer &&
                 (Platform.isAndroid || Platform.isIOS),
@@ -1472,6 +1610,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           _syncDanmaku();
           _acknowledgeHandoff();
           _menuRevision.value++;
+          if (_pictureInPictureActive) {
+            _syncPictureInPictureSession();
+          }
         }
       });
     } catch (error) {
@@ -1933,6 +2074,14 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void dispose() {
+    final retainStream =
+        Platform.isIOS &&
+        _pictureInPictureVisible &&
+        _plan != null &&
+        _encryptedPlayback.isStreamPlan(_plan!);
+    if (retainStream) {
+      PipManager.instance.retainPlaybackResource(_encryptedPlayback.close);
+    }
     _closed = true;
     unawaited(_player.pause().catchError((Object _) {}));
     final enhancementClosed = _enhancement.close();
@@ -1948,7 +2097,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _errorTimer?.cancel();
     _pictureInPictureExitTimer?.cancel();
     if (_pictureInPictureHandlerInstalled) {
-      AppDevice.channel.setMethodCallHandler(null);
+      PipManager.instance.notifyPlayerDisposed();
     }
     _interactions.dispose();
     _playerFocus.dispose();
@@ -1959,12 +2108,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     unawaited(widget.repository.release(_session));
     unawaited(_loader.close().catchError((Object _) {}));
-    unawaited(_encryptedPlayback.cancel().catchError((Object _) {}));
+    if (!retainStream) {
+      unawaited(_encryptedPlayback.cancel().catchError((Object _) {}));
+    }
     final closing = _operations.catchError((Object _) {}).then((_) async {
       await _interactions.pendingRates.catchError((Object _) {});
       await enhancementClosed.catchError((Object _) {});
       await _player.dispose();
-      await _encryptedPlayback.close();
+      if (!retainStream) await _encryptedPlayback.close();
     });
     unawaited(
       (_playbackLease?.releaseAfter(closing) ?? closing).catchError(

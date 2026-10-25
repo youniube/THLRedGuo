@@ -47,11 +47,15 @@ public struct Drama: Identifiable, Hashable, Codable {
         self.cover = cover
         self.episodes = episodes
         self.category = category
-        self.vip = vip
+        let isHongguo = source == "hongguo" || id.hasPrefix("hongguo:")
+        self.vip = isHongguo ? false : vip
         self.heat = heat
         self.views = views
         self.onlineDate = onlineDate
-        self.tags = tags
+        self.tags = isHongguo ? tags.filter { t in
+            let lower = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !lower.contains("vip") && !lower.contains("付费")
+        } : tags
         self.releaseStatus = releaseStatus
     }
 
@@ -63,7 +67,7 @@ public struct Drama: Identifiable, Hashable, Codable {
     }
 
     public var isVIP: Bool {
-        vip == true
+        source != "hongguo" && !id.hasPrefix("hongguo:") && vip == true
     }
 
     public var releaseLabel: String {
@@ -91,6 +95,13 @@ public struct Drama: Identifiable, Hashable, Codable {
 
     public func merge(with fresh: Drama) -> Drama {
         guard id == fresh.id else { return fresh }
+        let isHongguo = source == "hongguo" || id.hasPrefix("hongguo:") || fresh.source == "hongguo" || fresh.id.hasPrefix("hongguo:")
+        let mergedVip: Bool? = isHongguo ? false : (fresh.vip ?? vip)
+        let mergedTags = isHongguo ? (fresh.tags.isEmpty ? tags : fresh.tags).filter { t in
+            let lower = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !lower.contains("vip") && !lower.contains("付费")
+        } : (fresh.tags.isEmpty ? tags : fresh.tags)
+
         return Drama(
             id: id,
             source: fresh.source.isEmpty ? source : fresh.source,
@@ -100,11 +111,11 @@ public struct Drama: Identifiable, Hashable, Codable {
             cover: fresh.cover.isEmpty ? cover : fresh.cover,
             episodes: fresh.episodes > 0 ? fresh.episodes : episodes,
             category: fresh.category.isEmpty ? category : fresh.category,
-            vip: fresh.vip ?? vip,
+            vip: mergedVip,
             heat: fresh.heat.isEmpty ? heat : fresh.heat,
             views: fresh.views.isEmpty ? views : fresh.views,
             onlineDate: fresh.onlineDate.isEmpty ? onlineDate : fresh.onlineDate,
-            tags: fresh.tags.isEmpty ? tags : fresh.tags,
+            tags: mergedTags,
             releaseStatus: fresh.releaseStatus.isEmpty ? releaseStatus : fresh.releaseStatus
         )
     }
@@ -131,11 +142,17 @@ public struct Drama: Identifiable, Hashable, Codable {
         }
 
         self.category = try container.decodeIfPresent(String.self, forKey: .category) ?? ""
-        self.vip = try container.decodeIfPresent(Bool.self, forKey: .vip)
+        let isHongguo = self.source == "hongguo" || self.id.hasPrefix("hongguo:")
+        let rawVip = try container.decodeIfPresent(Bool.self, forKey: .vip)
+        self.vip = isHongguo ? false : rawVip
         self.heat = try container.decodeIfPresent(String.self, forKey: .heat) ?? ""
         self.views = try container.decodeIfPresent(String.self, forKey: .views) ?? ""
         self.onlineDate = try container.decodeIfPresent(String.self, forKey: .onlineDate) ?? ""
-        self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        let rawTags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        self.tags = isHongguo ? rawTags.filter { t in
+            let lower = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !lower.contains("vip") && !lower.contains("付费")
+        } : rawTags
         self.releaseStatus = try container.decodeIfPresent(String.self, forKey: .releaseStatus) ?? ""
     }
 }

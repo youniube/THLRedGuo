@@ -11,6 +11,14 @@ public struct SettingsSourcesPanel: View {
     @State private var importURLString = ""
     @State private var isImporting = false
 
+    private enum SourcesFocus: Hashable {
+        case diagnostics
+        case officialSource
+        case importNetwork
+        case clearAll
+    }
+    @FocusState private var focusedButton: SourcesFocus?
+
     public init(
         showingSourceDiagnostics: Binding<Bool>,
         saveNotice: Binding<String?>
@@ -29,21 +37,28 @@ public struct SettingsSourcesPanel: View {
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.65))
             }
-            
-            TVButton(title: "数据源诊断", icon: "stethoscope", isProminent: true) {
-                showingSourceDiagnostics = true
-            }
-            .accessibilityIdentifier("settings.sourceDiagnostics")
 
             // 顶部操作栏
             HStack(spacing: 20) {
+                TVButton(
+                    title: "数据源诊断",
+                    icon: "stethoscope",
+                    isProminent: false,
+                    isExternalFocused: focusedButton == .diagnostics
+                ) {
+                    showingSourceDiagnostics = true
+                }
+                .focused($focusedButton, equals: .diagnostics)
+                .accessibilityIdentifier("settings.sourceDiagnostics")
+
                 let isHongguoInstalled = jsService.sources.contains(where: { ($0["id"] as? String) == "hongguo" })
                 let isHongguoActive = jsService.activeSourceId == "hongguo"
 
                 TVButton(
                     title: isHongguoInstalled ? (isHongguoActive ? "官方数据源 (已激活)" : "设为默认源") : "导入官方数据源",
                     icon: isHongguoActive ? "checkmark.circle.fill" : "sparkles.tv.fill",
-                    isProminent: true
+                    isProminent: !isHongguoActive,
+                    isExternalFocused: focusedButton == .officialSource
                 ) {
                     Task {
                         isImporting = true
@@ -56,21 +71,37 @@ public struct SettingsSourcesPanel: View {
                         }
                     }
                 }
+                .focused($focusedButton, equals: .officialSource)
+                .accessibilityIdentifier("settings.officialSource")
 
-                TVButton(title: "网络链接导入", icon: "plus.app.fill") {
+                TVButton(
+                    title: "网络链接导入",
+                    icon: "plus.app.fill",
+                    isProminent: false,
+                    isExternalFocused: focusedButton == .importNetwork
+                ) {
                     showingImportAlert = true
                 }
+                .focused($focusedButton, equals: .importNetwork)
+                .accessibilityIdentifier("settings.importNetworkSource")
 
                 let hasCustomSources = jsService.sources.contains(where: { (($0["id"] as? String) ?? "").lowercased() != "hongguo" })
                 if hasCustomSources {
-                    TVButton(title: "清空自定义源", icon: "trash.circle.fill") {
+                    TVButton(
+                        title: "清空自定义源",
+                        icon: "trash.circle.fill",
+                        isProminent: false,
+                        isExternalFocused: focusedButton == .clearAll
+                    ) {
                         showingClearAllAlert = true
                     }
+                    .focused($focusedButton, equals: .clearAll)
                     .accessibilityIdentifier("settings.clearAllSources")
                 }
 
                 Spacer()
             }
+            .focusSection()
             .padding(.bottom, 16)
             
             Text("已安装插件列表")
@@ -288,12 +319,14 @@ public struct ActiveSourceCard: View {
             .padding(22)
             .background(
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(effectiveFocused ? Color(red: 0.22, green: 0.18, blue: 0.22) : Color(red: 0.14, green: 0.14, blue: 0.18))
+                    .fill(effectiveFocused ? Color(red: 0.24, green: 0.20, blue: 0.26) : Color(red: 0.18, green: 0.13, blue: 0.16))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(effectiveFocused ? TVTheme.primary : TVTheme.primary.opacity(0.35), lineWidth: 1.5)
+                    .stroke(effectiveFocused ? Color.white : TVTheme.primary.opacity(0.45), lineWidth: effectiveFocused ? 3.0 : 1.5)
             )
+            .scaleEffect(effectiveFocused ? 1.02 : 1.0)
+            .animation(TVTheme.focusSpringAnimation, value: effectiveFocused)
             .tvFocusBorder(isFocused: effectiveFocused, cornerRadius: 18)
         }
         .padding(.horizontal, 14)
@@ -448,12 +481,29 @@ public struct JSSourcePluginCard: View {
                 .padding(20)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(isCardFocused ? Color(red: 0.20, green: 0.17, blue: 0.22) : Color(red: 0.14, green: 0.14, blue: 0.18))
+                        .fill(
+                            isCardFocused
+                                ? Color(red: 0.24, green: 0.20, blue: 0.26)
+                                : (isActive ? Color(red: 0.18, green: 0.13, blue: 0.16) : Color(red: 0.12, green: 0.12, blue: 0.15))
+                        )
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .stroke(isCardFocused ? TVTheme.primary : (isActive ? TVTheme.primary.opacity(0.4) : Color.white.opacity(0.08)), lineWidth: isCardFocused ? 3 : 1)
+                        .stroke(
+                            isCardFocused
+                                ? Color.white
+                                : (isActive ? TVTheme.primary.opacity(0.55) : Color.white.opacity(0.06)),
+                            lineWidth: isCardFocused ? 3.0 : (isActive ? 1.5 : 1.0)
+                        )
                 )
+                .scaleEffect(isCardFocused ? 1.02 : 1.0)
+                .shadow(
+                    color: isCardFocused ? TVTheme.primary.opacity(0.5) : Color.clear,
+                    radius: isCardFocused ? 14 : 0,
+                    x: 0,
+                    y: isCardFocused ? 4 : 0
+                )
+                .animation(TVTheme.focusSpringAnimation, value: isCardFocused)
                 .tvFocusBorder(isFocused: isCardFocused, cornerRadius: 18)
             }
             .buttonStyle(TVZeroHighlightButtonStyle())

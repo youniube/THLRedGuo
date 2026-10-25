@@ -290,7 +290,7 @@ public struct TVPlayerView: View {
                     onLeftArrow: { handleQuickSeek(by: -10) },
                     onRightArrow: { handleQuickSeek(by: 10) },
                     onSelect: { viewModel.showControls() },
-                    onPlayPause: { viewModel.showControls() },
+                    onPlayPause: { viewModel.togglePlayPause() },
                     onMenu: { onRemoteMenuPressed() }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -327,16 +327,10 @@ public struct TVPlayerView: View {
                     .accessibilityValue(playbackAccessibilityValue)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onPlayPauseCommand {
-                        viewModel.showControls()
+                        viewModel.togglePlayPause()
                     }
                     .onExitCommand(perform: onRemoteMenuPressed)
-                    .onMoveCommand { direction in
-                        if direction == .right {
-                            handleQuickSeek(by: 10)
-                        } else if direction == .left {
-                            handleQuickSeek(by: -10)
-                        }
-                    }
+                    .onMoveCommand(perform: handlePictureMoveCommand)
 
                     // 右侧步进快进锚点
                     Button(action: {
@@ -431,27 +425,25 @@ public struct TVPlayerView: View {
                 viewModel.togglePlayPause()
             }
             .onExitCommand(perform: onRemoteMenuPressed)
-            .onMoveCommand { direction in
-                print("THL_GLOBAL_ON_MOVE_COMMAND: direction=\(direction)")
-                if !viewModel.isControlsVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible {
-                    switch direction {
-                    case .left:
-                        handleQuickSeek(by: -10)
-                    case .right:
-                        handleQuickSeek(by: 10)
-                    case .up:
-                        if let feedActions, feedActions.canGoPrevious {
-                            feedActions.onPrevious()
-                        }
-                    case .down:
-                        if feedActions != nil {
-                            Task { _ = await nextFeedDrama() }
-                        }
-                    default:
-                        break
-                    }
-                }
-            }
+            .onMoveCommand(perform: handlePictureMoveCommand)
+    }
+
+    private func handlePictureMoveCommand(_ direction: MoveCommandDirection) {
+        guard isInteractive, !isSwitchingFeed,
+              !viewModel.isControlsVisible, !viewModel.isEpisodeDrawerVisible,
+              !viewModel.isDanmakuSettingsVisible, !viewModel.isSpeedSheetVisible else { return }
+        switch direction {
+        case .left:
+            handleQuickSeek(by: -10)
+        case .right:
+            handleQuickSeek(by: 10)
+        case .up:
+            if let feedActions, feedActions.canGoPrevious { feedActions.onPrevious() }
+        case .down:
+            if feedActions != nil { Task { _ = await nextFeedDrama() } }
+        default:
+            break
+        }
     }
 
     private func applyStateListeners<Content: View>(to content: Content) -> some View {
@@ -548,7 +540,16 @@ public struct TVPlayerView: View {
     private var playbackAccessibilityValue: String {
         let position = viewModel.currentTime.isFinite
             ? String(format: "%.0f", max(0, viewModel.currentTime.rounded(.down))) : "0"
-        let state = viewModel.isPlaying ? "播放中" : viewModel.isLoading || viewModel.isBuffering ? "加载中" : "已暂停"
+        let state: String
+        if viewModel.isPlaying {
+            state = "播放中"
+        } else if !viewModel.wantsPlayback {
+            state = "已暂停"
+        } else if viewModel.isLoading || viewModel.isBuffering {
+            state = "加载中"
+        } else {
+            state = "已暂停"
+        }
         let val = "\(viewModel.drama.title) · 第 \(viewModel.currentEpisodeIndex) 集 · 已播放 \(position) 秒 · \(state)"
         NSLog("📺 [WAKE_VALUE] %@", val)
         return val

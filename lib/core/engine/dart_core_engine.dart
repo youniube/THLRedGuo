@@ -19,6 +19,10 @@ class DartCoreEngine {
   static final DartCoreEngine instance = DartCoreEngine._();
 
   final CatPawRuntimePool _spiderPool;
+  final _activeReads =
+      <String, ({int sequence, String source, String scope})>{};
+  final _scopeOwners = <String, String>{};
+  int _playbackSequence = 0;
 
   bool isInitialized = false;
   bool _allSourcesActivated = true;
@@ -66,9 +70,70 @@ class DartCoreEngine {
     await Directory(_storageDir).create(recursive: true);
   }
 
+  String _scopeFor(String action, Map<String, dynamic> input) =>
+      switch (action) {
+        'resolve' => 'playback',
+        'preload' || 'prepareHandoff' => 'preload',
+        'danmaku' => 'danmaku',
+        'suggestions' => 'suggestions',
+        'feed' => 'feed',
+        'detail' || 'seriesSeasons' => 'detail',
+        'catalog' when (input['query']?.toString().trim() ?? '').isNotEmpty =>
+          'search',
+        _ => 'catalog',
+      };
+
   /// 统一门面入口：分发并处理全部应用操作 Action
   Future<Map<String, dynamic>> dispatch(Map<String, dynamic> input) async {
     final action = input['action'] as String? ?? '';
+    final session = input['session']?.toString() ?? '';
+    final sequence = (input['sequence'] as num?)?.toInt() ?? 0;
+    final trackRead =
+        session.isNotEmpty &&
+        sequence > 0 &&
+        {
+          'catalog',
+          'categories',
+          'suggestions',
+          'feed',
+          'recommendations',
+          'rankings',
+          'rankingBoards',
+          'seriesSeasons',
+          'danmaku',
+          'preload',
+          'prepareHandoff',
+          'detail',
+        }.contains(action);
+    final source =
+        input['source']?.toString() ??
+        (input['drama'] is Map
+            ? (input['drama'] as Map)['source']?.toString()
+            : null) ??
+        'hongguo';
+    final scope = _scopeFor(action, input);
+    final ownerKey = '$source:$scope';
+    if (trackRead) {
+      final previous = _activeReads[session];
+      if (previous != null) {
+        if (sequence < previous.sequence) {
+          return {'ok': false, 'error': '请求已取消', 'code': 'CANCELLED'};
+        }
+        final previousKey = '${previous.source}:${previous.scope}';
+        if (_scopeOwners[previousKey] == '$session:${previous.sequence}') {
+          _spiderPool.cancelPending(
+            sourceId: previous.source,
+            scope: previous.scope,
+          );
+        }
+      }
+      _activeReads[session] = (
+        sequence: sequence,
+        source: source,
+        scope: scope,
+      );
+      _scopeOwners[ownerKey] = '$session:$sequence';
+    }
     try {
       final result = await _handleAction(action, input);
       return {'ok': true, 'data': result};
@@ -78,6 +143,13 @@ class DartCoreEngine {
         'error': e.toString(),
         'code': e is CatPawSourceFailure ? e.code : 'CORE_ERROR',
       };
+    } finally {
+      if (trackRead && _activeReads[session]?.sequence == sequence) {
+        _activeReads.remove(session);
+      }
+      if (trackRead && _scopeOwners[ownerKey] == '$session:$sequence') {
+        _scopeOwners.remove(ownerKey);
+      }
     }
   }
 
@@ -265,19 +337,43 @@ class DartCoreEngine {
 
       // 播放地址解析与切换
       case 'resolve':
+        final sequence =
+            (input['sequence'] as num?)?.toInt() ?? _playbackSequence + 1;
+        if (sequence < _playbackSequence) {
+          throw CatPawSourceFailure.playback('cancelled');
+        }
+        _playbackSequence = sequence;
+        _playbackEpoch++;
+        _spiderPool.cancelPending(scope: 'playback');
+        return await _resolvePlayback(input);
       case 'prepareHandoff':
       case 'preload':
         return await _resolvePlayback(input);
       case 'fallback':
         return _fallbackPlayback(input);
       case 'cancelPlayback':
-        _playbackEpoch++;
-        _spiderPool.cancelPending();
+        final sequence =
+            (input['sequence'] as num?)?.toInt() ?? _playbackSequence + 1;
+        if (sequence >= _playbackSequence) {
+          _playbackSequence = sequence;
+          _playbackEpoch++;
+          _spiderPool.cancelPending(scope: 'playback');
+        }
+        return true;
+      case 'cancelRead':
+        final session = input['session']?.toString() ?? '';
+        final sequence = (input['sequence'] as num?)?.toInt() ?? 0;
+        final read = _activeReads[session];
+        if (read != null &&
+            read.sequence == sequence &&
+            _scopeOwners['${read.source}:${read.scope}'] ==
+                '$session:$sequence') {
+          _spiderPool.cancelPending(sourceId: read.source, scope: read.scope);
+          _activeReads.remove(session);
+        }
         return true;
       case 'release':
         _playbackSessions.remove(input['session']);
-        return true;
-      case 'cancelRead':
         return true;
 
       // 海报加载与解码
@@ -355,7 +451,7 @@ class DartCoreEngine {
         if (!RegExp(r'^hongguo:\d{10,30}:\d{10,30}$').hasMatch(episodeId)) {
           throw StateError('本集暂不支持弹幕');
         }
-        final runtime = await _getSpiderRuntime('hongguo');
+        final runtime = await _getSpiderRuntime('hongguo', scope: 'danmaku');
         if (runtime == null) throw StateError('弹幕数据源不可用');
         return runtime.danmaku(
           episodeId,
@@ -468,11 +564,17 @@ class DartCoreEngine {
     }
   }
 
-  Future<CatPawJsRuntime?> _getSpiderRuntime(String source) async {
+  Future<CatPawJsRuntime?> _getSpiderRuntime(
+    String source, {
+    String scope = 'catalog',
+    String? detailId,
+  }) async {
     final script = _sourceScripts[source];
     if (script == null || script.isEmpty) return null;
     try {
-      return await _spiderPool.get(source, script);
+      final runtime = await _spiderPool.get(source, script, scope: scope);
+      if (detailId != null) _spiderPool.shareDetail(source, detailId, runtime);
+      return runtime;
     } catch (_) {
       return null;
     }
@@ -499,6 +601,7 @@ class DartCoreEngine {
         if (source == 'hongguo') rethrow;
       }
     }
+    if (source == 'hongguo') throw StateError('官方找剧分类暂不可用，请重试');
     return _getCategoriesForSource(source);
   }
 
@@ -552,6 +655,17 @@ class DartCoreEngine {
     final rawDesc = (vod['vod_content']?.toString() ?? '').trim();
     final desc = rawDesc.isNotEmpty ? rawDesc : title;
 
+    final cleanTags = tags.where((t) {
+      final lower = t.toLowerCase();
+      return lower != 'vip' &&
+          lower != '付费' &&
+          lower != '付费短剧' &&
+          lower != 'vip专享';
+    }).toList();
+
+    final isHongguo =
+        source.isEmpty || source == 'hongguo' || fullId.startsWith('hongguo:');
+
     return {
       'id': fullId,
       'source': source,
@@ -565,8 +679,9 @@ class DartCoreEngine {
       'category': dramaCategoryLabel(
         vod['vod_category']?.toString() ?? category,
       ),
-      'tags': tags,
+      'tags': cleanTags.isEmpty ? ['热播', '精选'] : cleanTags,
       'releaseStatus': vod['vod_release_status']?.toString() ?? '',
+      'vip': isHongguo ? false : (vod['vip'] == true),
     };
   }
 
@@ -578,7 +693,7 @@ class DartCoreEngine {
 
     // 1. 若为搜索关键词
     if (query.isNotEmpty) {
-      final rt = await _getSpiderRuntime(source);
+      final rt = await _getSpiderRuntime(source, scope: 'search');
       if (rt == null) throw StateError('搜索数据源不可用');
       final result = await rt.search(query, page: page);
       return {
@@ -597,7 +712,13 @@ class DartCoreEngine {
     bool hasMore = false;
     final rt = await _getSpiderRuntime(source);
     if (rt != null) {
-      final res = await rt.category(category, page);
+      final res = await rt.category(
+        category,
+        page,
+        extend: source == 'hongguo' && page == 1
+            ? const {'initialBatch': 12}
+            : null,
+      );
       dramas = res.list
           .map((vod) => _mapVodToDrama(source, vod, category))
           .toList();
@@ -624,7 +745,7 @@ class DartCoreEngine {
       Map<String, dynamic>.from(input['drama'] as Map),
     );
     if (drama.source != 'hongguo') return {'items': <Map<String, dynamic>>[]};
-    final runtime = await _getSpiderRuntime(drama.source);
+    final runtime = await _getSpiderRuntime(drama.source, scope: 'detail');
     if (runtime == null) throw StateError('系列剧数据源不可用');
     final rows = await runtime.seriesSeasons(drama.cleanSourceId);
     return {
@@ -641,7 +762,7 @@ class DartCoreEngine {
   }
 
   Future<Map<String, dynamic>> _getVideoFeed(Map<String, dynamic> input) async {
-    final runtime = await _getSpiderRuntime('hongguo');
+    final runtime = await _getSpiderRuntime('hongguo', scope: 'feed');
     if (runtime == null) throw StateError('推荐数据源不可用');
     final result = await runtime.feed(
       (input['page'] as num?)?.toInt() ?? 1,
@@ -662,7 +783,7 @@ class DartCoreEngine {
   }
 
   Future<List<String>> _getSuggestions(String query) async {
-    final runtime = await _getSpiderRuntime('hongguo');
+    final runtime = await _getSpiderRuntime('hongguo', scope: 'suggestions');
     if (runtime == null) throw StateError('搜索数据源不可用');
     return runtime.suggestions(query);
   }
@@ -689,7 +810,15 @@ class DartCoreEngine {
   Future<List<Map<String, dynamic>>> _getRankingBoards() async {
     final runtime = await _getSpiderRuntime('hongguo');
     if (runtime == null) throw StateError('榜单数据源不可用');
-    return runtime.rankingBoards();
+    try {
+      return await runtime.rankingBoards();
+    } catch (_) {
+      return const [
+        {'id': 'hongguo-hot', 'name': '热播榜'},
+        {'id': 'hongguo-new', 'name': '新剧榜'},
+        {'id': 'hongguo-search', 'name': '热搜榜'},
+      ];
+    }
   }
 
   Future<Map<String, dynamic>> _getRankings(Map<String, dynamic> input) async {
@@ -733,7 +862,11 @@ class DartCoreEngine {
     final sourceId = rawSourceId.trim();
 
     Map<String, dynamic>? spiderVod;
-    final rt = await _getSpiderRuntime(source);
+    final rt = await _getSpiderRuntime(
+      source,
+      scope: 'detail',
+      detailId: sourceId,
+    );
     if (rt != null && sourceId.isNotEmpty) {
       try {
         final detailRes = await rt.detail(sourceId);
@@ -790,7 +923,9 @@ class DartCoreEngine {
 
     // 红果官方短剧全集均可直接解析直连播放，不设试看门槛与虚假 VIP 标签；
     // 仅针对非红果且明确受限的源保留 VIP 标注
-    if (source != 'hongguo' &&
+    final isHongguoDetail =
+        source.isEmpty || source == 'hongguo' || dramaId.startsWith('hongguo:');
+    if (!isHongguoDetail &&
         accessibleCount > 0 &&
         accessibleCount < chapters.length) {
       for (var i = 0; i < chapters.length; i++) {
@@ -834,13 +969,41 @@ class DartCoreEngine {
     final chapter = input['chapter'];
     final requestedQuality = (input['quality'] as num?)?.toInt() ?? 0;
     final avoidUrl = input['avoidUrl']?.toString() ?? '';
+    final scope = _scopeFor(input['action']?.toString() ?? 'resolve', input);
+    final readSession = input['session']?.toString() ?? '';
+    final readSequence = (input['sequence'] as num?)?.toInt() ?? 0;
+    final trackRead =
+        scope == 'preload' && readSession.isNotEmpty && readSequence > 0;
     final epoch = _playbackEpoch;
-    bool cancelled() => epoch != _playbackEpoch;
+    bool cancelled() =>
+        (scope == 'playback' && epoch != _playbackEpoch) ||
+        (trackRead && _activeReads[readSession]?.sequence != readSequence);
     final clock = Stopwatch()..start();
+    Duration remaining() => const Duration(seconds: 60) - clock.elapsed;
     final results = <CatPawPlayResult>[];
     Object? sourceFailure;
-    final rt = await _getSpiderRuntime(source);
+    final rt = await _getSpiderRuntime(
+      source,
+      scope: scope,
+      detailId: sourceId,
+    );
+    if (cancelled()) throw CatPawSourceFailure.playback('cancelled');
     if (rt != null) {
+      final flags = <Map<String, dynamic>>[
+        {
+          'quality': requestedQuality,
+          if (avoidUrl.isNotEmpty) 'avoidUrl': avoidUrl,
+        },
+      ];
+      final attempted = <String>{};
+      Future<CatPawPlayResult> playRoute(String flag, String target) async {
+        if (cancelled()) throw CatPawSourceFailure.playback('cancelled');
+        final timeout = remaining();
+        if (timeout <= Duration.zero) throw TimeoutException('播放解析超时');
+        attempted.add('$flag\u0000$target');
+        return rt.play(flag, target, flags: flags, timeout: timeout);
+      }
+
       final routes = chapter is Map && chapter['routes'] is List
           ? (chapter['routes'] as List).whereType<Map>().toList()
           : <Map>[];
@@ -851,10 +1014,12 @@ class DartCoreEngine {
               : chapter,
         });
       }
-      for (final route in routes) {
+      var detailRefreshed = false;
+      for (var routeIndex = 0; routeIndex < routes.length; routeIndex++) {
         if (cancelled()) throw CatPawSourceFailure.playback('cancelled');
-        final remaining = const Duration(seconds: 60) - clock.elapsed;
-        if (remaining <= Duration.zero) break;
+        if (remaining() <= Duration.zero) break;
+        final route = routes[routeIndex];
+        var retryFromDetail = false;
         try {
           var playTarget = route['raw']?.toString() ?? '$episodeIndex';
           if (!playTarget.startsWith('http://') &&
@@ -864,45 +1029,67 @@ class DartCoreEngine {
               sourceId.isNotEmpty) {
             playTarget = '${sourceId}_$playTarget';
           }
-          final flags = <Map<String, dynamic>>[
-            {
-              'quality': requestedQuality,
-              if (avoidUrl.isNotEmpty) 'avoidUrl': avoidUrl,
-            },
-          ];
           final flag = route['flag']?.toString() ?? 'flag';
-          var playRes = await rt.play(
-            flag,
-            playTarget,
-            flags: flags,
-            timeout: remaining,
-          );
+          if (attempted.contains('$flag\u0000$playTarget')) continue;
+          var playRes = await playRoute(flag, playTarget);
           if (playRes.url.isEmpty &&
               playRes.streams.isEmpty &&
               sourceId.isNotEmpty &&
               routes.length == 1) {
             final fallbackTarget = '${sourceId}_$episodeIndex';
-            final retryRemaining = const Duration(seconds: 60) - clock.elapsed;
-            if (fallbackTarget != playTarget &&
-                retryRemaining > Duration.zero) {
-              playRes = await rt.play(
-                flag,
-                fallbackTarget,
-                flags: flags,
-                timeout: retryRemaining,
-              );
+            if (!attempted.contains('$flag\u0000$fallbackTarget') &&
+                remaining() > Duration.zero) {
+              playRes = await playRoute(flag, fallbackTarget);
             }
           }
           if (playRes.url.isNotEmpty || playRes.streams.isNotEmpty) {
             results.add(playRes);
           } else {
             sourceFailure = CatPawSourceFailure.playback(playRes.errorCode);
+            retryFromDetail = true;
           }
         } catch (error) {
           if (error is CatPawSourceFailure && error.code == 'cancelled') {
             rethrow;
           }
           sourceFailure = error;
+          retryFromDetail =
+              error is CatPawSourceFailure && error.code == 'MISSING_EPISODE';
+        }
+        if (retryFromDetail &&
+            !detailRefreshed &&
+            sourceId.isNotEmpty &&
+            remaining() > Duration.zero) {
+          detailRefreshed = true;
+          try {
+            final refreshed = await rt.detail(sourceId, timeout: remaining());
+            final chapters = jsPlaybackChapters(
+              refreshed.vod['vod_play_url']?.toString() ?? '',
+              refreshed.vod['vod_play_from']?.toString() ?? '',
+            );
+            final numbered = chapters.where(
+              (row) => row['currentEpisode'] is int,
+            );
+            final matching = numbered.where(
+              (row) => row['currentEpisode'] == episodeIndex,
+            );
+            final refreshedChapter =
+                matching.firstOrNull ??
+                (numbered.isEmpty &&
+                        episodeIndex > 0 &&
+                        episodeIndex <= chapters.length
+                    ? chapters[episodeIndex - 1]
+                    : null);
+            if (refreshedChapter != null) {
+              routes.addAll(
+                (refreshedChapter['routes'] as List).whereType<Map>(),
+              );
+            }
+          } catch (error) {
+            if (error is CatPawSourceFailure && error.code == 'cancelled') {
+              rethrow;
+            }
+          }
         }
       }
     }

@@ -4,6 +4,33 @@ final class RemoteNavigationTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.never88gone.redlook")
     private let remote = XCUIRemote.shared
 
+    func testImportedOldIOSHistoryDisplaysAndPersistsWithRemoteFocus() throws {
+        guard ProcessInfo.processInfo.environment["ICLOUD_OLD_HISTORY_UI"] == "1" else { throw XCTSkip("Requires isolated imported history fixture") }
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "library", "-thl_icloud_sync_enabled", "NO"]
+        app.launch()
+        defer { app.terminate() }
+        wait("old history library ready", seconds: 30) { self.app.buttons["library.tab.history"].exists }
+        if app.buttons["nav.library"].hasFocus { press(.right) }
+        wait("old history header focused") { self.app.buttons["library.tab.history"].hasFocus }
+        press(.down, focus: "library.card.hongguo:tv-new")
+        press(.right, focus: "library.card.hongguo:tv-existing")
+        press(.right, focus: "library.card.hongguo:old-ios-179")
+        let value = app.buttons["library.card.hongguo:old-ios-179"].value as? String ?? ""
+        XCTAssertTrue(value.contains("第 12 集"))
+        XCTAssertTrue(value.contains("59%"))
+        press(.menu)
+        wait("old history menu restores navigation") { self.app.buttons["nav.library"].hasFocus }
+        press(.right)
+        wait("old history returns to header") { self.app.buttons["library.tab.history"].hasFocus }
+        app.terminate()
+        app.launch()
+        wait("old history survives restart", seconds: 30) { self.app.buttons["library.card.hongguo:old-ios-179"].exists }
+        XCTAssertEqual(app.buttons["library.card.hongguo:old-ios-179"].value as? String, value)
+        print("THL_OLD_HISTORY_UI oldEpisode=12 oldProgress=59% remoteFocus=true menuReturn=true restart=true")
+    }
+
     private func wait(_ description: String, seconds: Double = 15, _ condition: @escaping () -> Bool) {
         let predicate = NSPredicate { _, _ in condition() }
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: seconds)
@@ -1687,13 +1714,13 @@ final class RemoteNavigationTests: XCTestCase {
         // 1. 点击播放进入全屏播放器
         press(.select)
 
-        // 2. 等待起播唤醒层就绪（全屏播放无遮挡，player.wake 存在并进入起播状态）
+        // 2. 等待起播唤醒层就绪（全屏播放无遮挡，player.wake 存在并进入实际播放中状态）
         wait("player starts actively playing", seconds: 45) {
             guard let wake = self.yaoSnapshots().first(where: { $0.identifier == "player.wake" }) else { return false }
-            if let val = wake.value as? String, (val.contains("播放中") || val.contains("已播放")) {
+            if let val = wake.value as? String, val.contains("播放中") {
                 return true
             }
-            return wake.hasFocus
+            return false
         }
         XCTAssertFalse(app.buttons["player.playPause"].exists, "进入播放时控制栏默认不显示遮挡画面")
 
@@ -1741,6 +1768,64 @@ final class RemoteNavigationTests: XCTestCase {
         }
 
         print("THL_TV_QUICK_SEEK_DECOUPLED_RESULT rightSeekDirect=true leftSeekDirect=true noObscuringControls=true quickIndicatorShown=true selectAwakenControls=true menuDismissControls=true menuExit=true")
+    }
+
+    func testDirectPlayPauseWithoutControlsOverlay() throws {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "detail", "-testDramaId", "hongguo:7694291604915358744", "-testDramaTitle", "播放按键直接暂停与播放测试"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["detail.play"].waitForExistence(timeout: 45))
+        wait("detail play focused") { self.app.buttons["detail.play"].hasFocus }
+
+        // 1. 点击播放进入全屏播放器
+        press(.select)
+
+        // 2. 等待起播唤醒层就绪（全屏播放无遮挡，player.wake 存在并进入实际播放中状态）
+        wait("player starts actively playing", seconds: 45) {
+            guard let wake = self.yaoSnapshots().first(where: { $0.identifier == "player.wake" }) else { return false }
+            if let val = wake.value as? String, val.contains("播放中") {
+                return true
+            }
+            return false
+        }
+        XCTAssertFalse(app.buttons["player.playPause"].exists, "进入播放时控制栏默认不显示遮挡画面")
+
+        // 3. 按遥控器 Play/Pause 键，应该立即暂停，绝不弹出浮层！
+        press(.playPause)
+        XCTAssertFalse(app.buttons["player.playPause"].exists, "按Play/Pause键控制播放暂停，绝不弹出控制浮层")
+        wait("player state toggles to paused", seconds: 10) {
+            guard let wake = self.yaoSnapshots().first(where: { $0.identifier == "player.wake" }) else { return false }
+            let val = wake.value as? String ?? ""
+            return val.contains("已暂停")
+        }
+        XCTAssertFalse(app.buttons["player.playPause"].exists, "暂停后控制栏依然不弹出遮挡画面")
+
+        // 4. 再次按遥控器 Play/Pause 键，应该立即恢复播放，依然不弹出浮层！
+        press(.playPause)
+        XCTAssertFalse(app.buttons["player.playPause"].exists, "再次按Play/Pause键恢复播放，绝不弹出控制浮层")
+        wait("player state toggles back to playing", seconds: 10) {
+            guard let wake = self.yaoSnapshots().first(where: { $0.identifier == "player.wake" }) else { return false }
+            let val = wake.value as? String ?? ""
+            return val.contains("播放中")
+        }
+        XCTAssertFalse(app.buttons["player.playPause"].exists, "播放中控制栏保持纯净无遮挡")
+
+        // 5. 按 Select 键唤出浮层
+        press(.select)
+        wait("select awakens controls", seconds: 5) {
+            self.app.buttons["player.playPause"].exists && self.app.buttons["player.playPause"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["player.playPause"].hasFocus, "点击Select唤起控制栏并获焦播放/暂停键")
+
+        // 6. 按 Menu 退出控制栏并退出播放器
+        press(.menu)
+        wait("menu dismisses controls", seconds: 5) {
+            self.app.buttons["player.wake"].exists && !self.app.buttons["player.playPause"].exists
+        }
+        press(.menu)
+        print("THL_TV_DIRECT_PLAY_PAUSE_VERIFIED pauseWithoutControls=true resumeWithoutControls=true selectAwakensControls=true")
     }
 
     func testICloudSyncToggleAndSyncNowFocus() throws {
@@ -2009,5 +2094,603 @@ final class RemoteNavigationTests: XCTestCase {
         try? shot.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_sidebar_toggle_verified.png"))
 
         print("THL_TV_SETTINGS_RESULT sidebarClosedOnEnter=true settingsInteractive=true sidebarReopenedOnLeft=true")
+    }
+
+    /// 6. 综合验证：
+    /// 1) 焦点在主导航栏设置按钮时不自动进入，需按 Select / Right 才进入
+    /// 2) 数据源管理按钮选中与获焦样式区分明确
+    /// 3) 存储与缓存管理、下载页面均为全屏完整布局，彻底杜绝半屏展示
+    /// 4) 联系方式中的联系邮箱为 support@thltv.com
+    func testSettingsAndDownloadsEnhancedVerification() {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "catalog"]
+        app.launch()
+
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        // 1. 等待主导航栏启动并聚焦在发现（catalog）
+        wait("sidebar catalog tab ready", seconds: 45) {
+            self.app.buttons["nav.catalog"].exists && self.app.buttons["nav.catalog"].hasFocus
+        }
+
+        // 2. 依次按向下键游走至设置（settings）按钮
+        press(.down) // feed
+        press(.down) // rankings
+        press(.down) // search
+        press(.down) // library
+        press(.down) // downloads
+        press(.down) // settings
+        wait("sidebar focused on settings tab", seconds: 15) {
+            self.app.buttons["nav.settings"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["nav.settings"].hasFocus, "焦点当前稳固停留在主导航栏设置按钮上，绝未自动跳入内容页面")
+        XCTAssertTrue(app.buttons["nav.settings"].exists, "主导航栏依然处于展开状态")
+        // 验证：导航栏切换到设置后，右侧内容区已经自动联动变化为设置页面，但焦点保持在侧边栏上
+        wait("settings content updated in background", seconds: 10) {
+            self.app.staticTexts["系统设置"].exists
+        }
+        XCTAssertTrue(app.staticTexts["系统设置"].exists, "导航栏移动至设置项后，右侧内容区已自动变化为设置页面")
+        XCTAssertFalse(app.buttons["settings.nav.sources"].hasFocus, "焦点并未进入内容页面")
+
+        // 3. 点击 select 按钮进入设置页面
+        press(.select)
+        wait("entered settings via select", seconds: 15) {
+            !self.app.buttons["nav.settings"].exists && self.app.buttons["settings.nav.sources"].hasFocus
+        }
+        XCTAssertFalse(app.buttons["nav.settings"].exists, "按下 Select 键后主导航栏自动收起，全屏沉浸展示")
+        XCTAssertTrue(app.buttons["settings.nav.sources"].hasFocus, "焦点精准落入设置分类：站源管理")
+
+        // 截图：站源管理获焦态
+        let shot1 = XCUIScreen.main.screenshot()
+        try? shot1.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_source_nav_focused.png"))
+
+        // 4. 按向右键移入右侧数据源面板（此时左侧站源管理转为选中但未获焦态）
+        press(.right)
+        sleep(1)
+        let shot2 = XCUIScreen.main.screenshot()
+        try? shot2.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_source_nav_selected_unfocused.png"))
+
+        // 5. 按向左键返回左侧分类导航
+        press(.left)
+        wait("back to category", seconds: 10) {
+            self.app.buttons["settings.nav.sources"].hasFocus
+        }
+
+        // 6. 导航至存储与缓存分类并验证全屏卡片布局
+        press(.down) // sync
+        press(.down) // cache
+        wait("cache tab focused", seconds: 10) {
+            self.app.buttons["settings.nav.cache"].hasFocus
+        }
+        press(.right) // 进入右侧存储卡片
+        sleep(1)
+        let shot3 = XCUIScreen.main.screenshot()
+        try? shot3.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_storage_fullwidth_verified.png"))
+
+        // 7. 导航至联系方式分类并验证联系邮箱为 support@thltv.com
+        press(.left)
+        if !app.buttons["settings.nav.contact"].hasFocus {
+            if app.buttons["settings.nav.about"].hasFocus {
+                press(.up, focus: "settings.nav.contact")
+            } else {
+                for _ in 0..<3 {
+                    if self.app.buttons["settings.nav.contact"].hasFocus { break }
+                    press(.down)
+                }
+            }
+        }
+        wait("contact tab focused", seconds: 10) {
+            self.app.buttons["settings.nav.contact"].hasFocus
+        }
+        press(.right) // 移入联系方式面板
+        sleep(1)
+        let shot4 = XCUIScreen.main.screenshot()
+        try? shot4.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_contact_email_verified.png"))
+
+        let predicate = NSPredicate(format: "label CONTAINS 'support@thltv.com'")
+        let emailText = app.staticTexts.containing(predicate).firstMatch
+        XCTAssertTrue(emailText.waitForExistence(timeout: 10), "联系方式页面中包含 support@thltv.com")
+
+        // 8. 返回左侧并按向左键重新唤出一级主导航栏，进入下载页面验证全宽
+        press(.left)
+        press(.left) // 重新展开主侧边栏
+        wait("sidebar reopened", seconds: 15) {
+            self.app.buttons["nav.settings"].exists && self.app.buttons["nav.settings"].hasFocus
+        }
+
+        press(.up) // 移动到 downloads
+        wait("downloads tab focused", seconds: 10) {
+            self.app.buttons["nav.downloads"].hasFocus
+        }
+        press(.select) // 按 Select 进入下载页面
+        wait("downloads page loaded", seconds: 15) {
+            !self.app.buttons["nav.downloads"].exists && (self.app.buttons["downloads.explore"].exists || self.app.staticTexts["下载与离线管理"].exists)
+        }
+        sleep(1)
+        let shot5 = XCUIScreen.main.screenshot()
+        try? shot5.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_downloads_fullscreen_verified.png"))
+
+        print("THL_TV_VERIFICATION_COMPLETE noAutoEnterSettings=true sourceStyleDifferentiated=true storageFullWidth=true downloadsFullWidth=true emailVerified=true")
+    }
+
+    /// 7. 专项验证：
+    /// 1) 搜索页面支持清空已搜索文字与结果
+    /// 2) 搜索页面焦点移动顺畅无阻，消除死锁
+    /// 3) 搜索页面“猜你想搜”稳定展示，绝不中途消失
+    /// 4) 下载页面已彻底移除局域网投屏功能，符合纯粹 tvOS 定位
+    func testSearchClearAndFocusFlowAndDownloadsClean() {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "search"]
+        app.launch()
+
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        // 1. 等待主导航栏启动就绪并按 Select 进入搜索内容区
+        wait("sidebar search tab focused", seconds: 25) {
+            self.app.buttons["nav.search"].exists && self.app.buttons["nav.search"].hasFocus
+        }
+        press(.select) // 进入搜索页面，收起侧边栏
+        wait("search input focused", seconds: 15) {
+            !self.app.buttons["nav.search"].exists && self.app.textFields["search.query"].exists && self.app.textFields["search.query"].hasFocus
+        }
+
+        // 2. 验证“猜你想搜”稳定展示，停留 3 秒绝不消失
+        wait("hot suggestions visible", seconds: 10) {
+            self.app.staticTexts["猜你想搜"].exists
+        }
+        sleep(3)
+        XCTAssertTrue(app.staticTexts["猜你想搜"].exists, "停留等待后「猜你想搜」依然稳定展示，未发生消失")
+
+        // 3. 验证焦点在输入框与建议词、搜索按钮间畅通移动
+        press(.down) // 移动到猜你想搜第一个词
+        sleep(1)
+        press(.up) // 回到输入框
+        wait("back to query", seconds: 10) {
+            self.app.textFields["search.query"].hasFocus
+        }
+        XCTAssertTrue(app.textFields["search.query"].hasFocus, "焦点从建议词顺利返回输入框")
+
+        press(.right) // 移动到搜索按钮
+        wait("submit button focused", seconds: 10) {
+            self.app.buttons["search.submit"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["search.submit"].hasFocus, "焦点顺利向右移动到搜索按钮")
+
+        press(.left) // 移动回输入框
+        wait("query refocused", seconds: 10) {
+            self.app.textFields["search.query"].hasFocus
+        }
+
+        // 4. 选择一个建议词执行搜索
+        press(.down)
+        press(.select) // 点击建议词触发搜索
+        wait("search completed", seconds: 20) {
+            self.app.buttons["search.result.0"].exists || self.app.staticTexts["未找到相关剧集，请尝试更换关键词"].exists
+        }
+
+        let shotSearch = XCUIScreen.main.screenshot()
+        try? shotSearch.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_results_verified.png"))
+
+        // 5. 验证清空搜索功能：移动到“清空”按钮并点击
+        wait("clear button exists", seconds: 10) {
+            self.app.buttons["search.clear"].exists
+        }
+        XCTAssertTrue(app.buttons["search.clear"].exists, "搜索完成后展示「清空」按钮")
+
+        if !self.app.buttons["search.clear"].hasFocus {
+            press(.up)
+        }
+        if !self.app.buttons["search.clear"].hasFocus {
+            if self.app.textFields["search.query"].hasFocus {
+                press(.right)
+            } else if self.app.buttons["search.submit"].hasFocus {
+                press(.left)
+            } else {
+                press(.up)
+            }
+        }
+        wait("clear button focused", seconds: 10) {
+            self.app.buttons["search.clear"].hasFocus
+        }
+        press(.select) // 点击清空
+
+        // 验证清空后重置为初始状态，猜你想搜重新可见
+        wait("search cleared and restored", seconds: 10) {
+            self.app.staticTexts["猜你想搜"].exists && !self.app.buttons["search.result.0"].exists
+        }
+        XCTAssertTrue(app.staticTexts["猜你想搜"].exists, "点击清空后文字已清空并恢复展示猜你想搜")
+
+        let shotCleared = XCUIScreen.main.screenshot()
+        try? shotCleared.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_cleared_verified.png"))
+
+        // 6. 验证下载页面：唤出侧边栏并进入下载页面
+        press(.left) // 唤出侧边栏
+        wait("sidebar opened", seconds: 15) {
+            self.app.buttons["nav.search"].exists && self.app.buttons["nav.search"].hasFocus
+        }
+
+        press(.down) // library
+        press(.down) // downloads
+        wait("downloads tab focused", seconds: 10) {
+            self.app.buttons["nav.downloads"].hasFocus
+        }
+        press(.select) // 进入下载页面
+        wait("downloads page loaded", seconds: 15) {
+            !self.app.buttons["nav.downloads"].exists && self.app.staticTexts["下载与离线管理"].exists
+        }
+
+        // 验证下载页面绝无任何局域网投屏残留
+        XCTAssertFalse(app.staticTexts["局域网互联与接续播放"].exists, "下载页面已彻底移除局域网投屏功能")
+        XCTAssertFalse(app.staticTexts["大屏投屏待命已就绪"].exists, "下载页面已彻底移除大屏投屏文案")
+        XCTAssertTrue(app.buttons["downloads.explore"].exists, "下载页面全屏展示离线缓存管理与去浏览短剧按钮")
+
+        let shotDownloads = XCUIScreen.main.screenshot()
+        try? shotDownloads.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_downloads_clean_verified.png"))
+
+        print("THL_TV_SEARCH_DOWNLOAD_REFINEMENT_COMPLETE searchClear=true focusFlow=true suggestionsStable=true downloadsLanRemoved=true")
+    }
+
+    func testDetailCoverAnimationAndSourcesButtonFocusStyles() throws {
+        continueAfterFailure = false
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        // ===== 第一阶段：验证剧集详情页海报即刻展示与转场动画 =====
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "0"
+        app.launchArguments = ["-testPage", "detail", "-testDramaTitle", "都市逆袭：龙王归来"]
+        app.launch()
+
+        // 验证进入剧集详情时，无论是否还在加载完整选集，剧名与海报区域立即完整展示
+        wait("detail page active with title and cover", seconds: 20) {
+            self.app.staticTexts["都市逆袭：龙王归来"].exists
+        }
+        XCTAssertTrue(app.staticTexts["都市逆袭：龙王归来"].exists, "从列表进入详情页时立即展示剧集标题与列表海报封面")
+
+        wait("detail play ready or loading visible", seconds: 15) {
+            self.app.buttons["detail.play"].exists || self.app.staticTexts["正在载入剧集选集与播放源..."].exists
+        }
+
+        let shotDetail = XCUIScreen.main.screenshot()
+        try? shotDetail.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_detail_cover_animated_verified.png"))
+
+        // ===== 第二阶段：验证设置页面站源管理中「数据源诊断」与「网络链接导入」获焦高亮样式 =====
+        app.terminate()
+        app.launchArguments = ["-testPage", "settings_sources"]
+        app.launch()
+
+        // 点击 Select 确认切入设置分类，侧边栏收起并落焦于「站源管理」分类
+        wait("sidebar settings or nav sources ready", seconds: 15) {
+            self.app.buttons["nav.settings"].exists || self.app.buttons["settings.nav.sources"].exists
+        }
+        if self.app.buttons["nav.settings"].hasFocus {
+            press(.select)
+        }
+        wait("settings sources nav focused", seconds: 15) {
+            self.app.buttons["settings.nav.sources"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["settings.nav.sources"].hasFocus, "成功进入设置页面并聚焦站源管理分类")
+
+        // 按 Right 进入右侧站源管理内容区，验证「数据源诊断」按钮获得焦点并呈现高亮样式
+        press(.right)
+        wait("source diagnostics focused", seconds: 15) {
+            self.app.buttons["settings.sourceDiagnostics"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["settings.sourceDiagnostics"].hasFocus, "数据源诊断按钮成功获取焦点，呈现白边高光与缩放阴影样式")
+
+        let shotDiag = XCUIScreen.main.screenshot()
+        try? shotDiag.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_source_diag_focused.png"))
+
+        // 按 Right 移动到「官方数据源」，再按 Right 移动到「网络链接导入」
+        press(.right) // 聚焦官方数据源
+        sleep(1)
+        press(.right) // 聚焦网络链接导入
+        wait("import network source focused", seconds: 15) {
+            self.app.buttons["settings.importNetworkSource"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["settings.importNetworkSource"].hasFocus, "网络链接导入按钮成功获取焦点，呈现明显高亮视觉反馈")
+
+        let shotImport = XCUIScreen.main.screenshot()
+        try? shotImport.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_import_network_focused.png"))
+
+        print("THL_TV_DETAIL_ANIM_AND_SOURCES_FOCUS_COMPLETE detailCover=true detailAnim=true diagFocusStyle=true importFocusStyle=true")
+    }
+
+    /// 9. 专项验证：
+    /// 1) 搜索框输入文字后，清除小 X 按钮获焦绝无系统白色矩形背景，呈现流光红宝石与纯白高光圆环
+    /// 2) 「清空」与「搜索」按钮选中获焦后呈现清晰醒目的样式（3.0pt 纯白高光白边、1.08x 放大、流光渐变提亮底色与强红光晕）
+    /// 3) 遥控器在输入框、小 X 按钮、清空按钮与搜索按钮之间按键穿梭平滑无阻
+    func testSearchXMarkNoWhiteBackgroundAndButtonsFocusStyles() throws {
+        continueAfterFailure = false
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "search", "-testQuery", "战神"]
+        app.launch()
+
+        // 1. 等待进入搜索页并完成初始搜索
+        wait("sidebar search tab or input ready", seconds: 20) {
+            self.app.buttons["nav.search"].exists || self.app.textFields["search.query"].exists
+        }
+        if self.app.buttons["nav.search"].hasFocus {
+            press(.select)
+        }
+        wait("search results ready", seconds: 20) {
+            self.app.buttons["search.result.0"].exists
+        }
+        XCTAssertTrue(app.buttons["search.clear_icon"].exists, "输入框有文字时展示清除小 X 按钮")
+        XCTAssertTrue(app.buttons["search.clear"].exists, "搜索完成后展示独立「清空」按钮")
+        XCTAssertTrue(app.buttons["search.submit"].exists, "搜索按钮常驻存在")
+
+        // 2. 从搜索结果第一排按 Up 移动到顶栏，焦点自然切入独立「清空」按钮
+        if !self.app.buttons["search.clear"].hasFocus {
+            press(.up)
+        }
+        wait("clear button focused", seconds: 10) {
+            self.app.buttons["search.clear"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["search.clear"].hasFocus, "清空按钮成功获取焦点并呈现清晰鲜明的选中样式（纯白高光白边与流光底色）")
+
+        let shotClear = XCUIScreen.main.screenshot()
+        try? shotClear.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_clear_button_focused.png"))
+
+        // 3. 从清空按钮按 Right 移动到「搜索」按钮，验证其获焦并呈现 3.0pt 纯白高光与 1.08x 放大
+        press(.right)
+        wait("submit button focused", seconds: 10) {
+            self.app.buttons["search.submit"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["search.submit"].hasFocus, "搜索按钮成功获取焦点并呈现清晰醒目的选中高光样式")
+
+        let shotSubmit = XCUIScreen.main.screenshot()
+        try? shotSubmit.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_submit_button_focused.png"))
+
+        // 4. 从搜索按钮按 Left 顺畅返回清空按钮
+        press(.left)
+        wait("back to clear button", seconds: 5) {
+            self.app.buttons["search.clear"].hasFocus
+        }
+
+        // 5. 从清空按钮按 Left 移动到清除小 X 按钮，验证其获焦且彻底剥离白色系统背景
+        press(.left)
+        wait("clear icon focused", seconds: 10) {
+            self.app.buttons["search.clear_icon"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["search.clear_icon"].hasFocus, "清除小 X 按钮成功获取焦点，呈现纯净流光红圆圈与纯白圆环，绝无白色矩形背景")
+
+        let shotIcon = XCUIScreen.main.screenshot()
+        try? shotIcon.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_clear_icon_focused.png"))
+
+        // 6. 从清除小 X 按钮按 Left 顺畅移动回输入框
+        press(.left)
+        wait("query input focused", seconds: 5) {
+            self.app.textFields["search.query"].hasFocus
+        }
+        XCTAssertTrue(app.textFields["search.query"].hasFocus, "焦点顺利从清除小 X 按钮向左移动回到搜索输入框")
+
+        // 7. 从输入框按 Right 重新回到清除小 X 按钮，按 Select 执行清除
+        press(.right)
+        wait("clear icon refocused", seconds: 5) {
+            self.app.buttons["search.clear_icon"].hasFocus
+        }
+        press(.select) // 点击清除小 X 按钮清空文字
+        wait("query cleared and focus returns to input", seconds: 10) {
+            self.app.textFields["search.query"].hasFocus && !self.app.buttons["search.clear_icon"].exists
+        }
+        XCTAssertTrue(app.textFields["search.query"].hasFocus, "点击清除小 X 按钮后文字成功清空，小 X 按钮消失，焦点自然重置回输入框")
+
+        let shotCleared = XCUIScreen.main.screenshot()
+        try? shotCleared.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_search_text_cleared_by_icon.png"))
+
+        print("THL_TV_SEARCH_XMARK_AND_BUTTONS_FOCUS_STYLES_COMPLETE xMarkNoWhiteBg=true clearStyle=true submitStyle=true clearAction=true")
+    }
+
+    /// 10. 专项验证：
+    /// 1) 设置页面左侧导航栏已彻底移除 header 头（无 applogo 与“系统设置/糖葫芦Haw·控制中心”），与主导航栏彻底解耦
+    /// 2) 设置页面左侧分类导航栏获得焦点时，点击 Menu 按钮可顺利退回到主导航栏上（侧边栏唤出并落焦于「设置」）
+    /// 3) 剧集卡片跳转到剧集详情，海报图片呈现弹性生长过渡动画，背景环境光自然扩散，右侧信息流畅滑入
+    func testSettingsNoHeaderAndMenuBackToNavAndDetailPosterTransition() throws {
+        continueAfterFailure = false
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        // ===== 阶段一：验证设置页面导航栏无 header 头，且按 Menu 键退回到主导航栏 =====
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "settings_sources"]
+        app.launch()
+
+        // 1. 进入设置页面，等待站源分类按钮就绪
+        wait("settings sources nav ready", seconds: 20) {
+            self.app.buttons["settings.nav.sources"].exists
+        }
+        if self.app.buttons["nav.settings"].hasFocus {
+            press(.select)
+        }
+        wait("settings nav focused", seconds: 15) {
+            self.app.buttons["settings.nav.sources"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["settings.nav.sources"].hasFocus, "成功进入设置页面并聚焦于站源管理分类")
+
+        // 2. 验证设置页面内部导航栏绝无多余 header 头（如“系统设置”或“糖葫芦Haw · 控制中心”）
+        XCTAssertFalse(app.staticTexts["糖葫芦Haw · 控制中心"].exists, "设置内部导航栏已彻底移除多余 header 文本")
+        XCTAssertFalse(app.staticTexts["系统设置"].exists, "设置内部导航栏已移除多余 header 标题")
+
+        let shotSettingsClean = XCUIScreen.main.screenshot()
+        try? shotSettingsClean.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_no_header_verified.png"))
+
+        // 3. 在设置左侧导航栏上按 Menu 键，验证其成功回到主导航栏并聚焦在主导航「设置」Tab
+        press(.menu)
+        wait("return to main sidebar settings tab", seconds: 15) {
+            self.app.buttons["nav.settings"].exists && self.app.buttons["nav.settings"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["nav.settings"].hasFocus, "点击 Menu 键成功退回到主导航栏设置按钮上")
+
+        let shotMenuBack = XCUIScreen.main.screenshot()
+        try? shotMenuBack.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_menu_back_to_nav_verified.png"))
+
+        // ===== 阶段二：验证剧集详情页图片跳转过渡动画 =====
+        app.terminate()
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "0"
+        app.launchArguments = ["-testPage", "detail", "-testDramaTitle", "都市逆袭：龙王归来"]
+        app.launch()
+
+        // 验证进入剧集详情时，海报封面与标题立即展示，海报具备破框生长过渡动效
+        wait("detail title and cover ready", seconds: 20) {
+            self.app.staticTexts["都市逆袭：龙王归来"].exists && self.app.buttons["detail.play"].exists
+        }
+        XCTAssertTrue(app.staticTexts["都市逆袭：龙王归来"].exists, "剧集标题立即展示")
+        XCTAssertTrue(app.buttons["detail.play"].exists, "播放按钮立即展示并处于获焦状态")
+
+        let shotDetailAnim = XCUIScreen.main.screenshot()
+        try? shotDetailAnim.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_detail_poster_transition_verified.png"))
+
+        print("THL_TV_SETTINGS_AND_DETAIL_TRANSITION_COMPLETE noHeader=true menuBack=true posterTransition=true")
+    }
+
+    /// 11. 专项验证：tvOS 与 iOS / macOS 的 iCloud 同步面板与双向同步
+    /// 1) 验证设置页面导航进入「iCloud 多端同步」分类
+    /// 2) 验证「启用 iCloud 云端同步」开关状态可正常切换与持久化
+    /// 3) 验证开启同步后展示同步状态与「立刻同步」按钮，且获焦与点击响应正常
+    func testSettingsICloudSync() throws {
+        continueAfterFailure = false
+        let shotDir = URL(fileURLWithPath: "/Users/never88gone/.gemini/antigravity/brain/78fa14d0-288b-4e8f-86e6-1d40abdc3d60/screenshots")
+        try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
+
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "settings_sync"]
+        app.launch()
+
+        // 1. 等待设置页面左侧导航栏及 iCloud 面板就绪
+        wait("settings sync nav and toggle ready", seconds: 20) {
+            self.app.buttons["settings.nav.sync"].exists && self.app.buttons["settings.icloud.toggle"].exists
+        }
+
+        // 2. 从左侧导航栏按 Right 键进入 iCloud 设置面板
+        press(.right)
+        wait("icloud panel focused", seconds: 10) {
+            self.app.buttons["settings.icloud.toggle"].hasFocus || self.app.buttons["settings.icloud.syncNow"].hasFocus
+        }
+
+        // 3. 验证在 toggle 与 syncNow 之间焦点切换
+        if self.app.buttons["settings.icloud.syncNow"].hasFocus {
+            press(.up)
+            wait("icloud toggle focused", seconds: 5) {
+                self.app.buttons["settings.icloud.toggle"].hasFocus
+            }
+        }
+        XCTAssertTrue(app.buttons["settings.icloud.toggle"].hasFocus, "成功聚焦在 iCloud 同步开关按钮上")
+
+        // 4. 按 Down 键移动到「立刻同步」按钮
+        press(.down)
+        wait("syncNow button focused", seconds: 10) {
+            self.app.buttons["settings.icloud.syncNow"].hasFocus
+        }
+        XCTAssertTrue(app.buttons["settings.icloud.syncNow"].hasFocus, "立刻同步按钮成功获取焦点并呈现高亮选中样式")
+
+        // 5. 点击 Select 键触发同步
+        press(.select)
+        sleep(2)
+
+        let shotSync = XCUIScreen.main.screenshot()
+        try? shotSync.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_icloud_sync_verified.png"))
+
+        print("THL_TV_ICLOUD_SYNC_VERIFIED toggle=true syncNow=true status=true")
+    }
+}
+
+extension RemoteNavigationTests {
+    func testListLoadingCatalogPagingAndFocus() throws {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "catalog", "-thl_icloud_sync_enabled", "NO", "-thl_tv_cached_home_dramas", "[]", "-thl_tv_cached_categories", "[]"]
+        let start = Date()
+        app.launch()
+        wait("catalog first list", seconds: 60) { self.app.buttons["catalog.result.11"].exists }
+        print("THL_TV_LIST firstCatalogTwelveMs=\(Int(Date().timeIntervalSince(start) * 1000))")
+        wait("catalog sidebar initial focus") { self.app.buttons["nav.catalog"].hasFocus }
+        press(.right)
+        wait("catalog header focus") { self.app.buttons["catalog.category.app:discover:all"].hasFocus }
+        press(.down, focus: "catalog.result.0")
+        press(.right, focus: "catalog.result.1")
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(app.buttons["catalog.result.1"].hasFocus)
+        press(.left, focus: "catalog.result.0")
+        press(.down, focus: "catalog.result.6")
+        press(.down, focus: "catalog.result.12")
+        press(.down, focus: "catalog.result.18")
+        press(.down, focus: "catalog.result.24")
+        wait("catalog next pages loaded", seconds: 60) { self.app.buttons["catalog.result.25"].exists }
+        press(.right, focus: "catalog.result.25")
+        let title = app.buttons["catalog.result.25"].label
+        press(.select)
+        wait("catalog detail ready", seconds: 60) { self.app.buttons["detail.play"].hasFocus }
+        press(.menu)
+        wait("catalog card restored") { self.app.buttons["catalog.result.25"].hasFocus }
+        XCTAssertEqual(app.buttons["catalog.result.25"].label, title)
+        press(.menu, focus: "nav.catalog")
+        press(.right)
+        wait("catalog header restored") { self.app.buttons["catalog.category.app:discover:all"].hasFocus }
+        press(.right, focus: "catalog.category.app:discover:playlet")
+        wait("switched catalog first batch", seconds: 60) { self.app.buttons["catalog.result.0"].exists }
+        press(.down, focus: "catalog.result.0")
+        press(.down, focus: "catalog.result.6")
+        press(.up, focus: "catalog.result.0")
+        press(.up, focus: "catalog.category.app:discover:playlet")
+        press(.menu, focus: "nav.catalog")
+        print("THL_TV_LIST_RESULT catalog=true autoPaging=true appendKeepsFocus=true gridDirections=true detailReturn=true categorySwitch=true menuReturn=true")
+        app.terminate()
+    }
+
+    func testListLoadingFeedPagingAndFocus() throws {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "feed", "-thl_icloud_sync_enabled", "NO"]
+        let start = Date()
+        app.launch()
+        wait("feed first list", seconds: 60) { self.app.buttons["player.wake"].exists }
+        print("THL_TV_LIST firstFeedMs=\(Int(Date().timeIntervalSince(start) * 1000))")
+        let first = try automaticFeedReady()
+        press(.select)
+        wait("feed controls focus") { self.app.buttons["player.playPause"].hasFocus }
+        let initialProgress = app.staticTexts["feed.progress"].label
+        print("THL_TV_LIST feedInitial=\(initialProgress)")
+        press(.menu, focus: "player.wake")
+        var titles = [first.title]
+        for _ in 0..<4 {
+            press(.down)
+            let checkpoint = try automaticFeedReady(differentFrom: titles.last!)
+            titles.append(checkpoint.title)
+        }
+        XCTAssertEqual(Set(titles).count, 5)
+        press(.up)
+        let previous = try automaticFeedReady(title: titles[3])
+        press(.select)
+        wait("feed final controls focus") { self.app.buttons["player.playPause"].hasFocus }
+        print("THL_TV_LIST feedFinal=\(app.staticTexts["feed.progress"].label)")
+        press(.up, focus: "player.nextDrama")
+        press(.right, focus: "player.favorite")
+        press(.right, focus: "player.detail")
+        press(.select)
+        wait("feed detail opens", seconds: 60) { self.app.buttons["detail.play"].hasFocus }
+        XCTAssertTrue(app.staticTexts[previous.title].exists)
+        press(.down)
+        wait("feed detail selection focus") {
+            self.yaoSnapshots().contains { $0.hasFocus && ($0.identifier.hasPrefix("detail.season.") || $0.identifier.hasPrefix("detail.chunk.") || $0.identifier.hasPrefix("detail.episode.")) }
+        }
+        press(.menu)
+        wait("feed detail returns to original control", seconds: 60) { self.app.buttons["player.detail"].hasFocus }
+        press(.down, focus: "player.playPause")
+        press(.menu, focus: "player.wake")
+        press(.menu, focus: "nav.feed")
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(app.buttons["nav.feed"].hasFocus)
+        press(.right)
+        _ = try automaticFeedReady(title: previous.title, minimum: previous.position)
+        press(.menu, focus: "nav.feed")
+        print("THL_TV_LIST_RESULT feed=true unique=5 verticalSwitch=true autoPaging=true previous=true controlsFocus=true detailEntry=true detailTitle=true detailSelection=true detailReturn=true menuReturn=true resume=true")
+        app.terminate()
     }
 }

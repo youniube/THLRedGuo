@@ -22,6 +22,7 @@ public struct DramaDetailView: View {
     @State private var resumePosition: Double = 0
     @State private var isDescriptionExpanded: Bool = false
     @State private var showingDownloadSuccess: Bool = false
+    @State private var appearAnimation: Bool = false
     private enum DetailFocus: Hashable {
         case play
         case favorite
@@ -39,9 +40,13 @@ public struct DramaDetailView: View {
         self.onDismiss = onDismiss
     }
 
+    private var currentDrama: Drama {
+        viewModel.detail?.drama ?? viewModel.drama
+    }
+
     private var normalizedCoverURL: URL? {
         guard ProcessInfo.processInfo.environment["DISABLE_REMOTE_IMAGES"] != "1" else { return nil }
-        var str = viewModel.drama.cover.trimmingCharacters(in: .whitespacesAndNewlines)
+        var str = currentDrama.cover.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !str.isEmpty else { return nil }
         if str.hasPrefix("//") {
             str = "https:" + str
@@ -69,7 +74,8 @@ public struct DramaDetailView: View {
                             .frame(width: geo.size.width, height: geo.size.height)
                             .clipped()
                             .blur(radius: 50)
-                            .opacity(0.3)
+                            .opacity(appearAnimation ? 0.35 : 0.0)
+                            .animation(.easeOut(duration: 0.6), value: appearAnimation)
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -77,56 +83,57 @@ public struct DramaDetailView: View {
             }
             .ignoresSafeArea()
 
-            if viewModel.isLoading && viewModel.detail == nil {
-                ProgressView("正在载入剧集详情...")
-            } else if let error = viewModel.errorMessage, viewModel.detail == nil {
-                VStack(spacing: 16) {
-                    Text("加载出错：\(error)")
-                    TVButton(title: "重试", isProminent: true) {
-                        Task { await viewModel.loadDetail() }
-                    }
-                }
-            } else if let detail = viewModel.detail {
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
-                            // 剧集头部资料区（无顶部多余返回按钮，直接由遥控器实体 Menu/Back 键退出）
-                            HStack(alignment: .top, spacing: 40) {
-                                // 海报视图（严格限定尺寸并剪裁，防止超大图撑爆布局）
-                                PosterArtworkView(drama: detail.drama, cornerRadius: 16)
-                                    .frame(width: 220, height: 320)
-                                    .clipped()
-                                    .shadow(radius: 12)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        // 剧集头部资料区（无顶部多余返回按钮，直接由遥控器实体 Menu/Back 键退出；始终展示列表带来的封面与剧名）
+                        HStack(alignment: .top, spacing: 40) {
+                            // 封面海报：沉浸式电影级入场过渡动画（从列表小卡片尺度向上升腾展开）
+                            PosterArtworkView(drama: currentDrama, cornerRadius: 16)
+                                .frame(width: 220, height: 320)
+                                .clipped()
+                                .shadow(
+                                    color: Color.black.opacity(appearAnimation ? 0.75 : 0.2),
+                                    radius: appearAnimation ? 24 : 6,
+                                    x: 0,
+                                    y: appearAnimation ? 12 : 3
+                                )
+                                .scaleEffect(appearAnimation ? 1.0 : 0.72)
+                                .offset(y: appearAnimation ? 0 : 36)
+                                .animation(.spring(response: 0.52, dampingFraction: 0.75, blendDuration: 0.2), value: appearAnimation)
 
-                                // 标题、标签、简介与动作
-                                VStack(alignment: .leading, spacing: 18) {
-                                    Text(detail.drama.title)
-                                        .font(.system(size: 40, weight: .bold))
-                                        .foregroundColor(.white)
+                            // 标题、标签、简介与动作（紧随封面海报自然错峰滑入）
+                            VStack(alignment: .leading, spacing: 18) {
+                                Text(currentDrama.title)
+                                    .font(.system(size: 40, weight: .bold))
+                                    .foregroundColor(.white)
 
-                                    HStack(spacing: 12) {
-                                        Text(detail.drama.releaseLabel)
+                                HStack(spacing: 12) {
+                                    if !currentDrama.releaseLabel.isEmpty {
+                                        Text(currentDrama.releaseLabel)
                                             .font(.subheadline)
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 4)
                                             .background(Color.red.opacity(0.8))
                                             .clipShape(Capsule())
-
-                                        if !detail.drama.heat.isEmpty {
-                                            Text("热度：\(detail.drama.heat)")
-                                                .font(.subheadline)
-                                                .foregroundColor(.secondary)
-                                        }
-
-                                        if !detail.drama.onlineDate.isEmpty {
-                                            Text("上线：\(detail.drama.onlineDate)")
-                                                .font(.subheadline)
-                                                .foregroundColor(.secondary)
-                                        }
                                     }
 
-                                    // 简介
-                                    Text(detail.drama.description)
+                                    if !currentDrama.heat.isEmpty {
+                                        Text("热度：\(currentDrama.heat)")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    if !currentDrama.onlineDate.isEmpty {
+                                        Text("上线：\(currentDrama.onlineDate)")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
+                                // 简介
+                                if !currentDrama.description.isEmpty {
+                                    Text(currentDrama.description)
                                         .font(.body)
                                         .foregroundColor(.white.opacity(0.85))
                                         .lineLimit(isDescriptionExpanded ? nil : 3)
@@ -135,8 +142,10 @@ public struct DramaDetailView: View {
                                                 isDescriptionExpanded.toggle()
                                             }
                                         }
+                                }
 
-                                    // 动作按钮行（预留上侧、左侧、右侧充足防裁切间距）
+                                // 动作按钮行（加载完成后平滑淡入展示，加载中展示优雅进度条）
+                                if let detail = viewModel.detail {
                                     HStack(spacing: 32) {
                                         // 播放按钮
                                         let resumeEp = viewModel.lastWatchEntry?.episode ?? selectedEpisodeNumber
@@ -202,10 +211,37 @@ public struct DramaDetailView: View {
                                     .padding(.top, 16)
                                     .padding(.leading, 6)
                                     .padding(.trailing, 16)
+                                } else if viewModel.isLoading {
+                                    HStack(spacing: 16) {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(1.2)
+                                        Text("正在载入剧集选集与播放源...")
+                                            .font(.system(size: 20, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.85))
+                                    }
+                                    .padding(.top, 16)
+                                    .padding(.leading, 6)
+                                } else if let error = viewModel.errorMessage {
+                                    VStack(alignment: .leading, spacing: 14) {
+                                        Text("剧集详情加载出错：\(error)")
+                                            .font(.system(size: 18))
+                                            .foregroundColor(Color.red.opacity(0.9))
+                                        TVButton(title: "重试加载", icon: "arrow.clockwise", isProminent: true) {
+                                            Task { await viewModel.loadDetail() }
+                                        }
+                                    }
+                                    .padding(.top, 16)
+                                    .padding(.leading, 6)
                                 }
                             }
-                            .padding(.top, 16)
+                            .offset(x: appearAnimation ? 0 : 28)
+                            .opacity(appearAnimation ? 1.0 : 0.0)
+                            .animation(.easeOut(duration: 0.45).delay(0.08), value: appearAnimation)
+                        }
+                        .padding(.top, 16)
 
+                        if let detail = viewModel.detail {
                             // 紧凑型季度选择行（若有多季才显示，绝不显示标题，包含小海报与明确季数标识，绝不挤压下方选集）
                             if viewModel.seasonItems.count > 1 {
                                 ScrollView(.horizontal, showsIndicators: false) {
@@ -350,27 +386,60 @@ public struct DramaDetailView: View {
                                     .padding(.horizontal, 8)
                                 }
                             }
+                        } else if viewModel.isLoading {
+                            VStack(alignment: .leading, spacing: 20) {
+                                Text("选集播放")
+                                    .font(.title2)
+                                    .bold()
+                                    .foregroundColor(.white.opacity(0.85))
+
+                                HStack(spacing: 16) {
+                                    ForEach(1...8, id: \.self) { idx in
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(Color.white.opacity(0.06))
+                                            .frame(width: 86, height: 64)
+                                            .overlay(
+                                                Text("\(idx)")
+                                                    .font(.system(size: 18, weight: .semibold))
+                                                    .foregroundColor(.white.opacity(0.2))
+                                            )
+                                    }
+                                }
+                                .padding(.top, 6)
+                            }
+                            .padding(.top, 12)
                         }
-                        .padding(.horizontal, 48)
-                        .padding(.top, 16)
-                        .padding(.bottom, 48)
                     }
-                    .onChange(of: returningEpisode) { _, number in
-                        guard let number else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            focus(.episode(number), with: scrollProxy)
-                        }
+                    .padding(.horizontal, 48)
+                    .padding(.top, 16)
+                    .padding(.bottom, 48)
+                }
+                .onChange(of: returningEpisode) { _, number in
+                    guard let number else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        focus(.episode(number), with: scrollProxy)
                     }
-                    .defaultFocus($focusedTarget, .play)
-                    .onAppear {
-                        guard !hasAppeared else { return }
-                        hasAppeared = true
-                        if let entry = viewModel.lastWatchEntry {
-                            selectedEpisodeNumber = entry.episode
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                }
+                .onChange(of: viewModel.detail != nil) { hasDetail in
+                    if hasDetail {
+                        withAnimation(.easeInOut(duration: 0.35)) {}
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                             focus(.play, with: scrollProxy)
                         }
+                    }
+                }
+                .defaultFocus($focusedTarget, .play)
+                .onAppear {
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.75)) {
+                        appearAnimation = true
+                    }
+                    guard !hasAppeared else { return }
+                    hasAppeared = true
+                    if let entry = viewModel.lastWatchEntry {
+                        selectedEpisodeNumber = entry.episode
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        focus(.play, with: scrollProxy)
                     }
                 }
             }

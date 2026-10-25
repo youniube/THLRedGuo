@@ -294,6 +294,7 @@ public struct MainTabView: View {
                                     requestFocusSidebar()
                                 }
                             )
+                            .id("search_root_\(deepLinkQuery ?? "")_\(searchFocusTrigger)")
                             .padding(.top, 32)
                         case .library:
                             SavedLibraryView(
@@ -327,19 +328,17 @@ public struct MainTabView: View {
                     .background(TVTheme.backgroundGradient.ignoresSafeArea())
                 }
                 .onExitCommand {
-                    if selectedTab != .settings {
-                        requestFocusSidebar()
-                    }
+                    requestFocusSidebar()
                 }
                 .onChange(of: focusedNavTab) { _, newTab in
                     NSLog("🎯 [FOCUS_TRACE] Sidebar focusedNavTab = %@", newTab?.rawValue ?? "nil")
                     if let tab = newTab {
+                        selectedTab = tab
                         if columnVisibility != .all {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                 columnVisibility = .all
                             }
                         }
-                        selectedTab = tab
                     } else {
                         // 当焦点离开侧边栏（进入设置页等主内容区），立即平滑收起侧边栏浮层，杜绝遮挡内容与阻碍操作
                         if columnVisibility != .detailOnly {
@@ -443,11 +442,13 @@ public struct MainTabView: View {
             let epStr = components.queryItems?.first(where: { $0.name == "episode" })?.value
             let ep = epStr.flatMap { Int($0) }
 
+            self.handoffDrama = nil
             self.selectedTab = .search
-            self.enterContentArea(for: .search)
+            self.searchFocusTrigger += 1
             self.deepLinkQuery = kw
             self.deepLinkEpisode = ep
-            NSLog("🎬 [THLRedLook] 响应 DeepLink 搜索: keyword=%@, episode=%ld", kw, ep ?? 0)
+            self.enterContentArea(for: .search)
+            NSLog("🎬 [THLRedLook] 响应 DeepLink 搜索: keyword=%@, episode=%ld, focusTrigger=%ld", kw, ep ?? 0, self.searchFocusTrigger)
         }
     }
 
