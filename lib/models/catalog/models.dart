@@ -9,8 +9,16 @@ class SourceSite {
   final String id;
   final String name;
   final String description;
-  bool get onlineSearch => id == 'hongguo';
-  bool get pagedSearch => id == 'hongguo';
+  bool get onlineSearch {
+    if (id == 'hongguo') return true;
+    final source = JsSourceService.current?.sources
+        .where((source) => source.id == id)
+        .firstOrNull;
+    return source != null &&
+        (source.features.isEmpty || source.features.contains('search'));
+  }
+
+  bool get pagedSearch => onlineSearch;
   bool get searchSuggestions => id == 'hongguo';
   String get groupId => id;
   String get groupName => name;

@@ -716,19 +716,20 @@ globalThis.__native_save_device = function(json) {
     } else if (res is Map) {
       list = _toListOfMaps(res['list'] ?? []);
     }
-    final resultPage = res is Map
-        ? (res['page'] as num?)?.toInt() ?? page
-        : page;
+    int? pageNumber(Object? value) =>
+        value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+    final resultPage = res is Map ? pageNumber(res['page']) ?? page : page;
     final pageCount = res is Map
-        ? (res['pagecount'] as num?)?.toInt() ??
-              (res['pageCount'] as num?)?.toInt() ??
-              resultPage
+        ? pageNumber(res['pagecount'] ?? res['pageCount']) ?? resultPage
         : resultPage;
+    final more = res is Map ? res['hasMore'] ?? res['has_more'] : null;
     return CatPawSearchResult(
       list: list,
       page: resultPage,
       pageCount: pageCount,
-      hasMore: resultPage < pageCount,
+      hasMore: more == null
+          ? resultPage < pageCount
+          : more == true || more == 1 || more == '1' || more == 'true',
     );
   }
 

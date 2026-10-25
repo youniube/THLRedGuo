@@ -105,20 +105,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   SourceGroup get _group =>
       _sourceGroups.where((group) => group.id == _source.groupId).firstOrNull ??
       SourceGroup(_source.groupId, _source.groupName, [_source]);
-  bool get _onlineSearch => _group.sources.any((source) => source.onlineSearch);
+  SourceGroup get _searchGroup => SourceGroup(
+    'search:all',
+    '全部站源',
+    widget.store.sources.where((source) => source.onlineSearch).toList(),
+  );
+  bool get _onlineSearch => _searchGroup.sources.isNotEmpty;
+  bool get _searching => _onlineSearch && _search.text.trim().isNotEmpty;
   bool get _searchSuggestions =>
-      _group.sources.any((source) => source.searchSuggestions);
+      _searchGroup.sources.any((source) => source.searchSuggestions);
   String get _searchHint {
-    final online = _group.sources
-        .where((source) => source.onlineSearch)
-        .toList();
+    final online = _searchGroup.sources;
     if (online.isEmpty) {
       return '筛选本机已更新剧库';
     }
-    final names = online.map((source) => source.name).join('、');
-    return online.length == _group.sources.length
-        ? '搜索$names'
-        : '搜索$names及本机剧库';
+    return online.length > 1
+        ? '搜索全部站源（${online.length} 个）'
+        : '搜索${online.single.name}';
   }
 
   String get _category => _categorySelections[_group.id] ?? '';
@@ -165,6 +168,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _categoriesError = error;
     });
     if (!_showRecommendations &&
+        !_searching &&
         _category.isNotEmpty &&
         !_categories.any((entry) => entry.id == _category)) {
       _changeCategory(_categories.first.id);
@@ -172,6 +176,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshCatalog() async {
+    if (_searching) {
+      await _load(force: true);
+      return;
+    }
     if (widget.repository.supportsSourceManagement && _group.id != 'hongguo') {
       if (_group.sources.any((source) => _updater.busy(source.id))) return;
       _pauseCatalog();
@@ -477,11 +485,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       builder: (_) => TelevisionSearchDialog(
         initialValue: _search.text,
-        title: _group.id == 'all'
-            ? '搜索已开放站源'
-            : _onlineSearch
-            ? '搜索${_group.name}短剧'
-            : '筛选当前已加载短剧',
+        title: _searchHint,
         recentSearches: widget.store.recentSearches,
         onCancel: () => unawaited(widget.repository.cancelSuggestions()),
         suggestions: _searchSuggestions ? widget.repository.suggestions : null,
@@ -691,11 +695,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _resumeCatalogMore = null;
     _lastLoadMore = more;
     final generation = ++_generation;
-    final group = _group;
     final query = _onlineSearch ? _search.text.trim() : '';
+    final group = query.isNotEmpty ? _searchGroup : _group;
     setState(() {
       _error = null;
-      if (query.isNotEmpty) _categorySelections[group.id] = '';
       if (more) {
         _loadingMore = true;
       } else {
@@ -704,16 +707,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (query != _submittedQuery) _items = [];
       }
     });
-    void accept(CatalogPage result, {bool cached = false}) {
+    void accept(
+      CatalogPage result, {
+      bool cached = false,
+      bool partial = false,
+    }) {
       if (!mounted || generation != _generation) return;
       setState(() {
         _items = result.items;
         _hasMore = result.hasMore;
         _submittedQuery = query;
-        _loading = cached && !result.fresh;
+        _loading = partial || cached && !result.fresh;
         _loadingMore = false;
-        _error = result.warning.isEmpty ? null : result.warning;
+        _error = partial || result.warning.isEmpty ? null : result.warning;
       });
+      if (partial) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || generation != _generation) return;
         if (_visible.isEmpty &&
@@ -738,13 +746,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final result = await _browser.load(
         group,
-        category: _category,
+        category: query.isEmpty ? _category : '',
         query: query,
         more: more,
         useCache: useCache,
         force: force,
         cacheOnly: cacheOnly,
         onCached: (result) => accept(result, cached: true),
+        onPartial: (result) => accept(result, partial: true),
       );
       accept(result);
     } catch (error) {
@@ -953,6 +962,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       key: ValueKey(drama.id),
       drama: drama,
       repository: widget.repository,
+      subtitle: _searching
+          ? '${SourceSite.byId(drama.source).name} · ${drama.displayCategory}'
+          : null,
       focusNode: focusNode,
       onFocus: onFocus,
       onTap: () => _selectionMode ? _selectDrama(drama) : _openDrama(drama),
@@ -1367,7 +1379,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return sortCatalog(
       _items.where((drama) {
         if (!widget.store.allowsSource(drama.source)) return false;
-        if (_category.startsWith('local:') &&
+        if (!_searching &&
+            _category.startsWith('local:') &&
             categoryName(drama.category) != _category.substring(6)) {
           return false;
         }
@@ -1642,8 +1655,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             padding: const EdgeInsets.only(right: 8),
             child: ActionChip(
               avatar: const Icon(Icons.swap_horiz_rounded, size: 16),
-              label: Text(_group.name),
-              tooltip: '切换数据源（当前：${_group.name}）',
+              label: Text(_searching ? _searchGroup.name : _group.name),
+              tooltip: _searching
+                  ? '搜索范围：全部 ${_searchGroup.sources.length} 个站源'
+                  : '切换数据源（当前：${_group.name}）',
               shape: const StadiumBorder(),
               backgroundColor: Theme.of(context).colorScheme.primaryContainer,
               labelStyle: TextStyle(
@@ -1663,7 +1678,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         if (_searchVisible && !television)
           HomeSearchBarView(
-            groupId: _group.id,
+            groupId: _searchGroup.id,
             controller: _search,
             hint: _searchHint,
             suggestions: _searchSuggestions
@@ -1680,10 +1695,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         CatalogFilters(
           key: ValueKey('filters-${_group.id}'),
           leading: sourceChip,
-          categories: _displayCategories,
-          category: _displayCategory,
-          error: _categoriesError,
-          onCategory: _changeCategory,
+          categories: _searching
+              ? const [CatalogCategory('search:all', '全部站源')]
+              : _displayCategories,
+          category: _searching ? 'search:all' : _displayCategory,
+          error: _searching ? null : _categoriesError,
+          onCategory: (category) {
+            if (!_searching) _changeCategory(category);
+          },
           onRetry: () => _loadCategories(force: true),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1766,8 +1785,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   !_loadingMore &&
                   (!_onlineSearch ||
                       _search.text.isEmpty ||
-                      _group.sources.any((source) => source.pagedSearch)),
-              gridKey: 'catalog-${_group.id}-$_category-$_submittedQuery',
+                      _searchGroup.sources.any((source) => source.pagedSearch)),
+              gridKey:
+                  'catalog-${_searching ? _searchGroup.id : _group.id}-$_category-$_submittedQuery',
               loadingMessage: _search.text.trim().isNotEmpty
                   ? '正在搜索相关短剧...'
                   : (_category.isNotEmpty ? '正在获取分类短剧...' : '正在加载精选短剧...'),
@@ -1777,7 +1797,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onPrefetch: _onCatalogScroll,
               onRefresh: _refreshCatalog,
               onManageSources: _manageSources,
-              onSwipeCategory: _swipeCategory,
+              onSwipeCategory: _searching ? null : _swipeCategory,
               tileBuilder: _catalogTile,
             ),
           ),

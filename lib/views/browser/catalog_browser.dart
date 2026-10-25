@@ -173,6 +173,7 @@ class CatalogBrowser {
     bool useCache = false,
     bool cacheOnly = false,
     void Function(CatalogPage)? onCached,
+    void Function(CatalogPage)? onPartial,
   }) async {
     if (cacheOnly && (more || force || query.trim().isNotEmpty)) {
       throw AppFailure('缓存读取不能同时请求搜索或续页');
@@ -227,7 +228,13 @@ class CatalogBrowser {
           (page, source) => max(page, session.entries[source]!.page),
         ),
         fresh: sourceOrder.every((source) => session.entries[source]!.fresh),
-        warning: failures.values.toSet().join('；'),
+        warning: failures.entries
+            .map(
+              (entry) => sourceOrder.length > 1
+                  ? '${SourceSite.byId(entry.key).name}：${entry.value}'
+                  : entry.value,
+            )
+            .join('；'),
       );
     }
 
@@ -297,6 +304,13 @@ class CatalogBrowser {
         entry.hasMore = query.isEmpty || SourceSite.byId(source).pagedSearch;
         entry.fresh = false;
         failures[source] = error.toString();
+      }
+      if (query.isNotEmpty &&
+          !more &&
+          generation == session.generation &&
+          onPartial != null) {
+        final partial = snapshot();
+        if (partial.items.isNotEmpty) onPartial(partial);
       }
     });
     final result = snapshot();
