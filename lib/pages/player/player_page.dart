@@ -629,10 +629,9 @@ class _PlayerScreenState extends State<PlayerScreen>
               unawaited(
                 _play(
                   _index,
-                  position:
-                      position != null && position > 0
-                          ? position / 1000.0
-                          : 0.0,
+                  position: position != null && position > 0
+                      ? position / 1000.0
+                      : 0.0,
                 ),
               );
             } else {
@@ -784,6 +783,12 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _enterPictureInPicture() async {
     if (_closed) return;
+    if (Platform.isIOS &&
+        _player is LunaExoPlayer &&
+        _player.compatibilityPlayback) {
+      _notice('当前视频格式暂不支持系统画中画');
+      return;
+    }
     if (!_canUsePictureInPicture) {
       _notice('画中画未开启或当前设备暂不支持');
       return;

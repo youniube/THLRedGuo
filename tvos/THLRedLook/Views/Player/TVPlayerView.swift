@@ -102,7 +102,12 @@ public struct TVPlayerView: View {
     private var videoSurfaceView: some View {
         TVTheme.backgroundGradient.ignoresSafeArea()
 
-        if let player = viewModel.player {
+        if let compatible = viewModel.mpvPlayer {
+            MPVPlayerView(controller: compatible)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        } else if let player = viewModel.player {
             AVPlayerView(player: player)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
@@ -126,7 +131,7 @@ public struct TVPlayerView: View {
                 position: viewModel.currentTime,
                 anchor: viewModel.playbackClockDate,
                 rate: Double(viewModel.playbackRate),
-                moving: viewModel.isPlaying && viewModel.player?.timeControlStatus == .playing,
+                moving: viewModel.isPlaying && !viewModel.isBuffering,
                 style: viewModel.danmakuStyle
             )
         }

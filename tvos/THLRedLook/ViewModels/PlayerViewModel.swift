@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 public final class PlayerViewModel: ObservableObject {
     @Published public var player: AVPlayer?
+    @Published public private(set) var mpvPlayer: MPVPlaybackController?
     @Published public var isPlaying: Bool = false
     @Published public private(set) var wantsPlayback: Bool = true
     @Published public private(set) var isBuffering: Bool = false
@@ -247,6 +248,8 @@ public final class PlayerViewModel: ObservableObject {
             player?.replaceCurrentItem(with: nil)
         }
         player = nil
+        mpvPlayer?.close()
+        mpvPlayer = nil
         isPlaying = false
         isBuffering = false
         if let url = decryptedURL {
@@ -386,6 +389,7 @@ public final class PlayerViewModel: ObservableObject {
         releasePlayerObservers()
         if !isSeamlessTransitioning {
             player?.pause()
+            mpvPlayer?.pause()
             await configureAudioSession()
         }
         guard !closed, generation == playbackGeneration, !Task.isCancelled else { return }
@@ -448,6 +452,12 @@ public final class PlayerViewModel: ObservableObject {
             guard let scheme = URL(string: resolved.url)?.scheme, ["https", "http", "file"].contains(scheme) else {
                 throw NSError(domain: "Player", code: -1, userInfo: [NSLocalizedDescriptionKey: "无效播放地址"])
             }
+            let requiresMPV = await HLSCompatibilityProbe.requiresMPV(resolved)
+            guard current() else { return }
+            if requiresMPV {
+                try startCompatibilityPlayback(resolved, seekTo: seekTo)
+                return
+            }
             let prepared = try await PlaybackAssetFactory.prepare(resolved)
             guard current() else {
                 if let local = prepared.decryptedURL { CENCMP4Decryptor.shared.removePlaybackCache(at: local) }
@@ -464,12 +474,14 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
-    func requestRecovery(reason: String) {
+    func requestRecovery(reason: String, allowCompatibility: Bool = false) {
         guard !closed, !reachedEnd, recoveryTask == nil else { return }
+        if allowCompatibility && mpvPlayer == nil && tryCompatibilityPlayback(seekTo: currentTime) { return }
         guard recoveryAttempts < 5 else {
             initializationTimer?.invalidate()
             healthTimer?.invalidate()
             player?.pause()
+            mpvPlayer?.pause()
             isPlaying = false
             isBuffering = false
             isLoading = false
@@ -479,7 +491,7 @@ public final class PlayerViewModel: ObservableObject {
         recoveryAttempts += 1
         failedURL = plan?.url ?? failedURL
         let episode = currentEpisodeIndex
-        let playerTime = player?.currentTime().seconds ?? 0
+        let playerTime = mpvPlayer?.position ?? player?.currentTime().seconds ?? 0
         let position = max(currentTime, playerTime.isFinite ? playerTime : 0)
         isLoading = true
         errorMessage = nil
@@ -492,7 +504,61 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    private func tryCompatibilityPlayback(seekTo: Double) -> Bool {
+        guard mpvPlayer == nil, let plan, plan.decryptionKey.isEmpty else { return false }
+        do {
+            try startCompatibilityPlayback(plan, seekTo: seekTo)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func startCompatibilityPlayback(_ plan: PlaybackPlan, seekTo: Double) throws {
+        releasePlayerObservers()
+        mpvPlayer?.close()
+        mpvPlayer = nil
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        let compatible = try MPVPlaybackController(plan: plan, position: seekTo, rate: playbackRate, play: playIntent && isSceneActive)
+        mpvPlayer = compatible
+        isLoading = true
+        errorMessage = nil
+        let generation = playbackGeneration
+        compatible.onUpdate = { [weak self, weak compatible] snapshot in
+            guard let self, let compatible, self.mpvPlayer === compatible,
+                  generation == self.playbackGeneration, !self.closed else { return }
+            self.currentTime = snapshot.position
+            if snapshot.duration > 0 { self.duration = snapshot.duration }
+            self.isPlaying = snapshot.playing && self.playIntent && self.isSceneActive
+            self.isBuffering = snapshot.buffering && self.playIntent && self.isSceneActive
+            if snapshot.ready {
+                self.isLoading = false
+                self.isSeamlessTransitioning = false
+            }
+            self.playbackClockDate = Date()
+            self.nextEpisodeCountdown = nil
+            self.updateActiveDanmakus()
+        }
+        compatible.onEnded = { [weak self, weak compatible] in
+            Task { @MainActor in
+                guard let self, let compatible, self.mpvPlayer === compatible,
+                      generation == self.playbackGeneration, !self.closed else { return }
+                await self.handlePlayEnded()
+            }
+        }
+        compatible.onFailure = { [weak self, weak compatible] message in
+            guard let self, let compatible, self.mpvPlayer === compatible,
+                  generation == self.playbackGeneration, !self.closed else { return }
+            self.requestRecovery(reason: message)
+        }
+        NSLog("[PlayerVM] compatibility playback episode=%d", currentEpisodeIndex)
+    }
+
     func startPlaybackWithItem(item: AVPlayerItem, seekTo: Double) {
+        mpvPlayer?.close()
+        mpvPlayer = nil
         item.preferredForwardBufferDuration = 3
         releasePlayerObservers()
         let av: AVPlayer
@@ -509,6 +575,8 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     func startPlaybackWithPlayer(_ cachedPlayer: AVPlayer, seekTo: Double) {
+        mpvPlayer?.close()
+        mpvPlayer = nil
         releasePlayerObservers()
         cachedPlayer.isMuted = false
         cachedPlayer.automaticallyWaitsToMinimizeStalling = true
@@ -557,6 +625,8 @@ public final class PlayerViewModel: ObservableObject {
                 guard let self, let av, self.player === av, generation == self.playbackGeneration, !self.closed else { return }
                 switch observed.status {
                 case .readyToPlay:
+                    if !observed.tracks.contains(where: { $0.assetTrack?.mediaType == .video }),
+                       self.tryCompatibilityPlayback(seekTo: seekTo) { return }
                     self.errorMessage = nil
                     let seconds = observed.duration.seconds
                     if seconds.isFinite && seconds > 0 { self.duration = seconds }
@@ -578,13 +648,15 @@ public final class PlayerViewModel: ObservableObject {
                     NSLog("[PlayerVM] ready episode=%d duration=%.2f tracks=%d", self.currentEpisodeIndex, self.duration, observed.tracks.count)
                 case .failed:
                     self.isSeamlessTransitioning = false
-                    self.requestRecovery(reason: observed.error?.localizedDescription ?? "视频流加载失败")
+                    self.requestRecovery(reason: observed.error?.localizedDescription ?? "视频流加载失败", allowCompatibility: true)
                 default:
                     break
                 }
             }
         }
         if item.status == .readyToPlay {
+            if !item.tracks.contains(where: { $0.assetTrack?.mediaType == .video }),
+               tryCompatibilityPlayback(seekTo: seekTo) { return }
             self.errorMessage = nil
             let seconds = item.duration.seconds
             if seconds.isFinite && seconds > 0 { self.duration = seconds }
@@ -641,14 +713,14 @@ public final class PlayerViewModel: ObservableObject {
             itemNotifications.append(center.addObserver(forName: name, object: item, queue: .main) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, self.player === av, generation == self.playbackGeneration, !self.closed, self.playIntent else { return }
-                    if name == .AVPlayerItemFailedToPlayToEndTime { self.requestRecovery(reason: "视频读取中断") }
+                    if name == .AVPlayerItemFailedToPlayToEndTime { self.requestRecovery(reason: "视频读取中断", allowCompatibility: true) }
                 }
             })
         }
         initializationTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.player === av, self.isLoading, !self.closed else { return }
-                self.requestRecovery(reason: "视频初始化超时")
+                self.requestRecovery(reason: "视频初始化超时", allowCompatibility: true)
             }
         }
         lastObservedPosition = seekTo
@@ -680,6 +752,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func prefetchNextEpisode() {
+        guard mpvPlayer == nil else { return }
         let nextIndex = currentEpisodeIndex + 1
         guard nextIndex <= allEpisodes.count else { return }
         guard preloadedEpisode?.episodeIndex != nextIndex, prefetchTask == nil else { return }
@@ -750,6 +823,21 @@ public final class PlayerViewModel: ObservableObject {
             }
             return
         }
+        if let mpvPlayer {
+            playIntent.toggle()
+            if playIntent {
+                if reachedEnd { reachedEnd = false; mpvPlayer.seek(to: 0) }
+                if isSceneActive { mpvPlayer.play(rate: playbackRate) }
+            } else {
+                mpvPlayer.pause()
+                isPlaying = false
+                isBuffering = false
+            }
+            samplePlaybackClock()
+            updateActiveDanmakus()
+            if isControlsVisible { resetControlsHideTimer() }
+            return
+        }
         guard let p = player else { return }
         if playIntent {
             playIntent = false
@@ -792,6 +880,13 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func seek(to target: Double) {
+        if let mpvPlayer {
+            currentTime = target
+            mpvPlayer.seek(to: target)
+            lastProgressTime = Date()
+            updateActiveDanmakus()
+            return
+        }
         guard let p = player, p.currentItem?.status == .readyToPlay else { return }
         seekSequence += 1
         let sequence = seekSequence
@@ -817,6 +912,7 @@ public final class PlayerViewModel: ObservableObject {
         guard rate.isFinite, rate >= 0.25, rate <= 3 else { return }
         samplePlaybackClock()
         playbackRate = rate
+        mpvPlayer?.setRate(rate)
         if isPlaying {
             player?.rate = rate
         }
@@ -894,11 +990,13 @@ public final class PlayerViewModel: ObservableObject {
                 playIntent = true
                 lastProgressTime = Date()
                 if player?.currentItem?.status == .readyToPlay { player?.playImmediately(atRate: playbackRate) }
+                mpvPlayer?.play(rate: playbackRate)
             }
         } else {
             resumeAfterInterruption = playIntent
             playIntent = false
             player?.pause()
+            mpvPlayer?.pause()
             isPlaying = false
             isBuffering = false
             saveCurrentProgress()
@@ -908,7 +1006,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func samplePlaybackClock() {
-        guard !isSeeking, let seconds = player?.currentTime().seconds, seconds.isFinite else { return }
+        guard !isSeeking, let seconds = mpvPlayer?.position ?? player?.currentTime().seconds, seconds.isFinite else { return }
         currentTime = max(0, seconds)
         playbackClockDate = Date()
     }
@@ -1008,6 +1106,7 @@ public final class PlayerViewModel: ObservableObject {
             playIntent = false
             resumeAfterInterruption = false
             player?.pause()
+            mpvPlayer?.pause()
             isPlaying = false
             updateActiveDanmakus()
             showControls()

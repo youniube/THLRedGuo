@@ -1,0 +1,42 @@
+name: Check Playback Compatibility
+
+on:
+  push:
+    branches-ignore: [main, master]
+    paths:
+      - 'tvos/**'
+      - '.github/workflows/check-playback.yml'
+  pull_request:
+    paths:
+      - 'tvos/**'
+      - '.github/workflows/check-playback.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playback-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tvos:
+    name: Compile tvOS Playback
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CocoaPods dependencies
+        working-directory: tvos
+        run: pod install
+      - name: Compile without signing
+        run: >-
+          xcodebuild build
+          -workspace tvos/THLRedLook.xcworkspace
+          -scheme THLRedLook
+          -configuration Debug
+          -destination 'generic/platform=tvOS Simulator'
+          -derivedDataPath build/tvos-playback-check
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=
