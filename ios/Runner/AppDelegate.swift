@@ -13,6 +13,7 @@ import CoreMedia
   private var pipPlayerLayer: AVPlayerLayer?
   private var pipContainerView: UIView?
   private var deviceChannel: FlutterMethodChannel?
+  private var originalScreenBrightness: CGFloat?
   private var icloudChannel: FlutterMethodChannel?
   private var pipObservation: NSKeyValueObservation?
   private var pipItemStatusObservation: NSKeyValueObservation?
@@ -69,6 +70,32 @@ import CoreMedia
             "isPad": UIDevice.current.userInterfaceIdiom == .pad,
             "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
           ])
+          return
+        }
+        if call.method == "getBrightness" {
+          result(Double(UIScreen.main.brightness))
+          return
+        }
+        if call.method == "setBrightness" {
+          let args = call.arguments as? [String: Any]
+          guard let brightness = (args?["brightness"] as? NSNumber)?.doubleValue,
+                brightness.isFinite else {
+            result(FlutterError(code: "invalid_arg", message: "缺少有效的亮度数值", details: nil))
+            return
+          }
+          if self.originalScreenBrightness == nil {
+            self.originalScreenBrightness = UIScreen.main.brightness
+          }
+          UIScreen.main.brightness = CGFloat(min(1.0, max(0.01, brightness)))
+          result(true)
+          return
+        }
+        if call.method == "resetBrightness" {
+          if let brightness = self.originalScreenBrightness {
+            UIScreen.main.brightness = brightness
+            self.originalScreenBrightness = nil
+          }
+          result(true)
           return
         }
         if call.method == "pictureInPictureStatus" {

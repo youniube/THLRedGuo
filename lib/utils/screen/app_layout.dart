@@ -99,7 +99,10 @@ class AppDevice {
   }
 
   static Future<double> getBrightness() async {
-    if (defaultTargetPlatform != TargetPlatform.android) return 0.5;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return 0.5;
+    }
     try {
       final value = await channel.invokeMethod<double>('getBrightness');
       return (value ?? 0.5).clamp(0.0, 1.0);
@@ -109,14 +112,22 @@ class AppDevice {
   }
 
   static Future<void> setBrightness(double brightness) async {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
     try {
-      await channel.invokeMethod('setBrightness', {'brightness': brightness.clamp(0.01, 1.0)});
+      await channel.invokeMethod('setBrightness', {
+        'brightness': brightness.clamp(0.01, 1.0),
+      });
     } catch (_) {}
   }
 
   static Future<void> resetBrightness() async {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
     try {
       await channel.invokeMethod('resetBrightness');
     } catch (_) {}
