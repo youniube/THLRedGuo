@@ -144,7 +144,9 @@ class PlayerViewportView extends StatelessWidget {
     final videoTheme = television
         ? televisionTheme(AppTheme.dark)
         : AppTheme.dark;
-    final isHongguo = detail.drama.source == 'hongguo' || detail.drama.id.startsWith('hongguo:');
+    final isHongguo =
+        detail.drama.source == 'hongguo' ||
+        detail.drama.id.startsWith('hongguo:');
     final isVipEp = !isHongguo && detail.episodes[index].vip;
     final title =
         '${detail.drama.title} · 第 ${detail.episodes[index].number} 集${plan?.offline == true ? ' · 本地' : ''}${isVipEp ? ' · VIP 试看' : ''}${(plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${plan!.routeIndex + 1}' : ''}';
@@ -235,7 +237,10 @@ class PlayerViewportView extends StatelessWidget {
                           FilledButton.icon(
                             key: const ValueKey('player-pip-restore-btn'),
                             onPressed: onRestorePictureInPicture,
-                            icon: const Icon(Icons.fullscreen_rounded, size: 18),
+                            icon: const Icon(
+                              Icons.fullscreen_rounded,
+                              size: 18,
+                            ),
                             label: const Text('恢复应用内播放'),
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.hongguoRed,
@@ -360,13 +365,16 @@ class PlayerViewportView extends StatelessWidget {
               Positioned.fill(
                 child: IgnorePointer(child: SizedBox.expand(key: videoPaneKey)),
               ),
-              // 0. 最底层海报毛玻璃托底背景（环境漫反射底衬，消除纯黑边违和感）
-              DramaBackdrop(
-                drama: detail.drama,
-                repository: repository,
-                sigma: 32.0,
-                dimColor: AppColors.blackWithAlpha(0.72),
-              ),
+              // 0. 最底层托底背景（电视大屏使用纯黑底衬，避免彩色漫反射破坏电视背光分区控光与黑位对比度；移动端保留适度毛玻璃）
+              if (!television)
+                DramaBackdrop(
+                  drama: detail.drama,
+                  repository: repository,
+                  sigma: 32.0,
+                  dimColor: AppColors.blackWithAlpha(0.72),
+                )
+              else
+                const ColoredBox(color: AppColors.black),
               if (videoBuilder != null)
                 videoBuilder!(layeredControls)
               else if (player is LunaExoPlayer)
