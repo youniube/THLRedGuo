@@ -37,6 +37,7 @@ public final class MPVPlaybackController: ObservableObject {
     private var handle: OpaquePointer?
     private var timer: Timer?
     private var loaded = false
+    private var renderedVideo = false
     private var requestedPlayback = true
     private var loadedAt = Date()
 
@@ -119,8 +120,16 @@ public final class MPVPlaybackController: ObservableObject {
                 }
             }
         }
+        if ended {
+            requestedPlayback = false
+            timer?.invalidate()
+            timer = nil
+            onEnded?()
+            return
+        }
         let ready = loaded && number("video-params/w") > 0 && number("video-params/h") > 0
-        if !ready && Date().timeIntervalSince(loadedAt) > 30 { failure = "兼容播放器加载视频超时" }
+        renderedVideo = renderedVideo || ready
+        if !renderedVideo && Date().timeIntervalSince(loadedAt) > 30 { failure = "兼容播放器加载视频超时" }
         let buffering = !ready || flag("paused-for-cache")
         onUpdate?(Snapshot(position: position, duration: number("duration"), playing: requestedPlayback && ready && !buffering && !flag("pause"), buffering: requestedPlayback && buffering, ready: ready))
         if let failure {
@@ -129,9 +138,6 @@ public final class MPVPlaybackController: ObservableObject {
             timer?.invalidate()
             timer = nil
             callback?(failure)
-        } else if ended {
-            requestedPlayback = false
-            onEnded?()
         }
     }
 

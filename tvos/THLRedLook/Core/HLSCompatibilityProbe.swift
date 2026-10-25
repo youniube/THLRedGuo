@@ -10,7 +10,16 @@ enum HLSCompatibilityProbe {
         configuration.timeoutIntervalForRequest = 4
         configuration.timeoutIntervalForResource = 4
         let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
+        let deadline = Task {
+            do {
+                try await Task.sleep(nanoseconds: 4_000_000_000)
+                session.invalidateAndCancel()
+            } catch {}
+        }
+        defer {
+            deadline.cancel()
+            session.invalidateAndCancel()
+        }
         do {
             var current = url
             for _ in 0..<3 {

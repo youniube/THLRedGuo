@@ -442,6 +442,7 @@ public final class PlayerViewModel: ObservableObject {
                 throw NSError(domain: "Player", code: -1, userInfo: [NSLocalizedDescriptionKey: "没有找到当前分集，请重新加载剧集详情"])
             }
             if let localURL = DownloadService.shared.completedLocalURL(dramaId: drama.id, episodeId: episode.id) {
+                plan = PlaybackPlan(url: localURL.absoluteString, quality: selectedQuality, local: true)
                 startPlaybackWithItem(item: AVPlayerItem(url: localURL), seekTo: seekTo)
                 return
             }
@@ -625,8 +626,12 @@ public final class PlayerViewModel: ObservableObject {
                 guard let self, let av, self.player === av, generation == self.playbackGeneration, !self.closed else { return }
                 switch observed.status {
                 case .readyToPlay:
-                    if !observed.tracks.contains(where: { $0.assetTrack?.mediaType == .video }),
-                       self.tryCompatibilityPlayback(seekTo: seekTo) { return }
+                    if !observed.tracks.contains(where: { $0.assetTrack?.mediaType == .video }) {
+                        if !self.tryCompatibilityPlayback(seekTo: seekTo) {
+                            self.requestRecovery(reason: "当前视频未识别到可播放画面")
+                        }
+                        return
+                    }
                     self.errorMessage = nil
                     let seconds = observed.duration.seconds
                     if seconds.isFinite && seconds > 0 { self.duration = seconds }
@@ -655,8 +660,12 @@ public final class PlayerViewModel: ObservableObject {
             }
         }
         if item.status == .readyToPlay {
-            if !item.tracks.contains(where: { $0.assetTrack?.mediaType == .video }),
-               tryCompatibilityPlayback(seekTo: seekTo) { return }
+            if !item.tracks.contains(where: { $0.assetTrack?.mediaType == .video }) {
+                if !tryCompatibilityPlayback(seekTo: seekTo) {
+                    requestRecovery(reason: "当前视频未识别到可播放画面")
+                }
+                return
+            }
             self.errorMessage = nil
             let seconds = item.duration.seconds
             if seconds.isFinite && seconds > 0 { self.duration = seconds }
@@ -826,7 +835,14 @@ public final class PlayerViewModel: ObservableObject {
         if let mpvPlayer {
             playIntent.toggle()
             if playIntent {
-                if reachedEnd { reachedEnd = false; mpvPlayer.seek(to: 0) }
+                if reachedEnd {
+                    reachedEnd = false
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await self.preparePlayback(episodeIndex: self.currentEpisodeIndex, seekTo: 0)
+                    }
+                    return
+                }
                 if isSceneActive { mpvPlayer.play(rate: playbackRate) }
             } else {
                 mpvPlayer.pause()
