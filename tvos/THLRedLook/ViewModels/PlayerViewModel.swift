@@ -522,6 +522,10 @@ public final class PlayerViewModel: ObservableObject {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
+        if let previous = decryptedURL {
+            CENCMP4Decryptor.shared.removePlaybackCache(at: previous)
+            decryptedURL = nil
+        }
         let compatible = try MPVPlaybackController(plan: plan, position: seekTo, rate: playbackRate, play: playIntent && isSceneActive)
         mpvPlayer = compatible
         isLoading = true

@@ -40,6 +40,9 @@ public final class MPVPlaybackController: ObservableObject {
     private var renderedVideo = false
     private var requestedPlayback = true
     private var loadedAt = Date()
+    private var lastPosition = 0.0
+    private var lastDuration = 0.0
+    private var completedPosition: Double?
 
     init(plan: PlaybackPlan, position: Double, rate: Float, play: Bool) throws {
         guard let context = mpv_create() else { throw Self.failure("无法初始化兼容播放器") }
@@ -92,7 +95,7 @@ public final class MPVPlaybackController: ObservableObject {
         mpv_set_property(handle, "speed", MPV_FORMAT_DOUBLE, &value)
     }
 
-    var position: Double { number("time-pos") }
+    var position: Double { completedPosition ?? number("time-pos") }
 
     func close() {
         timer?.invalidate()
@@ -121,6 +124,7 @@ public final class MPVPlaybackController: ObservableObject {
             }
         }
         if ended {
+            completedPosition = max(lastPosition, lastDuration)
             requestedPlayback = false
             timer?.invalidate()
             timer = nil
@@ -131,7 +135,10 @@ public final class MPVPlaybackController: ObservableObject {
         renderedVideo = renderedVideo || ready
         if !renderedVideo && Date().timeIntervalSince(loadedAt) > 30 { failure = "兼容播放器加载视频超时" }
         let buffering = !ready || flag("paused-for-cache")
-        onUpdate?(Snapshot(position: position, duration: number("duration"), playing: requestedPlayback && ready && !buffering && !flag("pause"), buffering: requestedPlayback && buffering, ready: ready))
+        lastPosition = position
+        let duration = number("duration")
+        if duration > 0 { lastDuration = duration }
+        onUpdate?(Snapshot(position: lastPosition, duration: duration, playing: requestedPlayback && ready && !buffering && !flag("pause"), buffering: requestedPlayback && buffering, ready: ready))
         if let failure {
             let callback = onFailure
             pause()
