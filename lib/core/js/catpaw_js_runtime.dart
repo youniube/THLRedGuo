@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
+import 'package:THLRedLook/core/js/source_http_client.dart';
 
 class CatPawHomeResult {
   final List<Map<String, dynamic>> classes;
@@ -1327,12 +1328,22 @@ class CatPawRuntimePool {
   final Map<String, Future<CatPawJsRuntime>> _pending = {};
   final Map<String, int> _generations = {};
   bool _isDisposed = false;
+  bool _appForeground = true;
 
   CatPawRuntimePool([http.Client? httpClient])
-    : _httpClient = httpClient ?? http.Client(),
+    : _httpClient = httpClient ?? SourceHttpClient(),
       _ownsClient = httpClient == null;
 
   bool get isDisposed => _isDisposed;
+
+  void setAppForeground(bool foreground) {
+    if (_isDisposed || _appForeground == foreground) return;
+    _appForeground = foreground;
+    if (foreground) {
+      final client = _httpClient;
+      if (client is SourceHttpClient) client.refresh();
+    }
+  }
 
   Future<CatPawJsRuntime> get(
     String sourceId,

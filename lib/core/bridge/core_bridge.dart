@@ -47,6 +47,7 @@ class AppFailure implements Exception {
 }
 
 abstract class AppRepository {
+  void setAppForeground(bool foreground) {}
   Future<Map<String, dynamic>> lan(
     String command,
     Map<String, dynamic> payload,
@@ -76,6 +77,7 @@ abstract class AppRepository {
     required int durationMs,
   }) async => throw AppFailure('当前环境不支持弹幕');
   Future<void> cancelCatalog() async {}
+  Future<void> cancelCategories() async {}
   Future<void> cancelSuggestions() async {}
   Future<void> cancelRecommendations() async {}
   Future<FeedPage> videoFeed({int page = 1, required String session}) async =>
@@ -191,6 +193,9 @@ abstract class AppRepository {
 }
 
 class NativeRepository extends AppRepository {
+  @override
+  void setAppForeground(bool foreground) =>
+      DartCoreEngine.instance.setAppForeground(foreground);
   static final _coverDecoder = CoverDecoder();
   NativeRepository({this.background = false});
   final bool background;
@@ -337,6 +342,8 @@ class NativeRepository extends AppRepository {
 
   @override
   Future<void> cancelCatalog() => _cancelReads('catalog-');
+  @override
+  Future<void> cancelCategories() => _cancelReads('categories-');
   @override
   Future<void> cancelSuggestions() => _cancelReads('suggestions');
   @override

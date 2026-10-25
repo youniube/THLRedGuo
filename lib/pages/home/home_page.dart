@@ -60,7 +60,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final _feed = VideoFeedController(widget.repository, widget.store);
   static const _recommendationCategory = 'app:recommendations';
   final _search = TextEditingController();
@@ -92,6 +92,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String _sourceSignature = '';
   bool _catalogLoadScheduled = false;
   bool _switchingSource = false;
+  Timer? _resumeTimer;
+  bool _appForeground = true;
+  bool _lastLoadMore = false;
+  bool? _resumeCatalogMore;
+  bool _resumeCategories = false;
 
   List<SourceGroup> get _sourceGroups {
     return SourceGroup.fromSources(widget.store.sources);
@@ -134,6 +139,11 @@ class _HomeScreenState extends State<HomeScreen> {
     bool force = false,
     bool cacheOnly = false,
   }) async {
+    if (!_appForeground) {
+      _resumeCategories = true;
+      return;
+    }
+    _resumeCategories = false;
     final generation = ++_categoryGeneration;
     final group = _group;
     setState(() {
@@ -214,6 +224,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 当前已处于目标数据源，若可用源列表签名发生变化或之前未加载数据则刷新并重载
     if (_source.id == targetSourceId) {
+      if (_resumeCatalogMore != null || _resumeCategories) {
+        _resumeAfterBackground();
+      }
       if (signature != _sourceSignature || (_items.isEmpty && !_loadingMore)) {
         _sourceSignature = signature;
         setState(() {
@@ -493,6 +506,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.initialTab != 0) {
       _tab = widget.initialTab;
     }
@@ -529,6 +543,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _resumeTimer?.cancel();
     _feed.dispose();
     _updater.removeListener(_updateChanged);
     _updater.dispose();
@@ -547,9 +563,72 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _onCatalogScroll() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      if (!_appForeground) return;
+      _appForeground = false;
+      _resumeTimer?.cancel();
+      _debounce?.cancel();
+      final loadingCatalog = _loading || _loadingMore;
+      if (_loading || _loadingMore || _error != null) {
+        _resumeCatalogMore = _onlineSearch && _search.text.trim().isNotEmpty
+            ? false
+            : _lastLoadMore;
+      }
+      _resumeCategories =
+          _resumeCategories || _categoriesLoading || _categoriesError != null;
+      _generation++;
+      _categoryGeneration++;
+      unawaited(_browser.cancel(cancelRequests: loadingCatalog));
+      if (_categoriesLoading) {
+        unawaited(widget.repository.cancelCategories());
+      }
+      if (_searchVisible) unawaited(widget.repository.cancelSuggestions());
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+        _categoriesLoading = false;
+      });
+    } else if (state == AppLifecycleState.resumed && !_appForeground) {
+      _appForeground = true;
+      _resumeTimer = Timer(const Duration(milliseconds: 400), () {
+        _resumeAfterBackground();
+      });
+    }
+  }
+
+  void _resumeAfterBackground() {
     if (!mounted ||
+        !_appForeground ||
+        _resumeTimer?.isActive == true ||
+        widget.store.locked ||
+        _isSourceInitializing ||
+        _hasNoSourcePlugins ||
+        _tab != 0 ||
         _showRecommendations ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return;
+    }
+    final more = _resumeCatalogMore;
+    if (_resumeCategories) unawaited(_loadCategories(force: true));
+    if (more != null) {
+      unawaited(_load(more: more && _hasMore));
+    } else {
+      _onCatalogScroll();
+    }
+  }
+
+  void _onCatalogScroll() {
+    if (!mounted || !_appForeground || _resumeTimer?.isActive == true) {
+      return;
+    }
+    if (_resumeCatalogMore != null || _resumeCategories) {
+      _resumeAfterBackground();
+      return;
+    }
+    if (_showRecommendations ||
         !_hasMore ||
         _error != null ||
         _tab != 0 ||
@@ -566,6 +645,8 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _catalogLoadScheduled = false;
       if (!mounted ||
+          !_appForeground ||
+          _resumeTimer?.isActive == true ||
           _showRecommendations ||
           !_hasMore ||
           _error != null ||
@@ -602,7 +683,13 @@ class _HomeScreenState extends State<HomeScreen> {
     bool cacheOnly = false,
   }) async {
     if (_showRecommendations) return;
+    if (!_appForeground) {
+      _resumeCatalogMore = more;
+      return;
+    }
     if (more && (_loading || _loadingMore || !_hasMore)) return;
+    _resumeCatalogMore = null;
+    _lastLoadMore = more;
     final generation = ++_generation;
     final group = _group;
     final query = _onlineSearch ? _search.text.trim() : '';
@@ -630,6 +717,8 @@ class _HomeScreenState extends State<HomeScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || generation != _generation) return;
         if (_visible.isEmpty &&
+            _appForeground &&
+            _resumeTimer?.isActive != true &&
             _hasMore &&
             _error == null &&
             !_loading &&
@@ -772,24 +861,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openDrama(Drama drama, {bool resume = false, bool download = false}) {
     _pauseCatalog();
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailScreen(
-          drama: drama,
-          repository: widget.repository,
-          store: widget.store,
-          resumeOnOpen: resume,
-          downloadOnOpen: download,
-        ),
-      ),
-    );
+    Navigator.of(context)
+        .push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => DetailScreen(
+              drama: drama,
+              repository: widget.repository,
+              store: widget.store,
+              resumeOnOpen: resume,
+              downloadOnOpen: download,
+            ),
+          ),
+        )
+        .then((_) => _resumeAfterBackground());
   }
 
-  void _changeTab(int tab) => setState(() {
-    _tab = tab;
-    _selectionMode = false;
-    _selectedDramas.clear();
-  });
+  void _changeTab(int tab) {
+    setState(() {
+      _tab = tab;
+      _selectionMode = false;
+      _selectedDramas.clear();
+    });
+    _resumeAfterBackground();
+  }
 
   void _onNavSelected(int tab) => _changeTab(tab);
 
@@ -1676,9 +1770,7 @@ class _HomeScreenState extends State<HomeScreen> {
               gridKey: 'catalog-${_group.id}-$_category-$_submittedQuery',
               loadingMessage: _search.text.trim().isNotEmpty
                   ? '正在搜索相关短剧...'
-                  : (_category.isNotEmpty
-                        ? '正在获取分类短剧...'
-                        : '正在加载精选短剧...'),
+                  : (_category.isNotEmpty ? '正在获取分类短剧...' : '正在加载精选短剧...'),
               loadingHint: '数据加载中，请稍候片刻',
               onRetryLoad: () => _load(force: true),
               onLoadMore: () => _load(more: true),

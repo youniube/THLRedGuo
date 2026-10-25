@@ -22,6 +22,8 @@ class DartCoreEngine {
   static final DartCoreEngine instance = DartCoreEngine._();
 
   final CatPawRuntimePool _spiderPool;
+  void setAppForeground(bool foreground) =>
+      _spiderPool.setAppForeground(foreground);
   final _activeReads =
       <String, ({int sequence, String source, String scope})>{};
   final _scopeOwners = <String, String>{};
@@ -863,7 +865,7 @@ class DartCoreEngine {
 
   Future<Map<String, dynamic>> _getCatalog(Map<String, dynamic> input) async {
     final source = input['source'] as String? ?? 'hongguo';
-    final page = (input['page'] as num?)?.toInt() ?? 1;
+    var page = (input['page'] as num?)?.toInt() ?? 1;
     final query = (input['query'] as String? ?? '').trim();
     final category = input['category'] as String? ?? '';
 
@@ -895,13 +897,25 @@ class DartCoreEngine {
           selectedCategory = home.classes.first['type_id']?.toString() ?? '';
         }
       }
-      final res = await rt.category(
+      Future<CatPawCategoryResult> loadPage() => rt.category(
         selectedCategory,
         page,
         extend: source == 'hongguo' && page == 1
             ? const {'initialBatch': 12}
             : null,
       );
+      CatPawCategoryResult res;
+      try {
+        res = await loadPage();
+      } on CatPawSourceFailure catch (error) {
+        if (source != 'hongguo' ||
+            page <= 1 ||
+            !{'CURSOR_EXPIRED', 'MISSING_CURSOR'}.contains(error.code)) {
+          rethrow;
+        }
+        page = 1;
+        res = await loadPage();
+      }
       dramas = res.list
           .map((vod) => _mapVodToDrama(source, vod, category))
           .toList();

@@ -102,6 +102,12 @@ class _AppBootstrapState extends State<AppBootstrap>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      repository.setAppForeground(false);
+    } else if (state == AppLifecycleState.resumed) {
+      repository.setAppForeground(true);
+    }
     privacyController?.handleLifecycleChange(state);
     if (state == AppLifecycleState.resumed) {
       if (store?.keepScreenOn == true) {

@@ -43,12 +43,12 @@ class CatalogBrowser {
   final _sessions = <String, _CatalogSession>{};
   int _generation = 0;
 
-  Future<void> cancel() {
+  Future<void> cancel({bool cancelRequests = true}) {
     _generation++;
     for (final session in _sessions.values) {
       session.generation++;
     }
-    return repository.cancelCatalog();
+    return cancelRequests ? repository.cancelCatalog() : Future.value();
   }
 
   void _remember(String source, Iterable<Drama> items) {
