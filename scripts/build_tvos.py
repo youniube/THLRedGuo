@@ -112,7 +112,7 @@ def main():
         ipa_target = output_dir / f"THLRedLook-{version}-tvos-unsigned.ipa"
         if ipa_target.exists():
             ipa_target.unlink()
-        run(["ditto", "-c", "-k", "--sequesterRsrc", str(payload_dir), str(ipa_target)])
+        run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(payload_dir), str(ipa_target)])
         shutil.rmtree(payload_dir)
         print(f"已生成 tvOS 未签名 IPA: {ipa_target}")
 
