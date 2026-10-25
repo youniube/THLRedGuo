@@ -229,6 +229,7 @@ jobs:
             python scripts/build_ios.py
           fi
       - name: 上传 iOS 至 App Store Connect (TestFlight)
+        if: ${{ false }}
         env:
           HAS_SIGNING: ${{ steps.signing.outputs.has_signing }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID || vars.APP_STORE_CONNECT_KEY_ID }}
@@ -362,7 +363,7 @@ jobs:
   release:
     name: Flutter 跨平台产物汇总与 Release 发布
     needs: [android, windows, ios, macos]
-    if: always() && github.event_name != 'pull_request' && (needs.android.result == 'success' || needs.windows.result == 'success' || needs.macos.result == 'success' || needs.ios.result == 'success')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
