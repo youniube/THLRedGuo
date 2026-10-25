@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/core/js/js_source_models.dart';
 import 'package:THLRedLook/core/player/js_playback.dart';
+import 'package:THLRedLook/core/diagnostics/source_health_check.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/utils/media/cover_decoder.dart';
 
@@ -35,6 +36,10 @@ class DartCoreEngine {
   final http.Client client = http.Client();
   final Map<String, JsSourceMeta> _installedSources = {};
   final Map<String, String> _sourceScripts = {};
+  late final _sourceHealth = SourceHealthChecks(
+    scriptFor: (source) => _sourceScripts[source],
+    client: client,
+  );
   final Map<String, Iterator<Map<String, dynamic>>> _playbackSessions = {};
   int _playbackEpoch = 0;
   String _activeSourceId = 'hongguo';
@@ -196,6 +201,7 @@ class DartCoreEngine {
         final fileName = input['fileName'] as String? ?? 'custom.js';
         final meta = _parseScriptMeta(script, fileName);
         if (meta != null) {
+          _sourceHealth.remove(meta.id);
           _spiderPool.remove(meta.id);
           _installedSources[meta.id] = meta;
           _sourceScripts[meta.id] = script;
@@ -210,6 +216,7 @@ class DartCoreEngine {
         if (meta != null) {
           final isSameScript = _sourceScripts[meta.id] == script;
           if (!isSameScript) {
+            _sourceHealth.remove(meta.id);
             _spiderPool.remove(meta.id);
             await _ensureDirectories();
             final targetFile = File(p.join(_sourcesDir, fileName));
@@ -223,6 +230,7 @@ class DartCoreEngine {
         throw Exception('插件保存与校验失败');
       case 'jsSource.remove':
         final source = input['source'] as String? ?? '';
+        _sourceHealth.remove(source);
         _spiderPool.remove(source);
         _installedSources.remove(source);
         _sourceScripts.remove(source);
@@ -255,6 +263,7 @@ class DartCoreEngine {
         } catch (_) {}
         return {'ok': true};
       case 'jsSource.clearAll':
+        _sourceHealth.clear();
         _spiderPool.clear();
         _installedSources.clear();
         _sourceScripts.clear();
@@ -279,22 +288,27 @@ class DartCoreEngine {
       // 站源状态与任务
       case 'sourceStatus':
         final source = input['source'] as String? ?? '';
-        return {
-          'source': source,
-          'ready': true,
-          'stage': '就绪',
-          'running': false,
-          'finishedAt': DateTime.now().toIso8601String(),
-        };
+        return _sourceHealth.status(source);
       case 'sourceJob':
-      case 'cancelSourceJob':
         final source = input['source'] as String? ?? '';
+        final command = input['command'] as String? ?? '';
+        if (command == 'check' || command == 'checkCatalog') {
+          return _sourceHealth.start(
+            source,
+            catalogOnly: command == 'checkCatalog',
+            drama: input['drama'] is Map
+                ? Map<String, dynamic>.from(input['drama'] as Map)
+                : null,
+          );
+        }
         return {
           'source': source,
           'ready': true,
           'stage': '已完成',
           'running': false,
         };
+      case 'cancelSourceJob':
+        return _sourceHealth.cancel(input['source'] as String? ?? '');
 
       // 分类与目录浏览
       case 'categories':
@@ -628,7 +642,7 @@ class DartCoreEngine {
   ) {
     final rawId =
         vod['vod_id']?.toString() ?? '${DateTime.now().millisecondsSinceEpoch}';
-    final fullId = rawId.contains(':') ? rawId : '$source:$rawId';
+    final fullId = rawId.startsWith('$source:') ? rawId : '$source:$rawId';
     final remarks = vod['vod_remarks']?.toString() ?? '';
     final epMatch = RegExp(r'(\d+)').firstMatch(remarks);
     final episodes = epMatch != null
@@ -669,7 +683,7 @@ class DartCoreEngine {
     return {
       'id': fullId,
       'source': source,
-      'sourceId': rawId.contains(':') ? rawId.split(':').last : rawId,
+      'sourceId': sourceVodIdentifier(source, rawId),
       'title': title,
       'cover': normalizeCoverUrl(vod['vod_pic']?.toString() ?? ''),
       'description': desc,
@@ -712,8 +726,15 @@ class DartCoreEngine {
     bool hasMore = false;
     final rt = await _getSpiderRuntime(source);
     if (rt != null) {
+      var selectedCategory = category;
+      if (selectedCategory.isEmpty) {
+        final home = await rt.home(filter: source == 'hongguo');
+        if (home.classes.isNotEmpty) {
+          selectedCategory = home.classes.first['type_id']?.toString() ?? '';
+        }
+      }
       final res = await rt.category(
-        category,
+        selectedCategory,
         page,
         extend: source == 'hongguo' && page == 1
             ? const {'initialBatch': 12}
@@ -853,13 +874,7 @@ class DartCoreEngine {
     if (rawSourceId.trim().isEmpty) {
       rawSourceId = dramaId;
     }
-    if (rawSourceId.contains(':')) {
-      rawSourceId = rawSourceId.split(':').last;
-    } else if (rawSourceId.contains('_') &&
-        !RegExp(r'^\d+$').hasMatch(rawSourceId)) {
-      rawSourceId = rawSourceId.split('_').last;
-    }
-    final sourceId = rawSourceId.trim();
+    final sourceId = sourceVodIdentifier(source, rawSourceId.trim());
 
     Map<String, dynamic>? spiderVod;
     final rt = await _getSpiderRuntime(
@@ -868,19 +883,21 @@ class DartCoreEngine {
       detailId: sourceId,
     );
     if (rt != null && sourceId.isNotEmpty) {
-      try {
-        final detailRes = await rt.detail(sourceId);
-        spiderVod = detailRes.vod;
-      } catch (_) {}
+      final detailRes = await rt.detail(sourceId);
+      spiderVod = detailRes.vod;
+    } else {
+      throw StateError('详情数据源不可用');
     }
 
     final fullDrama = Map<String, dynamic>.from(drama);
     fullDrama['source'] = source;
     fullDrama['sourceId'] = sourceId;
-    fullDrama['id'] = dramaId.contains(':') ? dramaId : '$source:$sourceId';
+    fullDrama['id'] = dramaId.startsWith('$source:')
+        ? dramaId
+        : '$source:$sourceId';
 
     final chapters = <Map<String, dynamic>>[];
-    if (spiderVod != null && spiderVod.isNotEmpty) {
+    if (spiderVod.isNotEmpty) {
       if ((spiderVod['vod_name']?.toString() ?? '').isNotEmpty) {
         fullDrama['title'] = spiderVod['vod_name'].toString();
       }
@@ -900,25 +917,16 @@ class DartCoreEngine {
     }
 
     if (chapters.isEmpty) {
-      final knownEpisodes = (drama['episodes'] as num?)?.toInt() ?? 0;
-      final fallbackCount = knownEpisodes > 0 ? knownEpisodes : 0;
-      if (fallbackCount > 0) {
-        final episodePrefix = sourceId.isNotEmpty ? '${sourceId}_' : '';
-        for (var i = 1; i <= fallbackCount; i++) {
-          chapters.add({
-            'id': '$episodePrefix$i',
-            'title': '第 $i 集',
-            'index': i,
-            'raw': '$episodePrefix$i',
-          });
-        }
-      }
+      throw const CatPawSourceFailure(
+        '站源未返回有效选集，请重试或检测站源',
+        code: 'MISSING_EPISODE',
+      );
     }
 
     final accessibleCount =
-        (spiderVod?['accessible_count'] as num?)?.toInt() ??
-        (spiderVod?['accessible_episode_cnt'] as num?)?.toInt() ??
-        (spiderVod?['accessibleCount'] as num?)?.toInt() ??
+        (spiderVod['accessible_count'] as num?)?.toInt() ??
+        (spiderVod['accessible_episode_cnt'] as num?)?.toInt() ??
+        (spiderVod['accessibleCount'] as num?)?.toInt() ??
         0;
 
     // 红果官方短剧全集均可直接解析直连播放，不设试看门槛与虚假 VIP 标签；
@@ -961,10 +969,7 @@ class DartCoreEngine {
     if (rawSourceId.trim().isEmpty) {
       rawSourceId = dramaId;
     }
-    if (rawSourceId.contains(':')) {
-      rawSourceId = rawSourceId.split(':').last;
-    }
-    final sourceId = rawSourceId.trim();
+    final sourceId = sourceVodIdentifier(source, rawSourceId.trim());
     final episodeIndex = (input['index'] as num?)?.toInt() ?? 1;
     final chapter = input['chapter'];
     final requestedQuality = (input['quality'] as num?)?.toInt() ?? 0;
@@ -1054,7 +1059,8 @@ class DartCoreEngine {
           }
           sourceFailure = error;
           retryFromDetail =
-              error is CatPawSourceFailure && error.code == 'MISSING_EPISODE';
+              error is CatPawSourceFailure &&
+              {'MISSING_EPISODE', 'INVALID_SELECTION'}.contains(error.code);
         }
         if (retryFromDetail &&
             !detailRefreshed &&

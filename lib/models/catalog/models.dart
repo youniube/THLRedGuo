@@ -167,6 +167,17 @@ String dramaCategoryLabel(String value) {
 int intValue(Object? value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
 
+String sourceVodIdentifier(String source, String value) {
+  for (final prefix in ['$source:', '${source}_']) {
+    if (source.isNotEmpty &&
+        value.startsWith(prefix) &&
+        !value.startsWith('$source://')) {
+      return value.substring(prefix.length);
+    }
+  }
+  return value;
+}
+
 class Drama {
   const Drama({
     required this.id,
@@ -194,10 +205,9 @@ class Drama {
   final String category;
   String get displayCategory => dramaCategoryLabel(category);
   final bool? vipStatus;
-  bool get vip =>
-      (source == 'hongguo' || id.startsWith('hongguo:'))
-          ? false
-          : vipStatus == true;
+  bool get vip => (source == 'hongguo' || id.startsWith('hongguo:'))
+      ? false
+      : vipStatus == true;
   final String heat;
   final String views;
   final String onlineDate;
@@ -209,16 +219,8 @@ class Drama {
     'upcoming' => '待上线',
     _ => '状态未知',
   };
-  String get cleanSourceId {
-    final raw = sourceId.isNotEmpty ? sourceId : id;
-    if (raw.contains(':')) {
-      return raw.split(':').last;
-    }
-    if (source.isNotEmpty && raw.startsWith('${source}_')) {
-      return raw.substring(source.length + 1);
-    }
-    return raw;
-  }
+  String get cleanSourceId =>
+      sourceVodIdentifier(source, sourceId.isNotEmpty ? sourceId : id);
 
   factory Drama.fromJson(Map<String, dynamic> json) {
     final category = json['category'] as String? ?? '';
@@ -226,7 +228,7 @@ class Drama {
     var source = json['source'] as String? ?? '';
     final hasSourceId = json.containsKey('sourceId');
     var sourceId = json['sourceId'] as String? ?? '';
-    if (source.isEmpty && id.contains(':')) {
+    if (source.isEmpty && id.contains(':') && !id.contains('://')) {
       final colonIndex = id.indexOf(':');
       source = id.substring(0, colonIndex);
       if (!hasSourceId) sourceId = id.substring(colonIndex + 1);
@@ -234,22 +236,12 @@ class Drama {
     if (source.isEmpty) {
       source = JsSourceService.current?.activeSourceId ?? 'hongguo';
     }
-    if (!hasSourceId || sourceId.isEmpty || sourceId.contains(':')) {
-      if (sourceId.contains(':')) {
-        sourceId = sourceId.split(':').last;
-      } else if (id.contains(':')) {
-        sourceId = id.split(':').last;
-      } else if (sourceId.isEmpty) {
-        sourceId = id;
-      }
-    }
-    if (source.isNotEmpty && sourceId.startsWith('${source}_')) {
-      sourceId = sourceId.substring(source.length + 1);
-    }
-    if (!id.contains(':') && source.isNotEmpty && id.isNotEmpty) {
+    sourceId = sourceVodIdentifier(source, sourceId.isEmpty ? id : sourceId);
+    if (!id.startsWith('$source:') && source.isNotEmpty && id.isNotEmpty) {
       id = '$source:$id';
     }
-    final isHongguo = source.isEmpty || source == 'hongguo' || id.startsWith('hongguo:');
+    final isHongguo =
+        source.isEmpty || source == 'hongguo' || id.startsWith('hongguo:');
     final tags = (json['tags'] as List? ?? const [])
         .whereType<String>()
         .map((t) => t.trim())
@@ -264,7 +256,11 @@ class Drama {
       cover: normalizeCoverUrl(json['cover'] as String? ?? ''),
       episodes: intValue(json['episodes']),
       category: category.isEmpty ? '' : dramaCategoryLabel(category),
-      vip: isHongguo ? false : (json['vip'] == true ? true : (json['vip'] == false ? false : null)),
+      vip: isHongguo
+          ? false
+          : (json['vip'] == true
+                ? true
+                : (json['vip'] == false ? false : null)),
       heat: json['heat']?.toString() ?? '',
       views: json['views']?.toString() ?? '',
       onlineDate: json['onlineDate'] as String? ?? '',
@@ -348,7 +344,8 @@ class Episode {
       number = intValue(raw['currentEpisode']) > 0
           ? intValue(raw['currentEpisode'])
           : fallback,
-      vip = (raw['source'] == 'hongguo' ||
+      vip =
+          (raw['source'] == 'hongguo' ||
               (raw['id'] as String? ?? '').startsWith('hongguo:') ||
               (raw['url'] as String? ?? '').contains('hongguoduanju.com'))
           ? false
@@ -514,7 +511,8 @@ class WatchEntry {
     position: (json['position'] as num?)?.toDouble() ?? 0,
     duration: (json['duration'] as num?)?.toDouble() ?? 0,
     updatedAt:
-        DateTime.tryParse(json['updatedAt'].toString())?.toLocal() ?? DateTime(2000),
+        DateTime.tryParse(json['updatedAt'].toString())?.toLocal() ??
+        DateTime(2000),
   );
 }
 

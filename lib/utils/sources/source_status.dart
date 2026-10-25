@@ -37,6 +37,7 @@ class SourceHealth {
     'catalogOnly' => '目录正常 · 播放未检测',
     'checking' => '检测中',
     'failed' => '检测未通过',
+    'cancelled' => '检测已停止',
     _ => '尚未检测',
   };
 }
