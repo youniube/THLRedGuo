@@ -8,6 +8,8 @@ class JsSourceMeta {
   final String icon;
   final bool requiresAuth;
   final List<String> features;
+  final String fileName;
+  final String sourceUrl;
 
   const JsSourceMeta({
     required this.id,
@@ -19,6 +21,8 @@ class JsSourceMeta {
     this.icon = '',
     this.requiresAuth = false,
     this.features = const [],
+    this.fileName = '',
+    this.sourceUrl = '',
   });
 
   factory JsSourceMeta.fromJson(Map<String, dynamic> json) {
@@ -31,7 +35,10 @@ class JsSourceMeta {
       type: json['type'] as String? ?? 'video',
       icon: json['icon'] as String? ?? '',
       requiresAuth: json['requiresAuth'] as bool? ?? false,
-      features: (json['features'] as List<dynamic>?)
+      fileName: json['fileName'] as String? ?? '',
+      sourceUrl: json['sourceUrl'] as String? ?? '',
+      features:
+          (json['features'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],
@@ -39,16 +46,35 @@ class JsSourceMeta {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'version': version,
-        'description': description,
-        'author': author,
-        'type': type,
-        'icon': icon,
-        'requiresAuth': requiresAuth,
-        'features': features,
-      };
+    'id': id,
+    'name': name,
+    'version': version,
+    'description': description,
+    'author': author,
+    'type': type,
+    'icon': icon,
+    'requiresAuth': requiresAuth,
+    'features': features,
+    'fileName': fileName,
+    'sourceUrl': sourceUrl,
+  };
+
+  JsSourceMeta withImport({
+    required String fileName,
+    required String sourceUrl,
+  }) => JsSourceMeta(
+    id: id,
+    name: name,
+    version: version,
+    description: description,
+    author: author,
+    type: type,
+    icon: icon,
+    requiresAuth: requiresAuth,
+    features: features,
+    fileName: fileName,
+    sourceUrl: sourceUrl,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -59,4 +85,17 @@ class JsSourceMeta {
 
   @override
   int get hashCode => id.hashCode;
+}
+
+class JsSourceUpdateResult {
+  const JsSourceUpdateResult({
+    required this.sourceId,
+    required this.name,
+    required this.success,
+    this.changed = false,
+    this.error = '',
+  });
+
+  final String sourceId, name, error;
+  final bool success, changed;
 }

@@ -29,6 +29,7 @@ class JsSourcesPage extends StatefulWidget {
 class _JsSourcesPageState extends State<JsSourcesPage> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _scriptController = TextEditingController();
+  final TextEditingController _urlController = TextEditingController();
 
   late final JsSourceService _service =
       widget.service ??
@@ -36,9 +37,21 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
       JsSourceService(widget.repository);
 
   @override
+  void initState() {
+    super.initState();
+    _service.addListener(_refreshService);
+  }
+
+  void _refreshService() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _service.removeListener(_refreshService);
     _nameController.dispose();
     _scriptController.dispose();
+    _urlController.dispose();
     super.dispose();
   }
 
@@ -75,6 +88,71 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
       const SnackBar(
         content: Text('已重新加载并扫描本地 JS 数据源'),
         behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showUpdateResult(JsSourceUpdateResult result) {
+    if (!mounted) return;
+    final message = !result.success
+        ? '${result.name} 更新失败：${result.error}'
+        : result.changed
+        ? '${result.name} 已更新'
+        : '${result.name} 已是最新，更新链接已保存';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  Future<void> _updateSource(JsSourceMeta source) async {
+    _showUpdateResult(await _service.updateSource(source.id));
+  }
+
+  Future<void> _updateAll() async {
+    if (!_service.hasSubscriptions) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('尚未保存更新链接，请先在插件下方设置更新链接')));
+      return;
+    }
+    final results = await _service.updateAll();
+    if (!mounted) return;
+    final updated = results
+        .where((item) => item.success && item.changed)
+        .length;
+    final unchanged = results
+        .where((item) => item.success && !item.changed)
+        .length;
+    final failed = results.where((item) => !item.success).toList();
+    final summary = '更新 $updated 个，已是最新 $unchanged 个，失败 ${failed.length} 个';
+    if (failed.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('订阅更新完成：$summary')));
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('订阅更新结果'),
+        scrollable: true,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(summary),
+            for (final failure in failed)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text('${failure.name}：${failure.error}'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('确定'),
+          ),
+        ],
       ),
     );
   }
@@ -227,22 +305,26 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
     }
   }
 
-  Future<void> _showUrlImportDialog() async {
-    final controller = TextEditingController();
+  Future<void> _showUrlImportDialog({JsSourceMeta? target}) async {
+    final controller = _urlController..text = target?.sourceUrl ?? '';
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: const Text('网络订阅 / URL 导入插件'),
+          title: Text(
+            target == null ? '网络订阅 / URL 导入插件' : '${target.name}的更新链接',
+          ),
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '请输入远程 JavaScript 插件的直接下载地址 (如 GitHub Raw、Gist 或自建 CDN 链接)：',
-                  style: TextStyle(fontSize: 12, color: AppColors.grey),
+                Text(
+                  target == null
+                      ? '请输入 JS 插件直链（如 GitHub Raw、Gist Raw）。导入后会保存地址，供后续更新。'
+                      : '填写此插件的 JS 直链，保存时会拉取更新并核对源 ID。旧版导入的插件需先补填一次链接。',
+                  style: const TextStyle(fontSize: 12, color: AppColors.grey),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -273,7 +355,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                   Navigator.pop(ctx, url);
                 }
               },
-              child: const Text('拉取并导入'),
+              child: Text(target == null ? '拉取并导入' : '保存并更新'),
             ),
           ],
         );
@@ -281,6 +363,10 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
     );
 
     if (result != null && result.isNotEmpty && mounted) {
+      if (target != null) {
+        _showUpdateResult(await _service.updateSource(target.id, url: result));
+        return;
+      }
       final ok = await _service.importFromUrl(result);
       if (!mounted) return;
       if (ok) {
@@ -292,8 +378,12 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('网络拉取或导入失败，请检查 URL 可达性及脚本内容规范'),
+          SnackBar(
+            content: Text(
+              _service.lastError.isNotEmpty
+                  ? _service.lastError
+                  : '网络拉取或导入失败，请检查 URL 可达性及脚本内容规范',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -441,13 +531,21 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
         title: const Text('JS 数据源插件管理'),
         actions: [
           IconButton(
-            tooltip: '重载插件',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _handleReload,
+            key: const ValueKey('update-all-js-sources'),
+            tooltip: '更新全部 URL 订阅',
+            icon: _service.updatingAll
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh_rounded),
+            onPressed: _service.loading ? null : _updateAll,
           ),
           PopupMenuButton<String>(
             key: const ValueKey('js-sources-more-actions'),
             tooltip: '更多操作',
+            enabled: !_service.loading,
             icon: const Icon(Icons.more_vert_rounded),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -476,9 +574,36 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                 case 'clear_all':
                   _confirmClearAllSources();
                   break;
+                case 'update_all':
+                  _updateAll();
+                  break;
+                case 'reload':
+                  _handleReload();
+                  break;
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                value: 'update_all',
+                child: Row(
+                  children: [
+                    Icon(Icons.system_update_alt_rounded, size: 20),
+                    SizedBox(width: 12),
+                    Text('更新全部 URL 订阅'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'reload',
+                child: Row(
+                  children: [
+                    Icon(Icons.folder_open_rounded, size: 20),
+                    SizedBox(width: 12),
+                    Text('重新扫描本地插件'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem<String>(
                 value: 'select_presets',
                 child: Row(
@@ -559,15 +684,24 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
           ),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: _service,
-        builder: (context, _) {
+      body: Builder(
+        builder: (context) {
           final sources = _service.sources;
           final activeId = _service.activeSourceId;
 
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (_service.loading) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 8),
+                Text(
+                  _service.updatingSourceId.isNotEmpty
+                      ? '正在更新：${sources.where((source) => source.id == _service.updatingSourceId).firstOrNull?.name ?? "插件"}'
+                      : '正在处理插件…',
+                ),
+                const SizedBox(height: 12),
+              ],
               // 架构说明卡片
               Container(
                 decoration: BoxDecoration(
@@ -768,7 +902,9 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                     ),
                     child: InkWell(
                       borderRadius: BorderRadius.circular(18),
-                      onTap: () => _handleSwitchSource(meta),
+                      onTap: _service.loading
+                          ? null
+                          : () => _handleSwitchSource(meta),
                       child: Padding(
                         padding: const EdgeInsets.all(16),
                         child: Column(
@@ -848,12 +984,25 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                                         ],
                                       ),
                                       const SizedBox(height: 3),
-                                      Text(
-                                        '文件: ${meta.id}.js · 作者: ${meta.author.isNotEmpty ? meta.author : "内置"}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.grey,
-                                        ),
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 2,
+                                        children: [
+                                          Text(
+                                            '文件: ${meta.fileName.isNotEmpty ? meta.fileName : "${meta.id}.js"}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.grey,
+                                            ),
+                                          ),
+                                          Text(
+                                            '作者: ${meta.author.isNotEmpty ? meta.author : "内置"}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.grey,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
@@ -885,8 +1034,9 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                                       )
                                     else
                                       TextButton(
-                                        onPressed: () =>
-                                            _handleSwitchSource(meta),
+                                        onPressed: _service.loading
+                                            ? null
+                                            : () => _handleSwitchSource(meta),
                                         child: const Text(
                                           '激活',
                                           style: TextStyle(
@@ -903,8 +1053,9 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                                         size: 20,
                                         color: AppColors.grey,
                                       ),
-                                      onPressed: () =>
-                                          _confirmDeleteSource(meta),
+                                      onPressed: _service.loading
+                                          ? null
+                                          : () => _confirmDeleteSource(meta),
                                     ),
                                   ],
                                 ),
@@ -947,6 +1098,49 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                                 }).toList(),
                               ),
                             ],
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                if (meta.sourceUrl.isNotEmpty)
+                                  OutlinedButton.icon(
+                                    key: ValueKey('update-source-${meta.id}'),
+                                    onPressed: _service.loading
+                                        ? null
+                                        : () => _updateSource(meta),
+                                    icon: _service.updatingSourceId == meta.id
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.refresh_rounded,
+                                            size: 18,
+                                          ),
+                                    label: const Text('更新'),
+                                  ),
+                                TextButton.icon(
+                                  key: ValueKey('source-url-${meta.id}'),
+                                  onPressed: _service.loading
+                                      ? null
+                                      : () =>
+                                            _showUrlImportDialog(target: meta),
+                                  icon: const Icon(
+                                    Icons.link_rounded,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    meta.sourceUrl.isEmpty
+                                        ? '设置更新链接'
+                                        : '修改更新链接',
+                                  ),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                       ),

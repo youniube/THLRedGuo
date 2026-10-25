@@ -106,6 +106,10 @@ abstract class AppRepository {
   Future<bool> jsSourceRemove(String sourceId) async => false;
   Future<bool> jsSourceClearAll() async => false;
   Future<int> jsSourceScan() async => 0;
+  Future<Map<String, dynamic>> jsSourceImportFromUrl(
+    String url, {
+    String sourceId = '',
+  }) async => throw AppFailure('当前环境不支持 URL 插件更新');
   bool get supportsSourceManagement => false;
   Future<void> activateAllSources() async {}
   Future<SourceStatus> sourceStatus(String source) async =>
@@ -802,6 +806,19 @@ class NativeRepository extends AppRepository {
     });
     return result['ok'] as bool? ?? false;
   }
+
+  @override
+  Future<Map<String, dynamic>> jsSourceImportFromUrl(
+    String url, {
+    String sourceId = '',
+  }) async => Map<String, dynamic>.from(
+    await _call({
+          'action': 'jsSource.importUrl',
+          'url': url,
+          if (sourceId.isNotEmpty) 'source': sourceId,
+        })
+        as Map,
+  );
 
   @override
   Future<bool> jsSourceRemove(String sourceId) async {

@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -36,6 +38,9 @@ class DartCoreEngine {
   final http.Client client = http.Client();
   final Map<String, JsSourceMeta> _installedSources = {};
   final Map<String, String> _sourceScripts = {};
+  final Map<String, String> _sourceUrls = {};
+  String _sourceUrlsPath = '';
+  Future<void> _sourceWrites = Future.value();
   late final _sourceHealth = SourceHealthChecks(
     scriptFor: (source) => _sourceScripts[source],
     client: client,
@@ -212,24 +217,15 @@ class DartCoreEngine {
       case 'jsSource.saveAndLoad':
         final script = input['script'] as String? ?? '';
         final fileName = input['fileName'] as String? ?? 'custom.js';
-        final meta = _parseScriptMeta(script, fileName);
-        if (meta != null) {
-          final isSameScript = _sourceScripts[meta.id] == script;
-          if (!isSameScript) {
-            _sourceHealth.remove(meta.id);
-            _spiderPool.remove(meta.id);
-            await _ensureDirectories();
-            final targetFile = File(p.join(_sourcesDir, fileName));
-            await targetFile.writeAsString(script);
-            _installedSources[meta.id] = meta;
-            _sourceScripts[meta.id] = script;
-          }
-          if (_activeSourceId.isEmpty) _activeSourceId = meta.id;
-          return {'ok': true, 'meta': meta.toJson()};
-        }
-        throw Exception('插件保存与校验失败');
+        return _saveSource(script, fileName);
+      case 'jsSource.importUrl':
+        return _importSourceUrl(input);
       case 'jsSource.remove':
         final source = input['source'] as String? ?? '';
+        await _loadSourceUrls();
+        if (_sourceUrls.containsKey(source)) {
+          await _writeSourceUrls({..._sourceUrls}..remove(source));
+        }
         _sourceHealth.remove(source);
         _spiderPool.remove(source);
         _installedSources.remove(source);
@@ -263,6 +259,8 @@ class DartCoreEngine {
         } catch (_) {}
         return {'ok': true};
       case 'jsSource.clearAll':
+        await _loadSourceUrls();
+        await _writeSourceUrls({});
         _sourceHealth.clear();
         _spiderPool.clear();
         _installedSources.clear();
@@ -502,6 +500,7 @@ class DartCoreEngine {
 
   Future<void> _scanSources() async {
     await _ensureDirectories();
+    await _loadSourceUrls();
 
     // 默认纯净启动：不自动预载任何数据源，完全由用户按需分别导入或一键导入
     // 扫描 sources 目录下的已导入 js 插件文件
@@ -544,6 +543,7 @@ class DartCoreEngine {
 
       final id = idMatch.group(1)!.trim();
       final name = nameMatch.group(1)!.trim();
+      if (id.isEmpty || name.isEmpty) return null;
 
       final versionMatch = RegExp(
         r'version:\s*["\x27]([^"\x27]+)["\x27]',
@@ -572,9 +572,171 @@ class DartCoreEngine {
         version: versionMatch?.group(1)?.trim() ?? '1.0.0',
         description: descMatch?.group(1)?.trim() ?? '',
         features: features,
+        fileName: p.basename(fileName),
+        sourceUrl: _sourceUrls[id] ?? '',
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<void> _loadSourceUrls() async {
+    await _ensureDirectories();
+    final path = p.join(_storageDir, 'js_source_urls.json');
+    if (_sourceUrlsPath == path) return;
+    final file = File(path);
+    final values = await file.exists()
+        ? jsonDecode(await file.readAsString()) as Map
+        : <String, String>{};
+    _sourceUrls
+      ..clear()
+      ..addAll({
+        for (final entry in values.entries)
+          if (entry.key is String && entry.value is String)
+            entry.key as String: entry.value as String,
+      });
+    _sourceUrlsPath = path;
+  }
+
+  Future<void> _writeAtomic(File target, String content) async {
+    final pending = File(
+      '${target.path}.pending-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      await pending.writeAsString(content, flush: true);
+      await pending.rename(target.path);
+    } finally {
+      if (await pending.exists()) await pending.delete();
+    }
+  }
+
+  Future<void> _writeSourceUrls(Map<String, String> values) async {
+    await _writeAtomic(File(_sourceUrlsPath), jsonEncode(values));
+    _sourceUrls
+      ..clear()
+      ..addAll(values);
+  }
+
+  Future<Map<String, dynamic>> _saveSource(
+    String script,
+    String fileName, {
+    String? sourceUrl,
+    JsSourceMeta? expected,
+  }) {
+    final result = _sourceWrites.then((_) async {
+      await _loadSourceUrls();
+      final parsed = _parseScriptMeta(script, fileName);
+      if (parsed == null) throw const FormatException('无法识别插件元数据');
+      if (expected != null &&
+          (parsed.id != expected.id ||
+              !identical(_installedSources[expected.id], expected))) {
+        throw StateError('插件 ID 不匹配或站源已更改，原插件已保留');
+      }
+      final installed = _installedSources[parsed.id];
+      var targetName = installed?.fileName.isNotEmpty == true
+          ? installed!.fileName
+          : p.basename(fileName);
+      if (targetName.isEmpty || targetName == '.' || targetName == '..') {
+        targetName = 'plugin-${Uri.encodeComponent(parsed.id)}.js';
+      }
+      if (!targetName.toLowerCase().endsWith('.js')) targetName += '.js';
+      if (_installedSources.values.any(
+        (source) => source.id != parsed.id && source.fileName == targetName,
+      )) {
+        targetName = 'plugin-${Uri.encodeComponent(parsed.id)}.js';
+      }
+      final meta = parsed.withImport(
+        fileName: targetName,
+        sourceUrl: sourceUrl ?? _sourceUrls[parsed.id] ?? '',
+      );
+      final changed = _sourceScripts[meta.id] != script;
+      final file = File(p.join(_sourcesDir, targetName));
+      final previousUrls = {..._sourceUrls};
+      final urlsChanged =
+          sourceUrl != null && _sourceUrls[meta.id] != sourceUrl;
+      if (urlsChanged) {
+        await _writeSourceUrls({..._sourceUrls, meta.id: sourceUrl});
+      }
+      try {
+        if (changed || !await file.exists()) await _writeAtomic(file, script);
+      } catch (_) {
+        if (urlsChanged) await _writeSourceUrls(previousUrls);
+        rethrow;
+      }
+      if (changed) {
+        _sourceHealth.remove(meta.id);
+        _spiderPool.remove(meta.id);
+      }
+      _installedSources[meta.id] = meta;
+      _sourceScripts[meta.id] = script;
+      if (_activeSourceId.isEmpty) _activeSourceId = meta.id;
+      return {'ok': true, 'changed': changed, 'meta': meta.toJson()};
+    });
+    _sourceWrites = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<Map<String, dynamic>> _importSourceUrl(
+    Map<String, dynamic> input,
+  ) async {
+    final url = input['url']?.toString().trim() ?? '';
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        !{'http', 'https'}.contains(uri.scheme) ||
+        uri.host.isEmpty) {
+      throw const FormatException('请输入有效的 HTTP(S) 插件直链');
+    }
+    final id = input['source']?.toString() ?? '';
+    final expected = id.isEmpty ? null : _installedSources[id];
+    if (id.isNotEmpty && expected == null) throw StateError('插件已删除，请重新导入');
+    final abort = Completer<void>();
+    final timer = Timer(const Duration(seconds: 30), () {
+      if (!abort.isCompleted) abort.complete();
+    });
+    try {
+      final request =
+          http.AbortableRequest('GET', uri, abortTrigger: abort.future)
+            ..headers.addAll({
+              'User-Agent': 'Mozilla/5.0 THLRedLook/1.0.0',
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache',
+            });
+      final response = await client.send(request);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        await response.stream.listen((_) {}).cancel();
+        throw StateError('插件下载失败，HTTP ${response.statusCode}');
+      }
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in response.stream) {
+        if (bytes.length + chunk.length > 2 * 1024 * 1024) {
+          throw const FormatException('插件文件超过 2 MiB 限制');
+        }
+        bytes.add(chunk);
+      }
+      final script = utf8.decode(bytes.takeBytes()).replaceFirst('\uFEFF', '');
+      final fileName = uri.pathSegments.isEmpty
+          ? 'remote_source.js'
+          : p.basename(uri.pathSegments.last);
+      final meta = _parseScriptMeta(script, fileName);
+      if (meta == null) throw const FormatException('链接未返回有效的 JS 插件');
+      if (expected != null && meta.id != expected.id) {
+        throw StateError('插件 ID 不匹配，原插件已保留');
+      }
+      await CatPawJsRuntime.validateSource(script);
+      return await _saveSource(
+        script,
+        fileName,
+        sourceUrl: url,
+        expected: expected,
+      );
+    } on http.RequestAbortedException {
+      throw TimeoutException('插件下载超时，原插件已保留');
+    } finally {
+      timer.cancel();
+      if (!abort.isCompleted) abort.complete();
     }
   }
 

@@ -182,6 +182,26 @@ class CatPawJsRuntime {
   bool get isDisposed => _isDisposed;
   bool get hasPendingWork => _activeRequests > 0 || _activeEvals > 0;
 
+  static Future<void> validateSource(String script) async {
+    final runtime = CatPawJsRuntime();
+    try {
+      await runtime.init(script);
+      final result = runtime._rt.evaluate(r'''
+typeof spider === 'object' && spider !== null &&
+['home', 'category', 'detail', 'play'].every(function(name) {
+  return typeof spider[name] === 'function';
+})
+''');
+      if (result.isError || result.stringResult != 'true') {
+        throw const FormatException('插件缺少必要接口');
+      }
+    } catch (_) {
+      throw const FormatException('插件语法或接口校验失败，原插件已保留');
+    } finally {
+      runtime.dispose();
+    }
+  }
+
   Future<void> init(String script) async {
     if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
     if (_cachedDeviceSession == null) {

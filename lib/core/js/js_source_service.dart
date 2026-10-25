@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +7,7 @@ import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/core/js/js_source_models.dart';
 import 'package:THLRedLook/core/js/js_source_presets.dart';
+import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
 
 class JsSourceService extends ChangeNotifier {
   JsSourceService(this._repository, [this._preferences]) {
@@ -25,11 +24,19 @@ class JsSourceService extends ChangeNotifier {
   String _activeSourceId = '';
   bool _initialized = false;
   bool _loading = false;
+  bool _updatingAll = false;
+  String _updatingSourceId = '';
+  String _lastError = '';
 
   List<JsSourceMeta> get sources => List.unmodifiable(_sources);
   String get activeSourceId => _activeSourceId;
   bool get initialized => _initialized;
-  bool get loading => _loading;
+  bool get loading => _loading || _updatingAll;
+  bool get updatingAll => _updatingAll;
+  String get updatingSourceId => _updatingSourceId;
+  String get lastError => _lastError;
+  bool get hasSubscriptions =>
+      _sources.any((source) => source.sourceUrl.isNotEmpty);
 
   JsSourceMeta? get activeSource {
     for (final src in _sources) {
@@ -54,6 +61,11 @@ class JsSourceService extends ChangeNotifier {
       _sources = await _repository.jsSourceList();
 
       for (final preset in kPresetJsSources) {
+        if (_sources.any(
+          (source) => source.id == preset.id && source.sourceUrl.isNotEmpty,
+        )) {
+          continue;
+        }
         final script = await preset.loadScript();
         await _repository.jsSourceSaveAndLoad(script, preset.fileName);
       }
@@ -64,7 +76,8 @@ class JsSourceService extends ChangeNotifier {
       var savedActiveId = _preferences?.getString(_activeSourceKey) ?? '';
 
       // 验证 savedActiveId 是否依然存在
-      if (savedActiveId.isEmpty || !_sources.any((s) => s.id == savedActiveId)) {
+      if (savedActiveId.isEmpty ||
+          !_sources.any((s) => s.id == savedActiveId)) {
         if (_sources.isNotEmpty) {
           savedActiveId = _sources.first.id;
         }
@@ -112,7 +125,8 @@ class JsSourceService extends ChangeNotifier {
     if (ok) {
       _sources = await _repository.jsSourceList();
       if (_sources.isNotEmpty &&
-          (_activeSourceId.isEmpty || !_sources.any((s) => s.id == _activeSourceId))) {
+          (_activeSourceId.isEmpty ||
+              !_sources.any((s) => s.id == _activeSourceId))) {
         await switchSource(_sources.first.id);
       }
     }
@@ -124,36 +138,89 @@ class JsSourceService extends ChangeNotifier {
 
   Future<bool> importFromUrl(String url) async {
     final cleanUrl = url.trim();
-    if (cleanUrl.isEmpty) return false;
+    if (cleanUrl.isEmpty || loading) return false;
 
     _loading = true;
+    _lastError = '';
     notifyListeners();
 
-    HttpClient? client;
     try {
-      final uri = Uri.parse(cleanUrl);
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-      final request = await client.getUrl(uri);
-      request.headers.set('User-Agent', 'Mozilla/5.0 THLRedLook/1.0.1');
-      final response = await request.close();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return false;
+      await _repository.jsSourceImportFromUrl(cleanUrl);
+      _sources = await _repository.jsSourceList();
+      if (!_sources.any((source) => source.id == _activeSourceId) &&
+          _sources.isNotEmpty) {
+        await switchSource(_sources.first.id);
       }
-      final script = await response.transform(utf8.decoder).join();
-      if (script.trim().isEmpty) return false;
-
-      var fileName = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : 'remote_source.js';
-      if (!fileName.endsWith('.js')) {
-        fileName = '$fileName.js';
-      }
-
-      return await importScript(script, fileName);
-    } catch (e) {
-      debugPrint('网络导入插件失败 ($url): $e');
+      return true;
+    } catch (error) {
+      _lastError = SourceDiagnostics.analyzeError(error).message;
       return false;
     } finally {
-      client?.close(force: true);
       _loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<JsSourceUpdateResult> updateSource(
+    String sourceId, {
+    String? url,
+  }) async {
+    final source = _sources.where((item) => item.id == sourceId).firstOrNull;
+    final target = (url ?? source?.sourceUrl ?? '').trim();
+    if (_loading || source == null || target.isEmpty) {
+      return JsSourceUpdateResult(
+        sourceId: sourceId,
+        name: source?.name ?? sourceId,
+        success: false,
+        error: _loading ? '请等待当前操作完成' : '请先设置更新链接',
+      );
+    }
+    _loading = true;
+    _updatingSourceId = sourceId;
+    _lastError = '';
+    notifyListeners();
+    try {
+      final result = await _repository.jsSourceImportFromUrl(
+        target,
+        sourceId: sourceId,
+      );
+      _sources = await _repository.jsSourceList();
+      return JsSourceUpdateResult(
+        sourceId: sourceId,
+        name: source.name,
+        success: true,
+        changed: result['changed'] == true,
+      );
+    } catch (error) {
+      _lastError = SourceDiagnostics.analyzeError(error).message;
+      return JsSourceUpdateResult(
+        sourceId: sourceId,
+        name: source.name,
+        success: false,
+        error: _lastError,
+      );
+    } finally {
+      _loading = false;
+      _updatingSourceId = '';
+      notifyListeners();
+    }
+  }
+
+  Future<List<JsSourceUpdateResult>> updateAll() async {
+    if (loading) return [];
+    final subscriptions = _sources
+        .where((source) => source.sourceUrl.isNotEmpty)
+        .toList();
+    _updatingAll = true;
+    notifyListeners();
+    try {
+      final results = <JsSourceUpdateResult>[];
+      for (final source in subscriptions) {
+        results.add(await updateSource(source.id));
+      }
+      return results;
+    } finally {
+      _updatingAll = false;
       notifyListeners();
     }
   }
