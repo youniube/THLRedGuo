@@ -1,5 +1,25 @@
 import Foundation
 
+public enum PlaybackEngine: String, CaseIterable {
+    case automatic, system, mpv
+
+    public var label: String {
+        switch self {
+        case .automatic: return "自动"
+        case .system: return "AVPlayer"
+        case .mpv: return "MPV"
+        }
+    }
+
+    public var next: PlaybackEngine {
+        switch self {
+        case .automatic: return .system
+        case .system: return .mpv
+        case .mpv: return .automatic
+        }
+    }
+}
+
 public struct PlaybackPlan: Hashable, Codable {
     public let url: String
     public let headers: [String: String]

@@ -5,6 +5,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart' as kit;
 import 'package:video_player/video_player.dart';
 import 'package:THLRedLook/core/player/hls_compatibility.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/utils/diary/diary_service.dart';
 
@@ -136,12 +137,16 @@ class _LunaVideoPlayerController extends VideoPlayerController {
 /// 采用和 LunaTV-Mobile 完全相同架构的 ExoPlayer (AndroidX Media3) 播放器封装，
 /// 同时对上层播控 UI (PlayerControls & TelevisionControls) 暴露完全兼容的 Player 契约。
 class LunaExoPlayer implements Player {
-  LunaExoPlayer({this.initializationTimeout = const Duration(seconds: 30)}) {
+  LunaExoPlayer({
+    this.initializationTimeout = const Duration(seconds: 30),
+    this.engine = PlaybackEngine.automatic,
+  }) {
     state = const PlayerState().copyWith(volume: 100.0);
   }
 
   VideoPlayerController? _controller;
   final Duration initializationTimeout;
+  PlaybackEngine engine;
   VoidCallback? _valueListener;
   Timer? _positionPollTimer;
 
@@ -286,8 +291,8 @@ class LunaExoPlayer implements Player {
     final url = media.uri;
     if (url.isEmpty) return;
     final key = media.extras?['decryptionKey']?.toString() ?? '';
-    if (key.isNotEmpty) {
-      return _openMpv(media, key: key, play: play);
+    if (key.isNotEmpty || engine == PlaybackEngine.mpv) {
+      return _openMpv(media, key: key, play: play, compatibility: key.isEmpty);
     }
     _compatibilityProbe.cancel();
     if (_streamPlayer != null) await stop();
@@ -389,7 +394,8 @@ class LunaExoPlayer implements Player {
       end: media.end,
     );
 
-    if ((Platform.isAndroid || Platform.isIOS) &&
+    if (engine == PlaybackEngine.automatic &&
+        (Platform.isAndroid || Platform.isIOS) &&
         isHls &&
         uri != null &&
         {'http', 'https'}.contains(uri.scheme)) {
@@ -470,6 +476,7 @@ class LunaExoPlayer implements Player {
             await c.dispose();
           } catch (_) {}
           if (_disposed || myGen != _openGeneration) return;
+          if (engine == PlaybackEngine.system) rethrow;
           return _openMpv(
             compatibilityMedia(),
             play: play,
@@ -482,6 +489,7 @@ class LunaExoPlayer implements Player {
           await c.dispose();
         } catch (_) {}
         if (_disposed || myGen != _openGeneration) return;
+        if (engine == PlaybackEngine.system) rethrow;
         return _openMpv(compatibilityMedia(), play: play, compatibility: true);
       }
     }
@@ -497,6 +505,9 @@ class LunaExoPlayer implements Player {
         (c.value.size.width <= 0 || c.value.size.height <= 0)) {
       await c.dispose();
       if (_disposed || myGen != _openGeneration) return;
+      if (engine == PlaybackEngine.system) {
+        throw StateError('系统内核未识别视频轨，请切换 MPV 内核后重试');
+      }
       DiaryService.add('[MPV] 系统播放器未识别视频轨，切换兼容播放');
       return _openMpv(compatibilityMedia(), play: play, compatibility: true);
     }

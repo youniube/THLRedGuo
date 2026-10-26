@@ -20,6 +20,11 @@ public final class LocalStore: ObservableObject {
     @Published public private(set) var follows: [String: FollowState] = [:]
     @Published public private(set) var followedDramas: [Drama] = []
     @Published public private(set) var searchHistory: [String] = []
+    @Published public var playbackEngine: PlaybackEngine = .automatic {
+        didSet {
+            defaults.set(playbackEngine.rawValue, forKey: playbackEngineKey)
+        }
+    }
     @Published public var danmakuEnabled: Bool = true {
         didSet {
             guard danmakuEnabled != oldValue else { return }
@@ -46,6 +51,7 @@ public final class LocalStore: ObservableObject {
     private let cloudUpload: (LocalStore) -> Void
     private var applyingCloudData = false
     private let danmakuKey = "thl_tv_danmaku_enabled"
+    private let playbackEngineKey = "thl_tv_playback_engine"
     private let danmakuStyleKey = "thl_tv_danmaku_style"
     private let historyKey = "zgj_tv_history"
     private let followsKey = "zgj_tv_follows"
@@ -64,6 +70,7 @@ public final class LocalStore: ObservableObject {
     }
 
     private func loadFromStorage() {
+        playbackEngine = PlaybackEngine(rawValue: defaults.string(forKey: playbackEngineKey) ?? "") ?? .automatic
         unlockedSources = defaults.bool(forKey: unlockedKey)
         let savedSource = defaults.string(forKey: currentSourceKey) ?? ""
         currentSourceId = savedSource.isEmpty ? "hongguo" : savedSource

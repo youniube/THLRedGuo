@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/core/enhancement/video_enhancement.dart';
 import 'package:THLRedLook/core/enhancement/video_enhancement_preferences.dart';
 import 'package:THLRedLook/core/enhancement/video_enhancement_settings.dart';
@@ -237,7 +238,14 @@ class _TelevisionControlsState extends State<TelevisionControls> {
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
-    for (final node in [_surface, _play, _episodes, _diary, _settings, _progress]) {
+    for (final node in [
+      _surface,
+      _play,
+      _episodes,
+      _diary,
+      _settings,
+      _progress,
+    ]) {
       node.dispose();
     }
     super.dispose();
@@ -344,7 +352,8 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                                       : 0,
                                   minHeight: 5,
                                   color: AppColors.playerProgressBuffered,
-                                  backgroundColor: AppColors.playerProgressInactive,
+                                  backgroundColor:
+                                      AppColors.playerProgressInactive,
                                 ),
                                 LinearProgressIndicator(
                                   value: duration > 0
@@ -465,7 +474,10 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                       const SizedBox(height: 6),
                       Text(
                         '控制条隐藏后：左右快进 10 秒，上下或确认键显示控制条',
-                        style: TextStyle(fontSize: 13, color: AppColors.whiteWithAlpha(0.7)),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppColors.whiteWithAlpha(0.7),
+                        ),
                       ),
                     ],
                   ),
@@ -526,6 +538,7 @@ class TelevisionEpisodeDialog extends StatelessWidget {
 class TelevisionPlaybackSetting {
   const TelevisionPlaybackSetting({
     this.speed,
+    this.engine,
     this.quality,
     this.autoAdvance,
     this.danmaku,
@@ -533,6 +546,7 @@ class TelevisionPlaybackSetting {
     this.enhancement,
   });
   final double? speed;
+  final PlaybackEngine? engine;
   final int? quality;
   final bool? autoAdvance;
   final bool? danmaku;
@@ -557,8 +571,12 @@ class TelevisionSettingsDialog extends StatelessWidget {
     this.preloadStatus = '',
     this.enhancement,
     this.onCompareEnhancement,
+    this.engine = PlaybackEngine.automatic,
+    this.currentEngine = '',
   });
   final double speed;
+  final PlaybackEngine engine;
+  final String currentEngine;
   final int quality;
   final List<int> qualities;
   final bool favorite;
@@ -583,6 +601,35 @@ class TelevisionSettingsDialog extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            const Text('播放内核', style: TextStyle(fontSize: 18)),
+            const SizedBox(height: 8),
+            if (supportsSystemPlaybackEngine) ...[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final value in availablePlaybackEngines)
+                    RemoteButton(
+                      key: ValueKey('tv-engine-${value.name}'),
+                      label: value.label,
+                      autofocus: value == engine,
+                      selected: value == engine,
+                      onPressed: () => Navigator.pop(
+                        context,
+                        TelevisionPlaybackSetting(engine: value),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(engine.description, style: const TextStyle(fontSize: 14)),
+            ] else
+              const Text('MPV（当前平台固定使用）'),
+            if (currentEngine.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('当前内核：$currentEngine'),
+            ],
+            const SizedBox(height: 20),
             const Text('倍速', style: TextStyle(fontSize: 18)),
             const SizedBox(height: 8),
             Wrap(
@@ -593,7 +640,7 @@ class TelevisionSettingsDialog extends StatelessWidget {
                   RemoteButton(
                     key: ValueKey('tv-speed-$value'),
                     label: '${value}x',
-                    autofocus: value == speed,
+                    autofocus: !supportsSystemPlaybackEngine && value == speed,
                     selected: value == speed,
                     onPressed: () => Navigator.pop(
                       context,

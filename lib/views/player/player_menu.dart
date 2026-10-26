@@ -6,6 +6,7 @@ import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/views/browser/episode_browser.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/core/enhancement/video_enhancement.dart';
 import 'package:THLRedLook/core/enhancement/video_enhancement_settings.dart';
 import 'package:THLRedLook/utils/diary/diary_service.dart';
@@ -34,6 +35,7 @@ class PlayerMenu extends StatefulWidget {
     this.preloadStatus = '',
     this.enhancement,
     this.onCompareEnhancement,
+    this.currentEngine = '',
   });
 
   final PlayerMenuSection section;
@@ -52,6 +54,7 @@ class PlayerMenu extends StatefulWidget {
   final String preloadStatus;
   final VideoEnhancementController? enhancement;
   final VoidCallback? onCompareEnhancement;
+  final String currentEngine;
   final ValueChanged<int> onEpisode;
   final Future<void> Function(PlaybackPreferences) onPreferences;
   final Future<void> Function() onFavorite;
@@ -180,6 +183,47 @@ class _PlayerMenuState extends State<PlayerMenu> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (all) ...[
+          const Text('播放内核'),
+          const SizedBox(height: 8),
+          if (supportsSystemPlaybackEngine)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final engine in availablePlaybackEngines)
+                  ChoiceChip(
+                    key: ValueKey('menu-engine-${engine.name}'),
+                    label: Text(engine.label),
+                    selected: engine == preferences.engine,
+                    onSelected: _busy
+                        ? null
+                        : (_) {
+                            final updated = _preferences.copyWith(
+                              engine: engine,
+                            );
+                            _run(() async {
+                              await widget.onPreferences(updated);
+                              if (mounted) {
+                                setState(() => _preferences = updated);
+                              }
+                            });
+                          },
+                  ),
+              ],
+            )
+          else
+            Text('MPV（当前平台固定使用）', style: helperStyle),
+          if (widget.currentEngine.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('当前内核：${widget.currentEngine}', style: helperStyle),
+          ],
+          if (supportsSystemPlaybackEngine) ...[
+            const SizedBox(height: 8),
+            Text(preferences.engine.description, style: helperStyle),
+          ],
+          const SizedBox(height: 20),
+        ],
         if (all || widget.section == PlayerMenuSection.speed) ...[
           const Text('倍速'),
           const SizedBox(height: 8),

@@ -7,6 +7,7 @@ public enum PlayerOverlayFocusTarget: Hashable {
     case danmakuSettings
     case speed
     case quality
+    case engine
     case seekBackward
     case playPause
     case seekForward
@@ -64,7 +65,7 @@ public struct TVPlayerControlsOverlay: View {
                             .font(.title3)
                             .bold()
                             .foregroundColor(TVTheme.textPrimary)
-                        Text("第 \(viewModel.currentEpisodeIndex) 集 · \(PlaybackPlan.qualityLabel(viewModel.selectedQuality))")
+                        Text("第 \(viewModel.currentEpisodeIndex) 集 · \(PlaybackPlan.qualityLabel(viewModel.selectedQuality)) · \(viewModel.currentPlaybackEngineLabel)")
                             .accessibilityIdentifier("player.episode")
                             .font(.subheadline)
                             .foregroundColor(TVTheme.textSecondary)
@@ -414,6 +415,23 @@ public struct TVPlayerControlsOverlay: View {
                                     focusedControl = .episodeDrawer
                                 }
                             case .left: focusedControl = .danmaku
+                            case .right: focusedControl = .engine
+                            default: break
+                            }
+                        }
+
+                        overlayBarButton(
+                            title: "内核：\(viewModel.playbackEngine.label)",
+                            icon: "cpu",
+                            target: .engine
+                        ) {
+                            Task { await viewModel.changePlaybackEngine(viewModel.playbackEngine.next) }
+                        }
+                        .accessibilityHint("按下可依次切换自动、AVPlayer、MPV，并记住选择")
+                        .onMoveCommand { dir in
+                            switch dir {
+                            case .up: focusedControl = .episodeDrawer
+                            case .left: focusedControl = .danmakuSettings
                             default: break
                             }
                         }

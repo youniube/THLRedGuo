@@ -31,6 +31,7 @@ import 'package:THLRedLook/core/player/playback_preloader.dart';
 import 'package:THLRedLook/core/player/playback_recovery.dart';
 import 'package:THLRedLook/core/player/playback_diagnostics.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/core/player/player_interactions.dart';
 import 'package:THLRedLook/views/player/player_menu.dart';
 import 'package:THLRedLook/views/television/television_controls.dart';
@@ -126,6 +127,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _generation = 0;
   int _seasonSwitchTicket = 0;
   int _requestedQuality = 0;
+  late PlaybackEngine _engine;
   bool _loading = true;
   bool _forceOnline = false;
   bool _localFailure = false;
@@ -176,7 +178,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   PlaybackPreferences get _preferences => PlaybackPreferences(
     speed: _speed,
     quality: _requestedQuality,
+    engine: _engine,
     autoAdvance: _autoAdvance,
+    pictureInPicture: widget.store.playbackPreferences.pictureInPicture,
     danmaku: _danmakuEnabled,
     danmakuStyle: _danmakuStyle,
     preload: _preloadEnabled,
@@ -198,6 +202,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   String get _session => _plan?.session ?? '';
+  String get _currentEngineLabel => _player is LunaExoPlayer
+      ? _player.streamingDecryption
+            ? 'MPV'
+            : systemPlaybackEngineLabel
+      : 'MPV';
   double get _currentPosition =>
       _openedIndex == _index && _player.state.position.inMilliseconds > 0
       ? _player.state.position.inMilliseconds / 1000
@@ -213,6 +222,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _requestedQuality = preferences.quality;
+    _engine = preferences.engine;
     _autoAdvance = preferences.autoAdvance;
     _danmakuEnabled = preferences.danmaku;
     _danmakuStyle = preferences.danmakuStyle;
@@ -225,7 +235,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _player =
         widget.playerFactory?.call() ??
         ((Platform.isAndroid || Platform.isIOS)
-            ? LunaExoPlayer()
+            ? LunaExoPlayer(engine: _engine)
             : Player(
                 configuration: const PlayerConfiguration(
                   bufferSize: 32 * 1024 * 1024,
@@ -1588,6 +1598,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         DiaryService.add(
           '[Play] 打开媒体: 剧=${widget.detail.drama.cleanSourceId}, 集=${widget.detail.episodes[index].number}, local=${plan.local}, encrypted=${plan.decryptionKey.isNotEmpty}, host=${Uri.tryParse(plan.url)?.host}',
         );
+        if (_player is LunaExoPlayer) _player.engine = _engine;
         await _player.open(
           Media(
             plan.url,
@@ -1782,10 +1793,14 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     final qualityChanged = nextPreferences.quality != _requestedQuality;
+    final engineChanged = nextPreferences.engine != _engine;
+    final position = _currentPosition;
+    final playWhenReady = _error != null || _playIntent;
     _enhancement.setPreferences(nextPreferences.enhancement);
     setState(() {
       _speed = nextPreferences.speed;
       _requestedQuality = nextPreferences.quality;
+      _engine = nextPreferences.engine;
       _autoAdvance = nextPreferences.autoAdvance;
       _danmakuEnabled = nextPreferences.danmaku;
       _danmakuStyle = nextPreferences.danmakuStyle;
@@ -1793,11 +1808,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
     _danmaku.setEnabled(_danmakuEnabled);
     _syncDanmaku();
-    if (qualityChanged) _preloader.clear();
+    if (qualityChanged || engineChanged) _preloader.clear();
     _syncPreload();
     _menuRevision.value++;
     await _interactions.applySpeed();
-    if (qualityChanged && _plan?.offline != true) {
+    if (engineChanged && _player is LunaExoPlayer) {
+      await _play(_index, position: position, playWhenReady: playWhenReady);
+    } else if (qualityChanged && _plan?.offline != true) {
       await _retry(quality: nextPreferences.quality);
     }
   }
@@ -1932,6 +1949,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           mobile: _mobile,
           menuRevision: _menuRevision,
           onPreferences: _setPreferences,
+          currentEngine: () => _currentEngineLabel,
           onDanmakuSettings: () {
             Navigator.pop(context);
             _openDanmakuSettings();
@@ -2033,6 +2051,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       selection = await PlayerDialogHelper.openTelevisionSettings(
         context: context,
         speed: _speed,
+        engine: _engine,
+        currentEngine: _currentEngineLabel,
         quality: _requestedQuality,
         qualities: _plan?.qualities ?? [],
         favorite: widget.store.isFavorite(widget.detail.drama.id),
@@ -2057,6 +2077,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       await _setPreferences(
         _preferences.copyWith(
           speed: selection.speed,
+          engine: selection.engine,
           quality: selection.quality,
           autoAdvance: selection.autoAdvance ?? _autoAdvance,
           danmaku: selection.danmaku,

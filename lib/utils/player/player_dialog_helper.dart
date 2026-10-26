@@ -7,6 +7,7 @@ import 'package:THLRedLook/core/danmaku/danmaku_controller.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/core/player/playback_preloader.dart';
 import 'package:THLRedLook/views/player/player_menu.dart';
 import 'package:THLRedLook/views/television/television_controls.dart';
@@ -95,6 +96,7 @@ class PlayerDialogHelper {
     required bool mobile,
     required Listenable menuRevision,
     required Future<void> Function(PlaybackPreferences) onPreferences,
+    required String Function() currentEngine,
     VoidCallback? onDanmakuSettings,
   }) async {
     final menuTheme = fullscreen ? AppTheme.dark : Theme.of(context);
@@ -116,6 +118,7 @@ class PlayerDialogHelper {
             mobile: mobile,
             onEpisode: (index) => Navigator.pop(menuContext, index),
             onPreferences: onPreferences,
+            currentEngine: currentEngine(),
             showDanmaku: detail.drama.source == 'hongguo',
             danmakuStatus: danmaku.status,
             onDanmakuSettings: onDanmakuSettings,
@@ -155,6 +158,8 @@ class PlayerDialogHelper {
   static Future<TelevisionPlaybackSetting?> openTelevisionSettings({
     required BuildContext context,
     required double speed,
+    required PlaybackEngine engine,
+    required String currentEngine,
     required int quality,
     required List<int> qualities,
     required bool favorite,
@@ -179,6 +184,8 @@ class PlayerDialogHelper {
           data: televisionTheme(AppTheme.dark),
           child: TelevisionSettingsDialog(
             speed: speed,
+            engine: engine,
+            currentEngine: currentEngine,
             quality: quality,
             qualities: qualities,
             favorite: favorite,

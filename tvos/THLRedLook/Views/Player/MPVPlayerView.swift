@@ -60,6 +60,12 @@ public final class MPVPlaybackController: ObservableObject {
                 try check(mpv_set_option_string(context, name, value))
             }
             try setHeaders(plan.headers, context: context)
+            if !plan.decryptionKey.isEmpty {
+                guard plan.decryptionKey.range(of: "^[a-fA-F0-9]{32}$", options: .regularExpression) != nil else {
+                    throw Self.failure("视频内容密钥无效")
+                }
+                try check(mpv_set_option_string(context, "demuxer-lavf-o", "decryption_key=\(plan.decryptionKey)"))
+            }
             try check(mpv_initialize(context))
             requestedPlayback = play
             try command(["loadfile", plan.url, "replace"])

@@ -16,6 +16,7 @@ public final class PlayerViewModel: ObservableObject {
     @Published public var plan: PlaybackPlan?
     @Published public var selectedQuality: Int = 360
     @Published public var playbackRate: Float = 1.0
+    @Published public private(set) var playbackEngine: PlaybackEngine = .automatic
     @Published public var danmakuEnabled: Bool = true
     @Published public var danmakuStyle: TVDanmakuStyle = TVDanmakuStyle()
     @Published public var activeDanmakus: [DanmakuItem] = []
@@ -72,6 +73,10 @@ public final class PlayerViewModel: ObservableObject {
     private var playbackGeneration = 0
     private var isVisible = false
     private var closed = false
+    private var switchingPlaybackEngine = false
+    public var currentPlaybackEngineLabel: String {
+        mpvPlayer == nil ? "AVPlayer" : "MPV"
+    }
     private var playIntent: Bool {
         get { wantsPlayback }
         set { wantsPlayback = newValue }
@@ -111,6 +116,7 @@ public final class PlayerViewModel: ObservableObject {
         self.initialPreloadedPlan = preloadedPlan
         self.repository = repository
         self.store = store
+        self.playbackEngine = store.playbackEngine
         self.danmakuEnabled = store.danmakuEnabled
         self.danmakuStyle = store.danmakuStyle
 
@@ -131,7 +137,7 @@ public final class PlayerViewModel: ObservableObject {
         if progressSaveTimer == nil { startProgressSaveTimer() }
 
         // 若外部已提前预加载就绪，0ms 瞬间挂载起播，彻底杜绝转圈等待
-        if let preloaded = self.initialPreloadedPlan,
+        if playbackEngine != .mpv, let preloaded = self.initialPreloadedPlan,
            let poolPlayer = VideoCacheManager.shared.cachedPlayer(for: preloaded.url, namespace: "feed") {
             self.plan = preloaded
             self.selectedQuality = preloaded.quality
@@ -313,7 +319,7 @@ public final class PlayerViewModel: ObservableObject {
         self.errorMessage = nil
         self.isSeamlessTransitioning = true // 保持当前画面最后一帧，无黑闪
 
-        if let plan = preloadedPlan,
+        if playbackEngine != .mpv, let plan = preloadedPlan,
            let poolPlayer = VideoCacheManager.shared.cachedPlayer(for: plan.url, namespace: "feed") {
             self.plan = plan
             self.selectedQuality = plan.quality
@@ -353,7 +359,7 @@ public final class PlayerViewModel: ObservableObject {
         }
         reachedEnd = false
 
-        if !recovering, let preloaded = preloadedEpisode, preloaded.episodeIndex == episodeIndex {
+        if !recovering, playbackEngine != .mpv, let preloaded = preloadedEpisode, preloaded.episodeIndex == episodeIndex {
             preloadedEpisode = nil
             currentEpisodeIndex = episodeIndex
             currentTime = max(0, seekTo)
@@ -442,8 +448,13 @@ public final class PlayerViewModel: ObservableObject {
                 throw NSError(domain: "Player", code: -1, userInfo: [NSLocalizedDescriptionKey: "没有找到当前分集，请重新加载剧集详情"])
             }
             if let localURL = DownloadService.shared.completedLocalURL(dramaId: drama.id, episodeId: episode.id) {
-                plan = PlaybackPlan(url: localURL.absoluteString, quality: selectedQuality, local: true)
-                startPlaybackWithItem(item: AVPlayerItem(url: localURL), seekTo: seekTo)
+                let localPlan = PlaybackPlan(url: localURL.absoluteString, quality: selectedQuality, local: true)
+                plan = localPlan
+                if playbackEngine == .mpv {
+                    try startCompatibilityPlayback(localPlan, seekTo: seekTo)
+                } else {
+                    startPlaybackWithItem(item: AVPlayerItem(url: localURL), seekTo: seekTo)
+                }
                 return
             }
             let resolved = try await repository.resolvePlayback(drama: drama, episode: episode, episodeIndex: episodeIndex, quality: selectedQuality, avoidURL: failedURL)
@@ -453,11 +464,17 @@ public final class PlayerViewModel: ObservableObject {
             guard let scheme = URL(string: resolved.url)?.scheme, ["https", "http", "file"].contains(scheme) else {
                 throw NSError(domain: "Player", code: -1, userInfo: [NSLocalizedDescriptionKey: "无效播放地址"])
             }
-            let requiresMPV = await HLSCompatibilityProbe.requiresMPV(resolved)
-            guard current() else { return }
-            if requiresMPV {
+            if playbackEngine == .mpv {
                 try startCompatibilityPlayback(resolved, seekTo: seekTo)
                 return
+            }
+            if playbackEngine == .automatic {
+                let requiresMPV = await HLSCompatibilityProbe.requiresMPV(resolved)
+                guard current() else { return }
+                if requiresMPV {
+                    try startCompatibilityPlayback(resolved, seekTo: seekTo)
+                    return
+                }
             }
             let prepared = try await PlaybackAssetFactory.prepare(resolved)
             guard current() else {
@@ -506,7 +523,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func tryCompatibilityPlayback(seekTo: Double) -> Bool {
-        guard mpvPlayer == nil, let plan, plan.decryptionKey.isEmpty else { return false }
+        guard playbackEngine == .automatic, mpvPlayer == nil, let plan, plan.decryptionKey.isEmpty else { return false }
         do {
             try startCompatibilityPlayback(plan, seekTo: seekTo)
             return true
@@ -765,7 +782,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func prefetchNextEpisode() {
-        guard mpvPlayer == nil else { return }
+        guard playbackEngine != .mpv, mpvPlayer == nil else { return }
         let nextIndex = currentEpisodeIndex + 1
         guard nextIndex <= allEpisodes.count else { return }
         guard preloadedEpisode?.episodeIndex != nextIndex, prefetchTask == nil else { return }
@@ -937,6 +954,20 @@ public final class PlayerViewModel: ObservableObject {
             player?.rate = rate
         }
         updateActiveDanmakus()
+        showControls()
+    }
+
+    public func changePlaybackEngine(_ engine: PlaybackEngine) async {
+        guard !closed, !switchingPlaybackEngine, engine != playbackEngine else { return }
+        switchingPlaybackEngine = true
+        defer { switchingPlaybackEngine = false }
+        samplePlaybackClock()
+        let position = currentTime
+        playbackEngine = engine
+        store.playbackEngine = engine
+        await beginPlayback(episodeIndex: currentEpisodeIndex, seekTo: position, recovering: false, preservePlayIntent: true)
+        guard !closed else { return }
+        showToast("播放内核：" + engine.label)
         showControls()
     }
 
