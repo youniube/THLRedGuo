@@ -42,6 +42,14 @@ on:
           - windows
           - macos
           - ios
+      apple_runner:
+        description: 'Apple 平台构建机（arm64 排队时可选择 Intel）'
+        required: true
+        default: macos-latest
+        type: choice
+        options:
+          - macos-latest
+          - macos-15-intel
       publish_release:
         description: '将构建产物发布至 GitHub Releases'
         required: true
@@ -175,7 +183,7 @@ jobs:
   ios:
     name: iOS 平台自动化打包
     if: inputs.target_platform == null || inputs.target_platform == 'all' || inputs.target_platform == 'ios'
-    runs-on: macos-latest
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -287,7 +295,7 @@ jobs:
   macos:
     name: macOS 平台自动化打包
     if: inputs.target_platform == null || inputs.target_platform == 'all' || inputs.target_platform == 'macos'
-    runs-on: macos-latest
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
