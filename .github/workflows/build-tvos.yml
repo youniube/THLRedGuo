@@ -14,6 +14,17 @@ on:
       - 'scripts/**'
       - '.github/workflows/build-tvos.yml'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '将构建产物发布至 GitHub Releases'
+        required: true
+        default: false
+        type: boolean
+      upload_testflight:
+        description: '将已签名的 tvOS 安装包上传至 TestFlight'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -89,6 +100,7 @@ jobs:
             python scripts/build_tvos.py --package
           fi
       - name: 上传 tvOS 至 App Store Connect (TestFlight)
+        if: github.event_name != 'workflow_dispatch' || inputs.upload_testflight
         env:
           HAS_SIGNING: ${{ steps.signing.outputs.has_signing }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID || vars.APP_STORE_CONNECT_KEY_ID }}
@@ -136,7 +148,7 @@ jobs:
   release-tvos:
     name: Apple tvOS 产物自动发布至 GitHub Release
     needs: tvos
-    if: always() && github.event_name != 'pull_request' && needs.tvos.result == 'success'
+    if: always() && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish_release) && needs.tvos.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

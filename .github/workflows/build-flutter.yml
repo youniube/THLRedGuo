@@ -57,7 +57,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: flutter-build-${{ github.workflow }}-${{ github.ref }}
+  group: flutter-build-${{ github.workflow }}-${{ github.ref }}-${{ inputs.target_platform || 'all' }}
   cancel-in-progress: true
 
 env:
