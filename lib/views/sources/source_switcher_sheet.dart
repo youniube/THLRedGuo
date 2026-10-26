@@ -10,7 +10,6 @@ import 'package:THLRedLook/views/privacy/vault_password_dialog.dart';
 import 'package:THLRedLook/views/privacy/vault_password_setup_dialog.dart';
 
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
-import 'package:THLRedLook/core/js/js_source_presets.dart';
 import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/pages/settings/js_sources_page.dart';
 
@@ -21,25 +20,24 @@ Future<SourceSite?> showSourceSwitcherSheet(
   AppRepository? repository,
   SourceSite? currentSource,
   ValueChanged<SourceSite>? onSelect,
-}) =>
-    showModalBottomSheet<SourceSite>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Theme.of(context).brightness == Brightness.dark
-          ? AppColors.darkSurface
-          : AppColors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) => _SourceSwitcherContent(
-        store: store,
-        repository: repository,
-        currentSource: currentSource ?? SourceSite.byId(store.source),
-        onSelect: onSelect,
-      ),
-    );
+}) => showModalBottomSheet<SourceSite>(
+  context: context,
+  showDragHandle: true,
+  isScrollControlled: true,
+  useSafeArea: true,
+  backgroundColor: Theme.of(context).brightness == Brightness.dark
+      ? AppColors.darkSurface
+      : AppColors.white,
+  shape: const RoundedRectangleBorder(
+    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+  ),
+  builder: (sheetContext) => _SourceSwitcherContent(
+    store: store,
+    repository: repository,
+    currentSource: currentSource ?? SourceSite.byId(store.source),
+    onSelect: onSelect,
+  ),
+);
 
 class _SourceSwitcherContent extends StatelessWidget {
   const _SourceSwitcherContent({
@@ -110,24 +108,23 @@ class _SourceSwitcherContent extends StatelessWidget {
                     icon: const Icon(Icons.extension_rounded),
                     onPressed: () {
                       Navigator.pop(context);
-                  final repo = repository ?? NativeRepository();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => JsSourcesPage(
-                        repository: repo,
-                        store: store,
-                      ),
-                    ),
-                  );
+                      final repo = repository ?? NativeRepository();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              JsSourcesPage(repository: repo, store: store),
+                        ),
+                      );
                     },
                   ),
                   IconButton(
                     tooltip: '隐私数据源设置',
                     icon: const Icon(Icons.shield_outlined),
                     onPressed: () {
-                      final vaultController =
-                          PrivacyVaultController(store.preferences);
+                      final vaultController = PrivacyVaultController(
+                        store.preferences,
+                      );
                       PrivateSourceManageDialog.show(
                         context,
                         store: store,
@@ -188,7 +185,9 @@ class _SourceSwitcherContent extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontWeight: selected ? FontWeight.bold : FontWeight.w600,
+                                  fontWeight: selected
+                                      ? FontWeight.bold
+                                      : FontWeight.w600,
                                   color: selected ? AppColors.hongguoRed : null,
                                 ),
                               ),
@@ -253,7 +252,8 @@ class _SourceSwitcherContent extends StatelessWidget {
                                   color: AppColors.hongguoRed,
                                   size: 22,
                                 ),
-                                onPressed: () => _handleDeleteSource(context, site),
+                                onPressed: () =>
+                                    _handleDeleteSource(context, site),
                               )
                             else if (!selected)
                               const Icon(
@@ -268,18 +268,18 @@ class _SourceSwitcherContent extends StatelessWidget {
                             return;
                           }
                           if (isPrivate) {
-                            final vaultController =
-                                PrivacyVaultController(store.preferences);
+                            final vaultController = PrivacyVaultController(
+                              store.preferences,
+                            );
                             if (!vaultController.hasPassword) {
                               final setupSuccess =
                                   await VaultPasswordSetupDialog.show(
-                                context,
-                                controller: vaultController,
-                              );
+                                    context,
+                                    controller: vaultController,
+                                  );
                               if (!setupSuccess || !context.mounted) return;
                             } else {
-                              final verified =
-                                  await VaultPasswordDialog.show(
+                              final verified = await VaultPasswordDialog.show(
                                 context,
                                 controller: vaultController,
                                 title: '切换至隐私数据源',
@@ -306,7 +306,9 @@ class _SourceSwitcherContent extends StatelessWidget {
                             ),
                           );
                         },
-                        onLongPress: () => _handleDeleteSource(context, site),
+                        onLongPress: site.id == 'hongguo'
+                            ? null
+                            : () => _handleDeleteSource(context, site),
                       ),
                     );
                   },
@@ -318,23 +320,21 @@ class _SourceSwitcherContent extends StatelessWidget {
                   backgroundColor: AppColors.blue,
                   minimumSize: const Size.fromHeight(42),
                 ),
-                onPressed: () async {
-                  final service = JsSourceService.current;
-                  if (service != null) {
-                    final count = await importPresetSources(service);
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('已导入 $count 个预置数据源插件'),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    }
-                  }
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => JsSourcesPage(
+                        repository: repository ?? NativeRepository(),
+                        store: store,
+                        openNetworkImport: true,
+                      ),
+                    ),
+                  );
                 },
-                icon: const Icon(Icons.flash_on_rounded, size: 18),
-                label: const Text('一键导入预置数据源'),
+                icon: const Icon(Icons.link_rounded, size: 18),
+                label: const Text('网络订阅导入'),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -350,10 +350,8 @@ class _SourceSwitcherContent extends StatelessWidget {
                   Navigator.push(
                     context,
                     MaterialPageRoute<void>(
-                      builder: (_) => JsSourcesPage(
-                        repository: repo,
-                        store: store,
-                      ),
+                      builder: (_) =>
+                          JsSourcesPage(repository: repo, store: store),
                     ),
                   );
                 },
@@ -368,7 +366,10 @@ class _SourceSwitcherContent extends StatelessWidget {
     );
   }
 
-  Future<void> _handleDeleteSource(BuildContext context, SourceSite site) async {
+  Future<void> _handleDeleteSource(
+    BuildContext context,
+    SourceSite site,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -379,14 +380,18 @@ class _SourceSwitcherContent extends StatelessWidget {
             Text('删除数据源'),
           ],
         ),
-        content: Text('确定要删除自定义数据源「${site.name}」(${site.id}) 吗？\n删除后本地脚本文件将被彻底移除。'),
+        content: Text(
+          '确定要删除自定义数据源「${site.name}」(${site.id}) 吗？\n删除后本地脚本文件将被彻底移除。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.hongguoRed),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.hongguoRed,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('确认删除'),
           ),
@@ -395,7 +400,8 @@ class _SourceSwitcherContent extends StatelessWidget {
     );
 
     if (confirmed == true && context.mounted) {
-      final service = JsSourceService.current ??
+      final service =
+          JsSourceService.current ??
           (repository != null ? JsSourceService(repository!) : null);
       if (service != null) {
         final ok = await service.removeSource(site.id);
@@ -403,7 +409,9 @@ class _SourceSwitcherContent extends StatelessWidget {
           if (store.source == site.id) {
             final nextSource = service.activeSourceId.isNotEmpty
                 ? service.activeSourceId
-                : (store.sources.isNotEmpty ? store.sources.first.id : 'hongguo');
+                : (store.sources.isNotEmpty
+                      ? store.sources.first.id
+                      : 'hongguo');
             try {
               await store.setSource(nextSource);
             } catch (_) {}

@@ -112,6 +112,8 @@ abstract class AppRepository {
     String url, {
     String sourceId = '',
   }) async => throw AppFailure('当前环境不支持 URL 插件更新');
+  Future<Map<String, dynamic>> jsSourceImportSubscription(String url) async =>
+      throw AppFailure('当前环境不支持合集订阅');
   bool get supportsSourceManagement => false;
   Future<void> activateAllSources() async {}
   Future<SourceStatus> sourceStatus(String source) async =>
@@ -665,19 +667,21 @@ class NativeRepository extends AppRepository {
       if (action == 'resolve' && access != null && !access!.canDownload) {
         input['force'] = true;
       }
-      final response = await DartCoreEngine.instance
-          .dispatch(input)
-          .timeout(
-            Duration(
-              seconds: action == 'moveDownloads'
-                  ? 620
-                  : action == 'danmaku'
-                  ? 15
-                  : action == 'preload'
-                  ? 20
-                  : 70,
-            ),
-          );
+      final operation = DartCoreEngine.instance.dispatch(input);
+      final response =
+          {'jsSource.importUrl', 'jsSource.importSubscription'}.contains(action)
+          ? await operation
+          : await operation.timeout(
+              Duration(
+                seconds: action == 'moveDownloads'
+                    ? 620
+                    : action == 'danmaku'
+                    ? 15
+                    : action == 'preload'
+                    ? 20
+                    : 70,
+              ),
+            );
       if (response['ok'] != true) {
         throw AppFailure(
           response['error'] as String? ?? '读取失败，请重试',
@@ -826,6 +830,13 @@ class NativeRepository extends AppRepository {
         })
         as Map,
   );
+
+  @override
+  Future<Map<String, dynamic>> jsSourceImportSubscription(String url) async =>
+      Map<String, dynamic>.from(
+        await _call({'action': 'jsSource.importSubscription', 'url': url})
+            as Map,
+      );
 
   @override
   Future<bool> jsSourceRemove(String sourceId) async {

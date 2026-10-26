@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/core/js/js_source_models.dart';
+import 'package:THLRedLook/core/js/js_source_subscription.dart';
 import 'package:THLRedLook/core/player/js_playback.dart';
 import 'package:THLRedLook/core/diagnostics/source_health_check.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
@@ -222,6 +223,11 @@ class DartCoreEngine {
         return _saveSource(script, fileName);
       case 'jsSource.importUrl':
         return _importSourceUrl(input);
+      case 'jsSource.importSubscription':
+        final url = input['url']?.toString().trim() ?? '';
+        final uri = JsSourceSubscription.parseUrl(url);
+        final text = await _downloadSourceText(uri);
+        return _importSubscription(JsSourceSubscription.parse(text, url));
       case 'jsSource.remove':
         final source = input['source'] as String? ?? '';
         await _loadSourceUrls();
@@ -685,15 +691,68 @@ class DartCoreEngine {
     Map<String, dynamic> input,
   ) async {
     final url = input['url']?.toString().trim() ?? '';
-    final uri = Uri.tryParse(url);
-    if (uri == null ||
-        !{'http', 'https'}.contains(uri.scheme) ||
-        uri.host.isEmpty) {
-      throw const FormatException('请输入有效的 HTTP(S) 插件直链');
-    }
+    final uri = JsSourceSubscription.parseUrl(url);
     final id = input['source']?.toString() ?? '';
+    final expectedId = input['expectedId']?.toString() ?? id;
     final expected = id.isEmpty ? null : _installedSources[id];
     if (id.isNotEmpty && expected == null) throw StateError('插件已删除，请重新导入');
+    final script = await _downloadSourceText(uri);
+    final text = script.trimLeft();
+    if (expectedId.isEmpty && (text.startsWith('{') || text.startsWith('['))) {
+      return _importSubscription(JsSourceSubscription.parse(script, url));
+    }
+    final fileName = uri.pathSegments.isEmpty
+        ? 'remote_source.js'
+        : p.basename(uri.pathSegments.last);
+    final meta = _parseScriptMeta(script, fileName);
+    if (meta == null) throw const FormatException('链接未返回有效的 JS 插件');
+    if (expectedId.isNotEmpty && meta.id != expectedId) {
+      throw StateError('插件 ID 不匹配，原插件已保留');
+    }
+    await CatPawJsRuntime.validateSource(script);
+    return _saveSource(
+      script,
+      fileName,
+      sourceUrl: uri.toString(),
+      expected: expected,
+    );
+  }
+
+  Future<Map<String, dynamic>> _importSubscription(
+    JsSourceSubscription subscription,
+  ) async {
+    final results = <Map<String, dynamic>>[];
+    for (final source in subscription.sources) {
+      final installed = _installedSources.containsKey(source.id);
+      try {
+        if (source.id == 'hongguo') {
+          throw StateError('官方免费短剧已内置，外部合集请使用独立的源 ID');
+        }
+        final result = await _importSourceUrl({
+          'url': source.url,
+          'expectedId': source.id,
+          if (installed) 'source': source.id,
+        });
+        results.add({
+          'sourceId': source.id,
+          'name': result['meta']['name'],
+          'success': true,
+          'changed': result['changed'] == true,
+          'added': !installed,
+        });
+      } catch (error) {
+        results.add({
+          'sourceId': source.id,
+          'name': source.name,
+          'success': false,
+          'error': error.toString(),
+        });
+      }
+    }
+    return {'subscription': subscription.toJson(), 'results': results};
+  }
+
+  Future<String> _downloadSourceText(Uri uri) async {
     final abort = Completer<void>();
     final timer = Timer(const Duration(seconds: 30), () {
       if (!abort.isCompleted) abort.complete();
@@ -709,33 +768,18 @@ class DartCoreEngine {
       final response = await client.send(request);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         await response.stream.listen((_) {}).cancel();
-        throw StateError('插件下载失败，HTTP ${response.statusCode}');
+        throw StateError('订阅或插件下载失败，HTTP ${response.statusCode}');
       }
       final bytes = BytesBuilder(copy: false);
       await for (final chunk in response.stream) {
         if (bytes.length + chunk.length > 2 * 1024 * 1024) {
-          throw const FormatException('插件文件超过 2 MiB 限制');
+          throw const FormatException('订阅或插件文件超过 2 MiB 限制');
         }
         bytes.add(chunk);
       }
-      final script = utf8.decode(bytes.takeBytes()).replaceFirst('\uFEFF', '');
-      final fileName = uri.pathSegments.isEmpty
-          ? 'remote_source.js'
-          : p.basename(uri.pathSegments.last);
-      final meta = _parseScriptMeta(script, fileName);
-      if (meta == null) throw const FormatException('链接未返回有效的 JS 插件');
-      if (expected != null && meta.id != expected.id) {
-        throw StateError('插件 ID 不匹配，原插件已保留');
-      }
-      await CatPawJsRuntime.validateSource(script);
-      return await _saveSource(
-        script,
-        fileName,
-        sourceUrl: url,
-        expected: expected,
-      );
+      return utf8.decode(bytes.takeBytes()).replaceFirst('\uFEFF', '');
     } on http.RequestAbortedException {
-      throw TimeoutException('插件下载超时，原插件已保留');
+      throw TimeoutException('订阅或插件下载超时，原插件已保留');
     } finally {
       timer.cancel();
       if (!abort.isCompleted) abort.complete();
