@@ -8,6 +8,24 @@ import 'package:THLRedLook/core/player/hls_compatibility.dart';
 import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/utils/diary/diary_service.dart';
+import 'package:THLRedLook/utils/media/video_output_size.dart';
+
+VideoParams _systemVideoParameters(VideoPlayerValue value) {
+  final size = value.size;
+  if (!size.width.isFinite ||
+      !size.height.isFinite ||
+      size.width <= 0 ||
+      size.height <= 0) {
+    return const VideoParams();
+  }
+  return VideoParams(
+    w: size.width.round(),
+    h: size.height.round(),
+    dw: size.width.round(),
+    dh: size.height.round(),
+    rotate: value.rotationCorrection,
+  );
+}
 
 /// 模拟与 media_kit.PlayerStream 接口对齐的流集合
 class LunaPlayerStreams implements PlayerStream {
@@ -524,17 +542,16 @@ class LunaExoPlayer implements Player {
     _controller = c;
     _controllerError = null;
     final dur = c.value.duration;
-    final w = c.value.size.width.round();
-    final h = c.value.size.height.round();
-    final videoParams = VideoParams(w: w, h: h, dw: w, dh: h);
+    final videoParams = _systemVideoParameters(c.value);
+    final displaySize = videoDisplaySize(videoParams);
 
     state = state.copyWith(
       duration: dur,
       position: Duration.zero,
       playing: play,
       buffering: c.value.isBuffering,
-      width: w > 0 ? w : 1920,
-      height: h > 0 ? h : 1080,
+      width: displaySize?.width.round(),
+      height: displaySize?.height.round(),
       videoParams: videoParams,
     );
 
@@ -584,20 +601,12 @@ class LunaExoPlayer implements Player {
     final v = c.value;
 
     bool stateChanged = false;
-    final width = v.size.width.round();
-    final height = v.size.height.round();
-    if (width > 0 &&
-        height > 0 &&
-        (width != state.videoParams.w || height != state.videoParams.h)) {
-      final parameters = VideoParams(
-        w: width,
-        h: height,
-        dw: width,
-        dh: height,
-      );
+    final parameters = _systemVideoParameters(v);
+    final displaySize = videoDisplaySize(parameters);
+    if (displaySize != null && parameters != state.videoParams) {
       state = state.copyWith(
-        width: width,
-        height: height,
+        width: displaySize.width.round(),
+        height: displaySize.height.round(),
         videoParams: parameters,
       );
       _safeAdd(stream.videoParamsController, parameters);
@@ -781,10 +790,14 @@ class LunaExoPlayer implements Player {
       position: Duration.zero,
       duration: Duration.zero,
       buffer: Duration.zero,
+      width: 0,
+      height: 0,
+      videoParams: const VideoParams(),
     );
     _safeAdd(stream.playingController, false);
     _safeAdd(stream.bufferingController, false);
     _safeAdd(stream.positionController, Duration.zero);
+    _safeAdd(stream.videoParamsController, const VideoParams());
     if (!_disposed) revision.value++;
     if (c != null) {
       try {
@@ -836,30 +849,30 @@ class LunaExoVideoView extends StatelessWidget {
         final nativeVideo = player._streamVideo;
         final c = player.controller;
         final hasVideo = c != null && c.value.isInitialized;
-        final rawRatio = hasVideo ? c.value.aspectRatio : 16 / 9;
-        final ratio = (rawRatio > 0 && !rawRatio.isNaN && !rawRatio.isInfinite)
-            ? rawRatio
-            : 16 / 9;
+        final size = hasVideo
+            ? videoDisplaySize(_systemVideoParameters(c.value))
+            : videoDisplaySize(player.state.videoParams);
+        final ratio = size?.aspectRatio;
 
         return Stack(
           fit: StackFit.expand,
           children: [
+            const ColoredBox(color: AppColors.black),
             if (nativeVideo != null)
               kit.Video(
                 key: ObjectKey(nativeVideo),
                 controller: nativeVideo,
                 fit: fit,
+                aspectRatio: ratio,
                 controls: kit.NoVideoControls,
               )
-            else if (hasVideo)
+            else if (hasVideo && ratio != null)
               Center(
                 child: AspectRatio(
                   aspectRatio: ratio,
                   child: VideoPlayer(key: ObjectKey(c), c),
                 ),
-              )
-            else
-              const ColoredBox(color: AppColors.black),
+              ),
             if (controls != null) controls!(context),
           ],
         );

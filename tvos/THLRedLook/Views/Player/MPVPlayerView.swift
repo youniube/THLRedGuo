@@ -54,6 +54,7 @@ public final class MPVPlaybackController: ObservableObject {
             for (name, value) in [
                 "vo": "gpu-next", "gpu-api": "vulkan", "gpu-context": "moltenvk",
                 "hwdec": "auto-safe", "idle": "yes", "keep-open": "no",
+                "keepaspect": "yes", "panscan": "0", "video-zoom": "0",
                 "network-timeout": "20", "pause": play ? "no" : "yes",
                 "start": String(max(0, position)), "speed": String(rate)
             ] {

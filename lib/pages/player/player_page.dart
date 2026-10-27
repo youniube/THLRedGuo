@@ -158,7 +158,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _saveWarning;
   PlaybackPlan? _plan;
   double _speed = 1;
-  double _aspectRatio = 9 / 16;
+  double? _videoAspectRatio;
+  double get _aspectRatio => _videoAspectRatio ?? 1;
   double _resumePosition = 0;
   bool _rotating = false;
   bool _television = false;
@@ -365,15 +366,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       );
     }
     _subscriptions.add(
-      _player.stream.videoParams.listen((parameters) {
-        final size = videoDisplaySize(parameters);
-        if (size != null && mounted && !_closed) {
-          setState(() {
-            _aspectRatio = size.width / size.height;
-          });
-          _scheduleSystemUi();
-        }
-      }),
+      _player.stream.videoParams.listen(_updateVideoAspectRatio),
     );
     _saveTimer = Timer.periodic(
       const Duration(seconds: 5),
@@ -1486,6 +1479,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _openedIndex = -1;
         if (!isSeamlessAdvance) {
           await _player.stop();
+          _updateVideoAspectRatio(const VideoParams());
         }
         final previous = _plan ?? recoveryPlan;
         _plan = null;
@@ -1631,6 +1625,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           return;
         }
         _openedIndex = index;
+        _updateVideoAspectRatio(_player.state.videoParams);
         _enhancement.mediaReady();
         _attachLanPlayback();
         _health.reset();
@@ -1726,13 +1721,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  void _updateVideoAspectRatio(VideoParams parameters) {
+    if (!mounted || _closed) return;
+    final ratio = videoDisplaySize(parameters)?.aspectRatio;
+    if (_videoAspectRatio == ratio) return;
+    setState(() => _videoAspectRatio = ratio);
+    _scheduleSystemUi();
+  }
+
   bool get _showFullscreen =>
       !widget.feed &&
       (_television ||
           _fullscreen ||
           (_mobile &&
               !_automaticFullscreenSuppressed &&
-              _aspectRatio >= 1 &&
+              _videoAspectRatio != null &&
+              _aspectRatio > 1 &&
               MediaQuery.orientationOf(context) == Orientation.landscape));
 
   Future<void> _rotate() async {
@@ -2495,7 +2499,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       danmaku: _danmaku,
       danmakuEnabled: _danmakuEnabled,
       danmakuStyle: _preferences.danmakuStyle,
-      aspectRatio: _aspectRatio,
+      aspectRatio: _videoAspectRatio,
       interactions: _interactions,
       enhancement: _enhancement,
       enhancementForUi: _enhancementForUi,

@@ -102,7 +102,7 @@ class PlayerViewportView extends StatelessWidget {
   final DanmakuController danmaku;
   final bool danmakuEnabled;
   final DanmakuStyle? danmakuStyle;
-  final double aspectRatio;
+  final double? aspectRatio;
   final PlayerInteractions interactions;
   final VideoEnhancementController enhancement;
   final VideoEnhancementController? enhancementForUi;
@@ -344,7 +344,7 @@ class PlayerViewportView extends StatelessWidget {
         if (!hideOverlayForPictureInPicture)
           DanmakuOverlay(
             controller: danmaku,
-            aspectRatio: aspectRatio,
+            aspectRatio: aspectRatio ?? 1,
             style: danmakuStyle ?? const DanmakuStyle(),
           ),
         controlsOverlay ?? controls,
@@ -391,6 +391,7 @@ class PlayerViewportView extends StatelessWidget {
                 Video(
                   controller: videoController!,
                   fit: BoxFit.contain,
+                  aspectRatio: aspectRatio,
                   controls: (_) => layeredControls,
                 ),
               if (loading && !hideOverlayForPictureInPicture)
