@@ -1,14 +1,22 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
+import 'package:THLRedLook/core/feed/feed_source_mixer.dart';
 import 'package:THLRedLook/core/feed/video_feed_controller.dart';
+import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
+import 'package:THLRedLook/core/js/js_source_models.dart';
+import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/player/playback_lease.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_models.dart';
+import 'package:THLRedLook/models/feed/feed_source_selection.dart';
+import 'package:THLRedLook/pages/feed/video_feed_page.dart';
 import 'package:THLRedLook/views/feed/feed_player_overlay.dart';
+import 'package:THLRedLook/views/feed/feed_source_sheet.dart';
 
 const a = Drama(
   id: 'hongguo:a',
@@ -36,7 +44,11 @@ class Repo extends AppRepository {
   Completer<FeedPage>? first;
   Completer<DramaDetail>? pendingDetail;
   @override
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async {
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async {
     pages.add(page);
     sessions.add(session);
     if (page == 1 && first != null) return first!.future;
@@ -408,11 +420,16 @@ void main() {
     expect(feed.items.length, 4); // 相同 items 已在当前列表中（去重保护）
     feed.dispose();
   });
+  _feedSourceSelectionTests();
 }
 
 class MultiPageRepo extends AppRepository {
   @override
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async {
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async {
     if (page == 1) {
       return const FeedPage(
         items: [
@@ -471,4 +488,336 @@ class MultiPageRepo extends AppRepository {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+const _sources = [
+  JsSourceMeta(id: 'hongguo', name: '官方合成源'),
+  JsSourceMeta(id: 'synthetic_a', name: '合成源 A'),
+  JsSourceMeta(id: 'synthetic_b', name: '合成源 B'),
+];
+
+FeedPage _page(String source, {int page = 1, bool hasMore = false}) => FeedPage(
+  items: List.generate(
+    4,
+    (index) => FeedItem(
+      drama: Drama(
+        id: '$source:$page-$index',
+        source: source,
+        title: '合成推荐 $source $index',
+      ),
+    ),
+  ),
+  page: page,
+  hasMore: hasMore,
+);
+
+class _Repository extends AppRepository {
+  final requests = <({String source, int page, String session})>[];
+  Future<FeedPage> Function(String source, int page)? respond;
+  Future<DramaDetail> Function(Drama drama)? respondDetail;
+
+  @override
+  Future<List<JsSourceMeta>> jsSourceList() async => _sources;
+  @override
+  Future<int> jsSourceScan() async => _sources.length;
+  @override
+  Future<bool> jsSourceSetActive(String sourceId) async => true;
+
+  @override
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async {
+    requests.add((source: source, page: page, session: session));
+    return respond == null ? _page(source, page: page) : respond!(source, page);
+  }
+
+  @override
+  Future<DramaDetail> detail(Drama drama) async =>
+      respondDetail?.call(drama) ??
+      DramaDetail(drama, [
+        Episode({'id': '${drama.id}:episode'}, 1),
+      ]);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+void _feedSourceSelectionTests() {
+  group('推荐源选择', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    late LocalStore store;
+    late JsSourceService service;
+    late _Repository repository;
+    late VideoFeedController feed;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      repository = _Repository();
+      service = JsSourceService(repository, preferences);
+      await service.initialize();
+      store = LocalStore(preferences);
+      await store.setSource('synthetic_a');
+      feed = VideoFeedController(repository, store);
+    });
+
+    tearDown(() {
+      feed.dispose();
+      store.dispose();
+      service.dispose();
+      JsSourceService.current = null;
+    });
+
+    test('默认跟随发现页当前源，切源后不保留旧源视频', () async {
+      await feed.refresh();
+      expect(repository.requests.single.source, 'synthetic_a');
+      expect(
+        feed.items.every((item) => item.drama.source == 'synthetic_a'),
+        true,
+      );
+      await store.setSource('synthetic_b');
+      expect(feed.items, isEmpty);
+      await feed.refresh();
+      expect(repository.requests.last.source, 'synthetic_b');
+      expect(
+        feed.items.every((item) => item.drama.source == 'synthetic_b'),
+        true,
+      );
+    });
+
+    test('全源独立请求并轮换，自选只请求勾选的源且选择可持久化', () async {
+      await store.setFeedSources(
+        const FeedSourceSelection(mode: FeedSourceMode.all),
+      );
+      await feed.refresh();
+      expect(repository.requests.map((request) => request.source).toSet(), {
+        'hongguo',
+        'synthetic_a',
+        'synthetic_b',
+      });
+      expect(feed.items.take(3).map((item) => item.drama.source), [
+        'hongguo',
+        'synthetic_a',
+        'synthetic_b',
+      ]);
+      repository.requests.clear();
+      await store.setFeedSources(
+        const FeedSourceSelection(
+          mode: FeedSourceMode.custom,
+          sources: ['synthetic_b'],
+        ),
+      );
+      await feed.refresh();
+      expect(repository.requests.single.source, 'synthetic_b');
+      final reloaded = LocalStore(store.preferences);
+      expect(reloaded.feedSources.mode, FeedSourceMode.custom);
+      expect(reloaded.feedSources.sources, ['synthetic_b']);
+      reloaded.dispose();
+    });
+
+    test('切回推荐范围恢复刷剧位置，自选源不可用时不回退官方源', () async {
+      await feed.refresh();
+      feed.select(2);
+      await store.setFeedSources(
+        const FeedSourceSelection(mode: FeedSourceMode.all),
+      );
+      await feed.refresh();
+      await store.setFeedSources(const FeedSourceSelection());
+      expect(feed.index, 2);
+      expect(feed.current?.drama.source, 'synthetic_a');
+      await store.setFeedSources(
+        const FeedSourceSelection(
+          mode: FeedSourceMode.custom,
+          sources: ['removed_source'],
+        ),
+      );
+      expect(feed.allowed, false);
+      expect(feed.items, isEmpty);
+    });
+
+    test('隐私源不自动混入全部站源，跟随已选中的发现源仍可使用', () async {
+      await store.setSourcePrivate('synthetic_b', true);
+      await store.setFeedSources(
+        const FeedSourceSelection(mode: FeedSourceMode.all),
+      );
+      await feed.refresh();
+      expect(
+        repository.requests.any((request) => request.source == 'synthetic_b'),
+        false,
+      );
+      await store.setSource('synthetic_b');
+      await store.setFeedSources(const FeedSourceSelection());
+      await feed.refresh();
+      expect(repository.requests.last.source, 'synthetic_b');
+    });
+
+    test('慢源和失败源不阻塞快源，迟到数据在下一批参与轮换', () async {
+      final slow = Completer<FeedPage>();
+      repository.respond = (source, page) {
+        if (source == 'hongguo') return slow.future;
+        if (source == 'synthetic_b') throw AppFailure('合成源失败');
+        return Future.value(_page(source));
+      };
+      final mixer = FeedSourceMixer(
+        repository,
+        _sources.map((source) => source.id),
+        'synthetic-session_0',
+      );
+      final first = await mixer.load();
+      expect(
+        first.items.every((item) => item.drama.source == 'synthetic_a'),
+        true,
+      );
+      expect(first.hasMore, true);
+      slow.complete(_page('hongguo'));
+      final second = await mixer.load();
+      expect(
+        second.items.every((item) => item.drama.source == 'hongguo'),
+        true,
+      );
+      expect(second.hasMore, false);
+      mixer.dispose();
+    });
+
+    test('切源后旧请求迟到不能覆盖新的推荐范围', () async {
+      final old = Completer<FeedPage>();
+      repository.respond = (source, page) =>
+          source == 'synthetic_a' ? old.future : Future.value(_page(source));
+      final previous = feed.refresh();
+      await Future<void>.delayed(Duration.zero);
+      await store.setSource('synthetic_b');
+      await feed.refresh();
+      old.complete(_page('synthetic_a'));
+      await previous;
+      expect(
+        feed.items.every((item) => item.drama.source == 'synthetic_b'),
+        true,
+      );
+    });
+
+    test('切换推荐范围不等待旧源详情，旧详情迟到不能重启播放', () async {
+      final old = Completer<DramaDetail>();
+      repository.respondDetail = (drama) => drama.source == 'synthetic_a'
+          ? old.future
+          : Future.value(detail(drama));
+      feed.setActive(true);
+      await Future<void>.delayed(Duration.zero);
+      await store.setSource('synthetic_b');
+      await Future<void>.delayed(Duration.zero);
+      expect(feed.detail?.drama.source, 'synthetic_b');
+      old.complete(detail(_page('synthetic_a').items.first.drama));
+      await Future<void>.delayed(Duration.zero);
+      expect(feed.detail?.drama.source, 'synthetic_b');
+    });
+
+    for (final method in ['feed', 'recommendations', 'category']) {
+      test('推荐按能力使用 $method，分类会话保持分类和分页', () async {
+        final runtime = CatPawJsRuntime();
+        try {
+          await runtime.init('''
+var spider = {
+  home: function() {
+    return {class: [{type_id:'one'}, {type_id:'two'}]};
+  },
+  category: function(tid, page) {
+    return {list:[{vod_id:tid+'-'+page}], page:page, hasMore:true};
+  }
+};
+${method == 'category' ? '' : '''
+spider.recommendations = function(genre, page) {
+  if (genre !== 'short_play') throw Error('分类参数不正确');
+  return {list:[{vod_id:'recommendations-'+page}], page:page, hasMore:true};
+};
+'''}
+${method != 'feed' ? '' : '''
+spider.feed = function(page, session) {
+  if (session !== 'synthetic_6') throw Error('会话参数不正确');
+  return {list:[{vod_id:'feed-'+page}], hasMore:true};
+};
+'''}
+''');
+          for (var page = 1; page <= 2; page++) {
+            final result = await runtime.videoFeed(page, 'synthetic_6');
+            expect(
+              result.list.single['vod_id'],
+              '${method == 'category' ? 'two' : method}-$page',
+            );
+            expect(result.page, page);
+            expect(result.hasMore, true);
+          }
+        } finally {
+          runtime.dispose();
+        }
+      });
+    }
+
+    for (final size in [const Size(390, 800), const Size(740, 320)]) {
+      testWidgets('推荐源面板和自选列表适配 $size', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        FeedSourceSelection? result;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () async =>
+                      result = await showFeedSourceSheet(context, feed),
+                  child: const Text('打开'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('打开'));
+        await tester.pumpAndSettle();
+        expect(find.text('当前：合成源 A'), findsOneWidget);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('feed-mode-custom')),
+        );
+        await tester.tap(find.byKey(const ValueKey('feed-mode-custom')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('feed-source-synthetic_b')),
+        );
+        await tester.tap(find.byKey(const ValueKey('feed-source-synthetic_b')));
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('feed-apply-sources')));
+        await tester.pumpAndSettle();
+        expect(result?.mode, FeedSourceMode.custom);
+        expect(result?.sources, ['synthetic_b']);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('空范围仍显示推荐源入口，可以重新选择范围', (tester) async {
+      await store.setFeedSources(
+        const FeedSourceSelection(mode: FeedSourceMode.custom),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: VideoFeedScreen(controller: feed, active: false),
+          ),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('feed-source-selector')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('feed-source-selector')));
+      await tester.pumpAndSettle();
+      expect(find.text('全部站源'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('feed-mode-all')));
+      await tester.pumpAndSettle();
+      expect(store.feedSources.mode, FeedSourceMode.all);
+      expect(feed.allowed, true);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
 }

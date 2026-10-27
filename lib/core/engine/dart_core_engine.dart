@@ -1012,9 +1012,10 @@ class DartCoreEngine {
   }
 
   Future<Map<String, dynamic>> _getVideoFeed(Map<String, dynamic> input) async {
-    final runtime = await _getSpiderRuntime('hongguo', scope: 'feed');
+    final source = input['source'] as String? ?? 'hongguo';
+    final runtime = await _getSpiderRuntime(source, scope: 'feed');
     if (runtime == null) throw StateError('推荐数据源不可用');
-    final result = await runtime.feed(
+    final result = await runtime.videoFeed(
       (input['page'] as num?)?.toInt() ?? 1,
       input['feedSession'] as String? ?? '',
     );
@@ -1022,7 +1023,7 @@ class DartCoreEngine {
       'items': [
         for (final row in result.list)
           {
-            'drama': _mapVodToDrama('hongguo', row, ''),
+            'drama': _mapVodToDrama(source, row, ''),
             'episode': (row['vod_start_episode'] as num?)?.toInt() ?? 1,
             'position': (row['vod_start_position'] as num?)?.toDouble() ?? 0,
           },

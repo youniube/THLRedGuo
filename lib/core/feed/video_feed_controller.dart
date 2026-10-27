@@ -1,19 +1,25 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
+import 'package:THLRedLook/core/feed/feed_source_mixer.dart';
+import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/player/playback_lease.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_models.dart';
+import 'package:THLRedLook/models/feed/feed_source_selection.dart';
 
 class VideoFeedController extends ChangeNotifier {
-  VideoFeedController(this.repository, this.store);
+  VideoFeedController(this.repository, this.store) {
+    store.addListener(_sourcesChanged);
+    _sourceService?.addListener(_sourcesChanged);
+    _sourcesChanged();
+  }
   final AppRepository repository;
   final LocalStore store;
   final playback = PlaybackLeaseQueue();
   List<FeedItem> items = [];
   int index = 0;
-  int _page = 0;
   bool active = false;
   bool loading = false;
   bool loadingMore = false;
@@ -27,13 +33,96 @@ class VideoFeedController extends ChangeNotifier {
   int _generation = 0;
   int _selection = 0;
   bool _disposed = false;
-  bool _preparing = false;
+  int? _preparing;
   String _session = '';
   final _details = <String, DramaDetail>{};
   Timer? _selectionTimer;
+  final _sourceService = JsSourceService.current;
+  FeedSourceMixer? _mixer;
+  List<String> _sourceIds = [];
+  String _sourceKey = '';
+  int _profileEpoch = -1;
+  int _emptyPages = 0;
+  final _savedScopes = <String, ({List<FeedItem> items, int index})>{};
 
-  bool get allowed => !store.locked && store.allowsSource('hongguo');
+  FeedSourceSelection get selection => store.feedSources;
+  List<SourceSite> get selectableSources =>
+      store.sources.where((site) => !store.isPrivateSource(site.id)).toList();
+  bool get allowed => !store.locked && _sourceIds.isNotEmpty;
+  int get revision => _generation;
   FeedItem? get current => index < items.length ? items[index] : null;
+
+  void _sourcesChanged() {
+    if (_disposed) return;
+    final epochChanged = _profileEpoch != store.profileEpoch;
+    final visible = store.sources;
+    final discoveryGroup = SourceSite.byId(store.source).groupId;
+    final selected = selection;
+    final publicIds = selectableSources.map((site) => site.id).toSet();
+    final ids = switch (selected.mode) {
+      FeedSourceMode.discovery =>
+        visible
+            .where((site) => site.groupId == discoveryGroup)
+            .map((site) => site.id)
+            .toList(),
+      FeedSourceMode.all => publicIds.toList(),
+      FeedSourceMode.custom =>
+        selected.sources.where(publicIds.contains).toList(),
+    };
+    final key = '${store.profileEpoch}:${selected.mode.name}:${ids.join(',')}';
+    if (!epochChanged && key == _sourceKey) return;
+    if (epochChanged || store.locked) {
+      _savedScopes.clear();
+    } else if (_sourceKey.isNotEmpty && items.isNotEmpty) {
+      _savedScopes[_sourceKey] = (items: List.of(items), index: index);
+      while (_savedScopes.length > 3) {
+        _savedScopes.remove(_savedScopes.keys.first);
+      }
+    }
+    _profileEpoch = store.profileEpoch;
+    _sourceKey = key;
+    _sourceIds = ids;
+    _generation++;
+    _selection++;
+    _selectionTimer?.cancel();
+    _mixer?.dispose();
+    _mixer = null;
+    _session = '';
+    _details.clear();
+    final saved = _savedScopes.remove(key);
+    items = saved?.items ?? [];
+    index = saved?.index ?? 0;
+    _emptyPages = 0;
+    detail = null;
+    loading = loadingMore = loadingDetail = false;
+    hasMore = true;
+    error = moreError = detailError = null;
+    restartRequired = false;
+    notifyListeners();
+    if (active && allowed) {
+      unawaited(
+        Future<void>.microtask(() async {
+          if (_disposed || !active || !allowed) return;
+          if (items.isEmpty) {
+            await refresh();
+          } else {
+            await prepare();
+          }
+        }),
+      );
+    }
+  }
+
+  Future<FeedPage> _loadPage() {
+    if (_mixer == null) {
+      if (_session.isEmpty) {
+        _session =
+            '${DateTime.now().microsecondsSinceEpoch}_${store.stepFeedOffset()}';
+      }
+      _mixer = FeedSourceMixer(repository, _sourceIds, _session);
+    }
+    return _mixer!.load();
+  }
 
   void setActive(bool value) {
     if (_disposed || active == value) return;
@@ -63,10 +152,13 @@ class VideoFeedController extends ChangeNotifier {
         ? 0
         : store.stepFeedOffset();
     _session = '${DateTime.now().microsecondsSinceEpoch}_$offset';
+    _mixer?.dispose();
+    _mixer = null;
     _selectionTimer?.cancel();
     items = [];
     detail = null;
-    index = _page = 0;
+    index = 0;
+    _emptyPages = 0;
     _details.clear();
     loading = true;
     loadingMore = false;
@@ -75,13 +167,14 @@ class VideoFeedController extends ChangeNotifier {
     restartRequired = false;
     notifyListeners();
     try {
-      final result = await repository.videoFeed(page: 1, session: _session);
+      await repository.cancelVideoFeed();
+      if (_disposed || generation != _generation) return;
+      final result = await _loadPage();
       if (_disposed || generation != _generation || !allowed) return;
       final filtered = _filterSeen(result.items, retainId: retainId);
       items = (filtered.isEmpty && !result.hasMore)
           ? _unique(result.items)
           : filtered;
-      _page = result.page;
       hasMore = result.hasMore;
     } catch (failure) {
       if (!_disposed && generation == _generation) error = failure.toString();
@@ -102,7 +195,7 @@ class VideoFeedController extends ChangeNotifier {
     final seen = <String>{};
     for (final value in values) {
       final id = value.drama.id;
-      if (value.drama.source == 'hongguo' &&
+      if (_sourceIds.contains(value.drama.source) &&
           id.isNotEmpty &&
           !seen.contains(id) &&
           (!store.isFeedSeen(id) || id == retainId)) {
@@ -115,7 +208,7 @@ class VideoFeedController extends ChangeNotifier {
 
   List<FeedItem> _unique(Iterable<FeedItem> values) => <String, FeedItem>{
     for (final value in values)
-      if (value.drama.source == 'hongguo' && value.drama.id.isNotEmpty)
+      if (_sourceIds.contains(value.drama.source) && value.drama.id.isNotEmpty)
         value.drama.id: value,
   }.values.toList();
 
@@ -133,10 +226,7 @@ class VideoFeedController extends ChangeNotifier {
     loadingMore = true;
     notifyListeners();
     try {
-      final result = await repository.videoFeed(
-        page: _page + 1,
-        session: _session,
-      );
+      final result = await _loadPage();
       if (_disposed || generation != _generation || !allowed) return;
       final existingIds = items.map((e) => e.drama.id).toSet();
       final fresh = _filterSeen(
@@ -144,7 +234,7 @@ class VideoFeedController extends ChangeNotifier {
         retainId: retainId,
       ).where((e) => !existingIds.contains(e.drama.id)).toList();
       items = [...items, ...fresh];
-      _page = result.page;
+      _emptyPages = fresh.isEmpty ? _emptyPages + 1 : 0;
       hasMore = result.hasMore;
     } catch (failure) {
       if (!_disposed && generation == _generation) {
@@ -160,6 +250,7 @@ class VideoFeedController extends ChangeNotifier {
         if (active &&
             hasMore &&
             moreError == null &&
+            _emptyPages < 3 &&
             items.length - index < 3) {
           unawaited(loadMore(retainId: retainId));
         }
@@ -173,11 +264,14 @@ class VideoFeedController extends ChangeNotifier {
       return;
     }
     moreError = null;
+    _mixer?.retryFailures();
     await loadMore();
   }
 
   void select(int value) {
-    if (_disposed || value < 0 || value >= items.length) return;
+    if (_disposed || value == index || value < 0 || value >= items.length) {
+      return;
+    }
     index = value;
     _selection++;
     detail = null;
@@ -213,7 +307,10 @@ class VideoFeedController extends ChangeNotifier {
     try {
       final offset = store.stepFeedOffset();
       final newSession = '${DateTime.now().microsecondsSinceEpoch}_$offset';
-      final result = await repository.videoFeed(page: 1, session: newSession);
+      _mixer?.dispose();
+      _mixer = null;
+      _session = newSession;
+      final result = await _loadPage();
       if (_disposed || generation != _generation || !allowed) return;
       final existingIds = items.map((e) => e.drama.id).toSet();
       var fresh = _filterSeen(
@@ -221,17 +318,15 @@ class VideoFeedController extends ChangeNotifier {
         retainId: retainId,
       ).where((e) => !existingIds.contains(e.drama.id)).toList();
       if (fresh.isEmpty && result.items.isNotEmpty) {
-        fresh = result.items
+        fresh = _unique(result.items)
             .where((e) => !existingIds.contains(e.drama.id))
             .map((e) => FeedItem(drama: e.drama))
             .toList();
       }
       if (fresh.isNotEmpty) {
         items = [...items, ...fresh];
-        _page = result.page;
-        _session = newSession;
-        hasMore = result.hasMore;
       }
+      hasMore = result.hasMore;
     } catch (failure) {
       if (!_disposed && generation == _generation) {
         moreError = failure.toString();
@@ -245,12 +340,21 @@ class VideoFeedController extends ChangeNotifier {
   }
 
   Future<void> prepare() async {
-    if (_preparing || _disposed || !active || !allowed || current == null) {
+    if (_preparing == _generation ||
+        _disposed ||
+        !active ||
+        !allowed ||
+        current == null) {
       return;
     }
-    _preparing = true;
+    final generation = _generation;
+    _preparing = generation;
     try {
-      while (!_disposed && active && allowed && current != null) {
+      while (!_disposed &&
+          active &&
+          allowed &&
+          current != null &&
+          generation == _generation) {
         final ticket = _selection;
         final target = current!;
         final epoch = store.profileEpoch;
@@ -291,7 +395,7 @@ class VideoFeedController extends ChangeNotifier {
         }
       }
     } finally {
-      _preparing = false;
+      if (_preparing == generation) _preparing = null;
     }
   }
 
@@ -307,6 +411,10 @@ class VideoFeedController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    store.removeListener(_sourcesChanged);
+    _sourceService?.removeListener(_sourcesChanged);
+    _mixer?.dispose();
+    _savedScopes.clear();
     _generation++;
     _selection++;
     _selectionTimer?.cancel();

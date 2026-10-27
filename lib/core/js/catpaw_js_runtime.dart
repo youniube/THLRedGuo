@@ -513,7 +513,7 @@ globalThis.__native_save_device = function(json) {
       limit: limit,
       total: total,
       list: list,
-      hasMore: pg < pageCount,
+      hasMore: map['hasMore'] as bool? ?? pg < pageCount,
     );
   }
 
@@ -564,6 +564,38 @@ globalThis.__native_save_device = function(json) {
       page: page,
       hasMore: result['hasMore'] == true,
     );
+  }
+
+  final _feedCategories = <String, String>{};
+
+  Future<bool> supportsFeedMethod(String method) async {
+    if (!{'feed', 'recommendations'}.contains(method)) {
+      throw ArgumentError.value(method);
+    }
+    _assertReady();
+    return await _evalAsync('typeof spider.$method === "function"') == true;
+  }
+
+  Future<CatPawCategoryResult> videoFeed(int page, String session) async {
+    if (await supportsFeedMethod('feed')) return feed(page, session);
+    if (await supportsFeedMethod('recommendations')) {
+      return discoveryPage('recommendations', 'short_play', page);
+    }
+    var selected = _feedCategories[session];
+    if (selected == null) {
+      final categories = await home();
+      final ids = categories.classes
+          .map((entry) => entry['type_id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toList();
+      final offset = int.tryParse(session.split('_').last) ?? 0;
+      selected = ids.isEmpty ? '' : ids[(offset ~/ 6) % ids.length];
+      _feedCategories[session] = selected;
+      while (_feedCategories.length > 8) {
+        _feedCategories.remove(_feedCategories.keys.first);
+      }
+    }
+    return category(selected, page);
   }
 
   Future<List<String>> suggestions(String query) async {

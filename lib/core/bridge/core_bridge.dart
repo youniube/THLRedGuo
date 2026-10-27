@@ -80,8 +80,12 @@ abstract class AppRepository {
   Future<void> cancelCategories() async {}
   Future<void> cancelSuggestions() async {}
   Future<void> cancelRecommendations() async {}
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async =>
-      throw AppFailure('当前数据源暂不支持视频流推荐');
+  Future<void> cancelVideoFeed() async {}
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async => throw AppFailure('当前数据源暂不支持视频流推荐');
   Future<Drama?> supplementMetadata(Drama drama) async => null;
   Future<CatalogPage> recommendations(
     String genre, {
@@ -356,12 +360,19 @@ class NativeRepository extends AppRepository {
   Future<void> cancelRecommendations() => _cancelReads('recommendations-');
 
   @override
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async {
-    _authorize('hongguo');
+  Future<void> cancelVideoFeed() => _cancelReads('feed-');
+
+  @override
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async {
+    _authorize(source);
     return FeedPage.fromJson(
-      await _read('feed', {
+      await _read('feed-$source', {
         'action': 'feed',
-        'source': 'hongguo',
+        'source': source,
         'page': page,
         'feedSession': '$_readOwner:$session',
       }),
