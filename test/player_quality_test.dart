@@ -155,6 +155,7 @@ Future<_QualityPlayer> _openPlayer(
   int requestedQuality = 0,
   _QualityRepository? repository,
   _QualityPlayer? player,
+  ValueChanged<bool>? onBackgroundWorkAllowed,
 }) async {
   tester.view.physicalSize = const Size(430, 1000);
   tester.view.devicePixelRatio = 1;
@@ -181,6 +182,7 @@ Future<_QualityPlayer> _openPlayer(
         store: store,
         playerFactory: () => activePlayer,
         videoBuilder: (controls) => controls,
+        onBackgroundWorkAllowed: onBackgroundWorkAllowed,
       ),
     ),
   );
@@ -194,6 +196,37 @@ String _qualityLabel(WidgetTester tester) =>
     tester.widget<PlayerControls>(find.byType(PlayerControls)).qualityLabel;
 
 void main() {
+  testWidgets('首播和缓冲不足时暂停后台请求，缓冲充足后才放行', (tester) async {
+    final allowed = <bool>[];
+    final player = await _openPlayer(
+      tester,
+      onBackgroundWorkAllowed: allowed.add,
+    );
+    void progress(int position, int buffer, {bool buffering = false}) {
+      player.state = player.state.copyWith(
+        position: Duration(milliseconds: position),
+        buffer: Duration(milliseconds: buffer),
+        buffering: buffering,
+      );
+      player.stream.positionController.add(player.state.position);
+    }
+
+    progress(500, 20000);
+    await tester.pump();
+    expect(allowed, isEmpty);
+    progress(4000, 7000);
+    await tester.pump();
+    expect(allowed, isEmpty);
+    progress(4000, 15000);
+    await tester.pump();
+    expect(allowed, [true]);
+    progress(4500, 15000, buffering: true);
+    await tester.pump();
+    expect(allowed, [true, false]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   test('显示尺寸使用完整的显示宽高、旋转及像素比例，缺失时不混用尺寸', () {
     expect(
       videoDisplaySize(const VideoParams(w: 1920, h: 1080, rotate: 90)),

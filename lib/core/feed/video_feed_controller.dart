@@ -43,6 +43,7 @@ class VideoFeedController extends ChangeNotifier {
   String _sourceKey = '';
   int _profileEpoch = -1;
   int _emptyPages = 0;
+  bool _backgroundWorkAllowed = false;
   final _savedScopes = <String, ({List<FeedItem> items, int index})>{};
 
   FeedSourceSelection get selection => store.feedSources;
@@ -93,6 +94,7 @@ class VideoFeedController extends ChangeNotifier {
     items = saved?.items ?? [];
     index = saved?.index ?? 0;
     _emptyPages = 0;
+    _backgroundWorkAllowed = false;
     detail = null;
     loading = loadingMore = loadingDetail = false;
     hasMore = true;
@@ -127,6 +129,7 @@ class VideoFeedController extends ChangeNotifier {
   void setActive(bool value) {
     if (_disposed || active == value) return;
     active = value;
+    _backgroundWorkAllowed = false;
     if (!active) {
       detail = null;
       loadingDetail = false;
@@ -159,6 +162,7 @@ class VideoFeedController extends ChangeNotifier {
     detail = null;
     index = 0;
     _emptyPages = 0;
+    _backgroundWorkAllowed = false;
     _details.clear();
     loading = true;
     loadingMore = false;
@@ -183,9 +187,7 @@ class VideoFeedController extends ChangeNotifier {
         loading = false;
         notifyListeners();
         if (active) unawaited(prepare());
-        if (active && hasMore && items.length < 3) {
-          unawaited(loadMore(retainId: retainId));
-        }
+        _fillWhenReady(retainId: retainId);
       }
     }
   }
@@ -247,13 +249,37 @@ class VideoFeedController extends ChangeNotifier {
       if (!_disposed && generation == _generation) {
         loadingMore = false;
         notifyListeners();
-        if (active &&
-            hasMore &&
-            moreError == null &&
-            _emptyPages < 3 &&
-            items.length - index < 3) {
-          unawaited(loadMore(retainId: retainId));
+        if (active && detail == null && !loadingDetail && detailError == null) {
+          unawaited(prepare());
         }
+        _fillWhenReady(retainId: retainId);
+      }
+    }
+  }
+
+  void _fillWhenReady({String? retainId}) {
+    if (active &&
+        hasMore &&
+        moreError == null &&
+        _emptyPages < 3 &&
+        items.length - index < 3 &&
+        (_backgroundWorkAllowed || items.isEmpty)) {
+      unawaited(loadMore(retainId: retainId));
+    }
+  }
+
+  void setBackgroundWorkAllowed(String dramaId, bool allowed) {
+    if (_disposed ||
+        !active ||
+        current?.drama.id != dramaId ||
+        _backgroundWorkAllowed == allowed) {
+      return;
+    }
+    _backgroundWorkAllowed = allowed;
+    if (allowed) {
+      _fillWhenReady();
+      if (!hasMore && index >= items.length - 2) {
+        unawaited(nextBatch());
       }
     }
   }
@@ -273,6 +299,7 @@ class VideoFeedController extends ChangeNotifier {
       return;
     }
     index = value;
+    _backgroundWorkAllowed = false;
     _selection++;
     detail = null;
     detailError = null;
@@ -283,13 +310,6 @@ class VideoFeedController extends ChangeNotifier {
       const Duration(milliseconds: 160),
       () => unawaited(prepare()),
     );
-    if (index >= items.length - 2) {
-      if (hasMore) {
-        unawaited(loadMore());
-      } else {
-        unawaited(nextBatch());
-      }
-    }
   }
 
   Future<void> nextBatch({String? retainId}) async {
@@ -403,6 +423,7 @@ class VideoFeedController extends ChangeNotifier {
     if (_disposed || current == null) return;
     items = [...items]..[index] = FeedItem(drama: next.drama);
     detail = next;
+    _backgroundWorkAllowed = false;
     _details[next.drama.id] = next;
     _selection++;
     notifyListeners();

@@ -1347,6 +1347,7 @@ class DartCoreEngine {
       results,
       requestedQuality: requestedQuality,
       routeNames: resultNames,
+      preferredRoute: input['preferredRoute']?.toString() ?? '',
       avoidUrl: avoidUrl,
       cancelled: cancelled,
       probeBudget: const Duration(seconds: 65) - clock.elapsed,

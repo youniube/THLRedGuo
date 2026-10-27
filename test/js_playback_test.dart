@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -198,6 +200,102 @@ video.m3u8
         isA<CatPawSourceFailure>().having((e) => e.code, 'code', 'cancelled'),
       ),
     );
+  });
+
+  test('多条 HLS 只探测当前首选，备用线路不占用启动时间', () async {
+    final requests = <Uri>[];
+    final hlsClient = MockClient((request) async {
+      requests.add(request.url);
+      return http.Response('#EXTM3U\n#EXTINF:10\nsegment.ts', 200);
+    });
+    final plans = await JsPlaybackResolver(hlsClient).resolve([
+      for (var index = 0; index < 25; index++)
+        CatPawPlayResult(
+          url: 'https://media.invalid/$index.m3u8',
+          header: const {},
+          routeKey: 'route-$index',
+        ),
+    ]);
+    expect(requests.map((uri) => uri.path), ['/0.m3u8']);
+    expect(plans, hasLength(25));
+    expect(plans.first['url'], 'https://media.invalid/0.m3u8');
+  });
+
+  test('优先线路的 HLS 清晰度先解析，自动线路不抢占探测预算', () async {
+    final requests = <Uri>[];
+    final hlsClient = MockClient((request) async {
+      requests.add(request.url);
+      return http.Response(
+        '#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1280x720\n720.m3u8',
+        200,
+      );
+    });
+    final plans = await JsPlaybackResolver(hlsClient).resolve(
+      const [
+        CatPawPlayResult(
+          url: 'https://media.invalid/auto.m3u8',
+          header: {},
+          routeKey: 'auto',
+        ),
+        CatPawPlayResult(
+          url: 'https://preferred.invalid/master.m3u8',
+          header: {},
+          routeKey: 'preferred',
+        ),
+      ],
+      preferredRoute: 'id:preferred',
+      requestedQuality: 720,
+    );
+    expect(requests.single.host, 'preferred.invalid');
+    final session = JsPlaybackSession(
+      'preferred-session',
+      plans,
+      preferredRoute: 'id:preferred',
+    );
+    expect(session.current['url'], 'https://preferred.invalid/720.m3u8');
+    expect(session.current['quality'], 720);
+    expect(plans, hasLength(3));
+  });
+
+  test('HLS 探测超时立即保留原流，不继续等待其他线路', () async {
+    var requests = 0;
+    final hlsClient = MockClient((_) {
+      requests++;
+      return Completer<http.Response>().future;
+    });
+    final plans = await JsPlaybackResolver(hlsClient).resolve(const [
+      CatPawPlayResult(url: 'https://media.invalid/first.m3u8', header: {}),
+      CatPawPlayResult(url: 'https://media.invalid/backup.m3u8', header: {}),
+    ], probeBudget: const Duration(milliseconds: 20));
+    expect(requests, 1);
+    expect(plans, hasLength(2));
+    expect(plans.first['url'], 'https://media.invalid/first.m3u8');
+  });
+
+  test('主列表重复出现时都使用实际子列表画质', () async {
+    final hlsClient = MockClient(
+      (_) async => http.Response(
+        '#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1280x720\n720.m3u8',
+        200,
+      ),
+    );
+    final plans = await JsPlaybackResolver(hlsClient).resolve(const [
+      CatPawPlayResult(
+        url: 'https://media.invalid/master.m3u8',
+        header: {'Referer': 'https://site.invalid/', 'X-Route': 'same'},
+        quality: 1080,
+        streams: [
+          CatPawPlayResult(
+            url: 'https://media.invalid/master.m3u8',
+            header: {'X-Route': 'same', 'Referer': 'https://site.invalid/'},
+            quality: 1080,
+          ),
+        ],
+      ),
+    ]);
+    expect(plans, hasLength(2));
+    expect(plans.first['quality'], 720);
+    expect(plans.last['quality'], 0);
   });
 
   test('JS streams 正确保留每档元数据和公共请求头', () async {

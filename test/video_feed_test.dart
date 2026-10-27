@@ -149,6 +149,9 @@ void main() {
       feed.setActive(true);
       await flush();
       expect(feed.detail?.drama.id, a.id);
+      expect(repo.pages, [1]);
+      feed.setBackgroundWorkAllowed(a.id, true);
+      await flush();
       feed.setActive(false);
       expect(feed.detail, isNull);
       expect(feed.items.length, 3);
@@ -192,9 +195,13 @@ void main() {
       final feed = VideoFeedController(repo, store);
       feed.setActive(true);
       await flush();
+      feed.setBackgroundWorkAllowed(a.id, true);
+      await flush();
       expect(feed.restartRequired, true);
       repo.failMore = false;
       await feed.retryMore();
+      await flush();
+      feed.setBackgroundWorkAllowed(a.id, true);
       await flush();
       expect(repo.pages, [1, 2, 1, 2]);
       expect(feed.restartRequired, false);
@@ -212,7 +219,7 @@ void main() {
     await feed.refresh();
     old.complete(const FeedPage(items: [], page: 1, hasMore: false));
     await flush();
-    expect(feed.items.length, 3);
+    expect(feed.items.length, 2);
     expect(feed.error, isNull);
     feed.dispose();
   });
@@ -412,12 +419,44 @@ void main() {
     feed.setActive(true);
     await flush();
 
+    expect(feed.items.length, 2);
+    feed.setBackgroundWorkAllowed(feed.current!.drama.id, true);
+    await flush();
+
     expect(feed.items.length, 4); // 初始拉取 page 1 和 page 2
     expect(feed.hasMore, false); // 第二页返回 hasMore = false
 
     // 触发下一批次轮转拉取
     await feed.nextBatch();
     expect(feed.items.length, 4); // 相同 items 已在当前列表中（去重保护）
+    feed.dispose();
+  });
+
+  test('开头缓冲完成才补拉推荐，旧视频回调不能放行新视频请求', () async {
+    final repo = Repo();
+    final feed = VideoFeedController(repo, store);
+    feed.setActive(true);
+    await flush();
+    expect(repo.pages, [1]);
+    feed.select(1);
+    feed.setBackgroundWorkAllowed(a.id, true);
+    await flush();
+    expect(repo.pages, [1]);
+    feed.setBackgroundWorkAllowed(b.id, true);
+    await flush();
+    expect(repo.pages, [1, 2]);
+    expect(feed.items, hasLength(3));
+    feed.dispose();
+  });
+
+  test('空首批仍继续取推荐并准备首部视频', () async {
+    final repo = Repo()..first = Completer<FeedPage>();
+    final feed = VideoFeedController(repo, store);
+    feed.setActive(true);
+    repo.first!.complete(const FeedPage(items: [], page: 1, hasMore: true));
+    await flush();
+    expect(repo.pages, [1, 2]);
+    expect(feed.detail?.drama.id, b.id);
     feed.dispose();
   });
   _feedSourceSelectionTests();

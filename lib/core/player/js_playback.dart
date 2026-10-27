@@ -151,22 +151,22 @@ class JsPlaybackSession {
 class JsPlaybackResolver {
   JsPlaybackResolver(this.client);
 
+  static const _probeTimeout = Duration(milliseconds: 1500);
+
   final http.Client client;
 
   Future<List<Map<String, dynamic>>> resolve(
     List<CatPawPlayResult> results, {
     int requestedQuality = 0,
     List<String> routeNames = const [],
+    String preferredRoute = '',
     String avoidUrl = '',
     bool Function()? cancelled,
-    Duration probeBudget = const Duration(seconds: 8),
+    Duration probeBudget = _probeTimeout,
   }) async {
     final clock = Stopwatch()..start();
-    final budget = probeBudget < const Duration(seconds: 8)
-        ? probeBudget
-        : const Duration(seconds: 8);
+    final budget = probeBudget < _probeTimeout ? probeBudget : _probeTimeout;
     final candidates = <Map<String, dynamic>>[];
-    final manifests = <String, Future<List<Map<String, dynamic>>>>{};
     final declared = <int>{};
     for (var resultIndex = 0; resultIndex < results.length; resultIndex++) {
       final result = results[resultIndex];
@@ -222,28 +222,54 @@ class JsPlaybackResolver {
               : 'video/mp4',
         };
         candidates.add(plan);
-        final manifestKey = jsonEncode([stream.url, stream.header]);
-        if (uri.path.toLowerCase().endsWith('.m3u8') &&
-            stream.decryptionKey.isEmpty &&
-            (manifests.containsKey(manifestKey) || clock.elapsed < budget)) {
-          final remaining = budget - clock.elapsed;
-          final variants = await manifests.putIfAbsent(
-            manifestKey,
-            () => _hlsVariants(
-              uri,
-              stream.header,
-              remaining < const Duration(seconds: 4)
-                  ? remaining
-                  : const Duration(seconds: 4),
-            ),
-          );
-          if (variants.isNotEmpty) {
-            plan['quality'] = 0;
-            for (final variant in variants) {
-              if (variant['url'] != avoidUrl) {
-                candidates.add({...plan, ...variant});
-              }
-            }
+      }
+    }
+
+    int rank(int q) {
+      if (requestedQuality <= 0) return q > 0 ? -q : 100000;
+      if (q <= 0) return 100000;
+      if (q <= requestedQuality) return requestedQuality - q;
+      return 10000 + q;
+    }
+
+    String identity(Map<String, dynamic> plan) {
+      final headers = (plan['headers'] as Map).entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      return jsonEncode([
+        plan['url'],
+        Map.fromEntries(headers),
+        plan['decryptionKey'],
+      ]);
+    }
+
+    final preferred = candidates.where(
+      (plan) => preferredRoute.isNotEmpty && plan['routeKey'] == preferredRoute,
+    );
+    Map<String, dynamic>? primary;
+    for (final plan in preferred.isEmpty ? candidates : preferred) {
+      if (primary == null ||
+          rank(plan['quality'] as int) < rank(primary['quality'] as int)) {
+        primary = plan;
+      }
+    }
+    if (primary != null &&
+        primary['mimeType'] == 'application/x-mpegURL' &&
+        (primary['decryptionKey'] as String).isEmpty &&
+        clock.elapsed < budget) {
+      final timeout = budget - clock.elapsed;
+      final variants = await _hlsVariants(
+        Uri.parse(primary['url'] as String),
+        primary['headers'] as Map<String, String>,
+        timeout,
+      ).timeout(timeout, onTimeout: () => []);
+      if (variants.isNotEmpty) {
+        final key = identity(primary);
+        for (final plan in candidates) {
+          if (identity(plan) == key) plan['quality'] = 0;
+        }
+        for (final variant in variants) {
+          if (variant['url'] != avoidUrl) {
+            candidates.add({...primary, ...variant});
           }
         }
       }
@@ -253,13 +279,7 @@ class JsPlaybackResolver {
     }
     final unique = <String, Map<String, dynamic>>{};
     for (final plan in candidates) {
-      final headers = (plan['headers'] as Map).entries.toList()
-        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
-      final key = jsonEncode([
-        plan['url'],
-        Map.fromEntries(headers),
-        plan['decryptionKey'],
-      ]);
+      final key = identity(plan);
       if (!unique.containsKey(key) ||
           (plan['quality'] as int) > (unique[key]!['quality'] as int)) {
         unique[key] = plan;
@@ -267,13 +287,6 @@ class JsPlaybackResolver {
     }
     final ordered = unique.values.toList();
     final positions = {for (var i = 0; i < ordered.length; i++) ordered[i]: i};
-    int rank(int q) {
-      if (requestedQuality <= 0) return q > 0 ? -q : 100000;
-      if (q <= 0) return 100000;
-      if (q <= requestedQuality) return requestedQuality - q;
-      return 10000 + q;
-    }
-
     ordered.sort((a, b) {
       final comparison = rank(
         a['quality'] as int,

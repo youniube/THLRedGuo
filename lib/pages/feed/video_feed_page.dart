@@ -201,6 +201,8 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
         feed: true,
         playbackQueue: feed.playback,
         onOpenDetail: () => unawaited(_openDetail()),
+        onBackgroundWorkAllowed: (allowed) =>
+            feed.setBackgroundWorkAllowed(detail.drama.id, allowed),
         onSeasonChanged: feed.switchSeason,
       );
     }

@@ -69,6 +69,7 @@ class PlayerScreen extends StatefulWidget {
     this.feed = false,
     this.playbackQueue,
     this.onOpenDetail,
+    this.onBackgroundWorkAllowed,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -84,6 +85,7 @@ class PlayerScreen extends StatefulWidget {
   final bool feed;
   final PlaybackLeaseQueue? playbackQueue;
   final VoidCallback? onOpenDetail;
+  final ValueChanged<bool>? onBackgroundWorkAllowed;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -101,6 +103,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final PlaybackLoader _loader;
   late final PlaybackPreloader _preloader;
   bool _preloadEnabled = true;
+  bool _backgroundWorkAllowed = false;
   late final DanmakuController _danmaku;
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
@@ -1112,8 +1115,39 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  void _setBackgroundWorkAllowed(bool allowed) {
+    if (_backgroundWorkAllowed == allowed) return;
+    _backgroundWorkAllowed = allowed;
+    scheduleMicrotask(() {
+      if (mounted && !_closed && _backgroundWorkAllowed == allowed) {
+        widget.onBackgroundWorkAllowed?.call(allowed);
+      }
+    });
+  }
+
   void _syncPreload() {
     if (_closed) return;
+    final state = _player.state;
+    final duration = state.duration.inMilliseconds;
+    final position = state.position.inMilliseconds;
+    final remaining = duration - position;
+    final bufferTarget = (8000 * _speed).round();
+    final buffered = state.buffer.inMilliseconds - position;
+    final headroom =
+        _foreground &&
+        !_loading &&
+        _error == null &&
+        _openedIndex == _index &&
+        widget.store.profileEpoch == _profileEpoch &&
+        !widget.store.locked &&
+        state.playing &&
+        !state.buffering &&
+        _playIntent &&
+        position >= 3000 &&
+        remaining > 0 &&
+        (_plan?.local == true ||
+            buffered >= (remaining < bufferTarget ? remaining : bufferTarget));
+    _setBackgroundWorkAllowed(headroom);
     if (!_preloadEnabled ||
         !_foreground ||
         widget.localOnly ||
@@ -1127,14 +1161,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       _preloader.clear();
       return;
     }
-    final state = _player.state;
-    if (!state.playing || state.buffering || !_playIntent) {
+    if (!headroom || remaining > (30000 * _speed).round()) {
       _preloader.pause();
-      return;
-    }
-    final duration = state.duration.inMilliseconds;
-    final position = state.position.inMilliseconds;
-    if (duration <= 0 || position < 500) {
       return;
     }
     _preloader.prepare(
@@ -1423,6 +1451,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               )
             : null);
     _preloader.clear();
+    _setBackgroundWorkAllowed(false);
     final ticket = ++_generation;
     unawaited(_encryptedPlayback.cancel());
     _enhancement.suspend();
@@ -1636,6 +1665,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           });
           _danmaku.setPlan(plan);
           _syncDanmaku();
+          _syncPreload();
           _acknowledgeHandoff();
           _menuRevision.value++;
           if (_pictureInPictureActive) {
