@@ -30,6 +30,7 @@ class TelevisionControls extends StatefulWidget {
     required this.onSettings,
     required this.onBack,
     this.enhancement,
+    this.onRoutes,
   });
   final Player player;
   final String title;
@@ -43,6 +44,7 @@ class TelevisionControls extends StatefulWidget {
   final Future<void> Function() onSettings;
   final VoidCallback onBack;
   final VideoEnhancementController? enhancement;
+  final Future<void> Function()? onRoutes;
 
   @override
   State<TelevisionControls> createState() => _TelevisionControlsState();
@@ -54,6 +56,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
   final _episodes = FocusNode(debugLabel: 'tv-player-episodes');
   final _diary = FocusNode(debugLabel: 'tv-player-diary');
   final _settings = FocusNode(debugLabel: 'tv-player-settings');
+  final _routes = FocusNode(debugLabel: 'tv-player-routes');
   final _progress = FocusNode(debugLabel: 'tv-player-progress');
   final _subscriptions = <StreamSubscription<dynamic>>[];
   Timer? _hideTimer;
@@ -244,6 +247,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
       _episodes,
       _diary,
       _settings,
+      _routes,
       _progress,
     ]) {
       node.dispose();
@@ -420,6 +424,15 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                               onPressed: () =>
                                   _openPanel(widget.onEpisodes, _episodes),
                             ),
+                            if (widget.onRoutes != null)
+                              RemoteButton(
+                                key: const ValueKey('tv-routes'),
+                                label: '线路',
+                                icon: Icons.alt_route_rounded,
+                                focusNode: _routes,
+                                onPressed: () =>
+                                    _openPanel(widget.onRoutes!, _routes),
+                              ),
                             RemoteButton(
                               key: const ValueKey('tv-diary'),
                               label: '播放日记',

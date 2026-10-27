@@ -69,6 +69,85 @@ List<Map<String, dynamic>> jsPlaybackChapters(String urls, String names) {
   return result;
 }
 
+class JsPlaybackSession {
+  JsPlaybackSession(this.id, this.plans, {String preferredRoute = ''}) {
+    final preferred = [
+      for (var index = 0; index < plans.length; index++)
+        if (preferredRoute.isNotEmpty &&
+            plans[index]['routeKey'] == preferredRoute)
+          index,
+    ];
+    _order = [
+      ...preferred,
+      for (var index = 0; index < plans.length; index++)
+        if (!preferred.contains(index)) index,
+    ];
+    routes = [
+      for (var index = 0; index < plans.length; index++)
+        {
+          'index': index,
+          'key': plans[index]['routeKey'],
+          'name': plans[index]['routeName'],
+          'host': Uri.tryParse(plans[index]['url'] as String)?.host ?? '',
+          'quality': plans[index]['quality'],
+          'expiresAt': plans[index]['expiresAt'],
+        },
+    ];
+  }
+
+  final String id;
+  final List<Map<String, dynamic>> plans;
+  late final List<Map<String, dynamic>> routes;
+  late List<int> _order;
+  int _position = 0;
+
+  Map<String, dynamic> get current => {
+    ...plans[_order[_position]],
+    'session': id,
+    'routeIndex': _order[_position],
+    'routeCount': plans.length,
+    'routes': routes,
+    'hasAlternative': _position + 1 < _order.length,
+  };
+
+  bool _expired(int index) {
+    final expiresAt = plans[index]['expiresAt'] as int? ?? 0;
+    return expiresAt > 0 && expiresAt <= DateTime.now().millisecondsSinceEpoch;
+  }
+
+  Map<String, dynamic> select(int index) {
+    if (index < 0 || index >= plans.length) {
+      throw const CatPawSourceFailure('线路已变化，请重新打开线路列表', code: 'INVALID_ROUTE');
+    }
+    if (_expired(index)) {
+      throw const CatPawSourceFailure(
+        '所选线路地址已过期，请重试获取新地址',
+        code: 'ROUTE_EXPIRED',
+      );
+    }
+    final key = plans[index]['routeKey'];
+    _order = [
+      index,
+      for (var candidate = 0; candidate < plans.length; candidate++)
+        if (candidate != index && plans[candidate]['routeKey'] == key)
+          candidate,
+      for (var candidate = 0; candidate < plans.length; candidate++)
+        if (candidate != index && plans[candidate]['routeKey'] != key)
+          candidate,
+    ];
+    _position = 0;
+    return current;
+  }
+
+  Map<String, dynamic> fallback() {
+    while (_position + 1 < _order.length) {
+      _position++;
+      if (!_expired(_order[_position])) return current;
+    }
+    throw const CatPawSourceFailure('无备用播放流', code: 'NO_ALTERNATIVE');
+  }
+}
+
 class JsPlaybackResolver {
   JsPlaybackResolver(this.client);
 
@@ -77,6 +156,7 @@ class JsPlaybackResolver {
   Future<List<Map<String, dynamic>>> resolve(
     List<CatPawPlayResult> results, {
     int requestedQuality = 0,
+    List<String> routeNames = const [],
     String avoidUrl = '',
     bool Function()? cancelled,
     Duration probeBudget = const Duration(seconds: 8),
@@ -88,7 +168,8 @@ class JsPlaybackResolver {
     final candidates = <Map<String, dynamic>>[];
     final manifests = <String, Future<List<Map<String, dynamic>>>>{};
     final declared = <int>{};
-    for (final result in results) {
+    for (var resultIndex = 0; resultIndex < results.length; resultIndex++) {
+      final result = results[resultIndex];
       for (final stream in [result, ...result.streams]) {
         if (cancelled?.call() == true) {
           throw CatPawSourceFailure.playback('cancelled');
@@ -111,8 +192,24 @@ class JsPlaybackResolver {
         final quality = stream.quality > 0
             ? stream.quality
             : int.tryParse(detected?.group(1) ?? '') ?? 0;
+        final group = resultIndex < routeNames.length
+            ? routeNames[resultIndex]
+            : '';
+        final routeKey = stream.routeKey.isNotEmpty
+            ? 'id:${stream.routeKey}'
+            : stream.name.isNotEmpty
+            ? 'name:${stream.name}'
+            : group.isNotEmpty && group != 'flag' && result.streams.isEmpty
+            ? 'name:$group'
+            : 'host:$group:${uri.host}';
         final plan = <String, dynamic>{
           'url': stream.url,
+          'routeKey': routeKey,
+          'routeName': stream.name.isNotEmpty
+              ? stream.name
+              : resultIndex < routeNames.length
+              ? routeNames[resultIndex]
+              : '',
           'headers': stream.header,
           'decryptionKey': stream.decryptionKey,
           'mediaBytes': stream.mediaBytes,

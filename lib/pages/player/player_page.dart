@@ -43,6 +43,7 @@ import 'package:THLRedLook/views/player/player_mobile_panel_view.dart';
 import 'package:THLRedLook/views/player/player_desktop_panel_view.dart';
 import 'package:THLRedLook/views/player/player_viewport_view.dart';
 import 'package:THLRedLook/views/player/player_quality_sheet_view.dart';
+import 'package:THLRedLook/views/player/player_routes_sheet_view.dart';
 import 'package:THLRedLook/views/player/player_speed_sheet_view.dart';
 import 'package:THLRedLook/views/player/player_danmaku_sheet_view.dart';
 import 'package:THLRedLook/utils/player/player_dialog_helper.dart';
@@ -178,6 +179,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   PlaybackPreferences get _preferences => PlaybackPreferences(
     speed: _speed,
     quality: _requestedQuality,
+    sourceRoutes: widget.store.playbackPreferences.sourceRoutes,
     engine: _engine,
     autoAdvance: _autoAdvance,
     pictureInPicture: widget.store.playbackPreferences.pictureInPicture,
@@ -202,6 +204,19 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   String get _session => _plan?.session ?? '';
+  bool get _canSwitchRoutes {
+    final plan = _plan;
+    return plan != null &&
+        !plan.offline &&
+        plan.session.isNotEmpty &&
+        plan.routes
+                .where(
+                  (route) => route.index == plan.routeIndex || !route.expired,
+                )
+                .length >
+            1;
+  }
+
   String get _currentEngineLabel => _player is LunaExoPlayer
       ? _player.streamingDecryption
             ? 'MPV'
@@ -1375,6 +1390,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     PlaybackPlan? recoveryPlan,
     bool playWhenReady = true,
     PlaybackPlan? handoffPlan,
+    PlaybackPlan? selectedRoute,
     bool showControlsOnReady = true,
   }) async {
     await _playbackLease?.ready;
@@ -1403,6 +1419,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         (_recovery.cacheAttempted ||
             (_plan?.decryptionKey.isNotEmpty ?? false));
     final warmed =
+        selectedRoute ??
         handoffPlan ??
         (recoveryAction == null && _preloadEnabled && !widget.localOnly
             ? _preloader.take(
@@ -1475,7 +1492,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (recoveryAction == PlaybackRecoveryAction.alternative ||
             recoveryAction == PlaybackRecoveryAction.cache) {
           retained = previous;
-        } else if (previous != null) {
+        } else if (previous != null && previous.session != warmed?.session) {
           if (recoveryAction == PlaybackRecoveryAction.refresh) {
             failedPlan = previous;
           }
@@ -1967,6 +1984,91 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  Future<void> _openRoutes() async {
+    final plan = _plan;
+    if (_panelOpen ||
+        _closed ||
+        _loading ||
+        plan == null ||
+        !_canSwitchRoutes) {
+      return;
+    }
+    final ticket = _generation;
+    final source = widget.detail.drama.source;
+    final preferred = _preferences.sourceRoutes[source] ?? '';
+    _interactions.cancel();
+    setState(() => _panelOpen = true);
+    try {
+      final selected = await PlayerRoutesSheetView.show(
+        context: context,
+        plan: plan,
+        preferredRoute: preferred,
+        mobile: _mobile,
+      );
+      if (!mounted ||
+          _closed ||
+          selected == null ||
+          ticket != _generation ||
+          widget.store.profileEpoch != _profileEpoch ||
+          widget.store.locked) {
+        return;
+      }
+      final route = plan.routes
+          .where((route) => route.index == selected)
+          .firstOrNull;
+      if (selected >= 0 && (route == null || route.expired)) {
+        _notice('所选线路地址已过期，请重试获取新地址');
+        return;
+      }
+      final routes = Map<String, String>.of(_preferences.sourceRoutes);
+      if (selected < 0) {
+        if (preferred.isEmpty) return;
+        routes.remove(source);
+      } else {
+        if (route!.key.isEmpty) return;
+        routes[source] = route.key;
+      }
+      await widget.store.setPlaybackPreferences(
+        _preferences.copyWith(sourceRoutes: routes),
+      );
+      if (!mounted ||
+          _closed ||
+          ticket != _generation ||
+          widget.store.profileEpoch != _profileEpoch) {
+        return;
+      }
+      _preloader.clear();
+      if (selected == plan.routeIndex && _error == null) {
+        _syncPreload();
+        return;
+      }
+      final selectedPlan = selected < 0
+          ? null
+          : await widget.repository.selectRoute(plan, selected);
+      if (!mounted ||
+          _closed ||
+          ticket != _generation ||
+          widget.store.profileEpoch != _profileEpoch) {
+        return;
+      }
+      await _play(
+        _index,
+        position: _currentPosition,
+        playWhenReady: _playIntent,
+        selectedRoute: selectedPlan,
+      );
+    } catch (error) {
+      if (mounted && !_closed && ticket == _generation) {
+        _notice(error is AppFailure ? error.message : '未能切换线路，请重试');
+      }
+    } finally {
+      if (mounted && !_closed) {
+        setState(() => _panelOpen = false);
+        _playerFocus.requestFocus();
+      }
+    }
+  }
+
   Future<void> _openDanmakuSettings() async {
     if (_panelOpen || _closed) return;
     _interactions.cancel();
@@ -2422,6 +2524,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       onSwitchOnline: _switchOnline,
       onSaveProgress: _saveProgress,
       onOpenPanel: _openPanel,
+      onRoutes: _canSwitchRoutes ? _openRoutes : null,
       onToggleDanmaku: _toggleDanmaku,
       onDanmakuSettings: _openDanmakuSettings,
       onRetryDanmaku: _retryDanmakuFromControls,

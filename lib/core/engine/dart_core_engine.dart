@@ -48,7 +48,7 @@ class DartCoreEngine {
     scriptFor: (source) => _sourceScripts[source],
     client: client,
   );
-  final Map<String, Iterator<Map<String, dynamic>>> _playbackSessions = {};
+  final Map<String, JsPlaybackSession> _playbackSessions = {};
   int _playbackEpoch = 0;
   String _activeSourceId = 'hongguo';
 
@@ -371,6 +371,15 @@ class DartCoreEngine {
         return await _resolvePlayback(input);
       case 'fallback':
         return _fallbackPlayback(input);
+      case 'selectRoute':
+        final session = _playbackSessions[input['session']];
+        if (session == null) {
+          throw const CatPawSourceFailure(
+            '播放会话已失效，请重试',
+            code: 'INVALID_SESSION',
+          );
+        }
+        return session.select((input['routeIndex'] as num?)?.toInt() ?? -1);
       case 'cancelPlayback':
         final sequence =
             (input['sequence'] as num?)?.toInt() ?? _playbackSequence + 1;
@@ -1206,6 +1215,7 @@ class DartCoreEngine {
     final clock = Stopwatch()..start();
     Duration remaining() => const Duration(seconds: 60) - clock.elapsed;
     final results = <CatPawPlayResult>[];
+    final resultNames = <String>[];
     Object? sourceFailure;
     final rt = await _getSpiderRuntime(
       source,
@@ -1269,6 +1279,7 @@ class DartCoreEngine {
           }
           if (playRes.url.isNotEmpty || playRes.streams.isNotEmpty) {
             results.add(playRes);
+            resultNames.add(flag);
           } else {
             sourceFailure = CatPawSourceFailure.playback(playRes.errorCode);
             retryFromDetail = true;
@@ -1329,27 +1340,25 @@ class DartCoreEngine {
       results.add(
         CatPawPlayResult(url: chapter['url'] as String, header: const {}),
       );
+      resultNames.add('');
     }
     final plans = await JsPlaybackResolver(client).resolve(
       results,
       requestedQuality: requestedQuality,
+      routeNames: resultNames,
       avoidUrl: avoidUrl,
       cancelled: cancelled,
       probeBudget: const Duration(seconds: 65) - clock.elapsed,
     );
     if (plans.isNotEmpty) {
       final session = 'sess_${DateTime.now().microsecondsSinceEpoch}_$source';
-      final iterator = [
-        for (var index = 0; index < plans.length; index++)
-          {
-            ...plans[index],
-            'session': session,
-            'routeIndex': index,
-            'routeCount': plans.length,
-          },
-      ].iterator..moveNext();
-      _playbackSessions[session] = iterator;
-      return iterator.current;
+      final playback = JsPlaybackSession(
+        session,
+        plans,
+        preferredRoute: input['preferredRoute']?.toString() ?? '',
+      );
+      _playbackSessions[session] = playback;
+      return playback.current;
     }
 
     if (sourceFailure != null) throw sourceFailure;
@@ -1357,13 +1366,8 @@ class DartCoreEngine {
   }
 
   Map<String, dynamic> _fallbackPlayback(Map<String, dynamic> input) {
-    final routes = _playbackSessions[input['session']];
-    while (routes != null && routes.moveNext()) {
-      final expiresAt = routes.current['expiresAt'] as int? ?? 0;
-      if (expiresAt <= 0 || expiresAt > DateTime.now().millisecondsSinceEpoch) {
-        return routes.current;
-      }
-    }
+    final session = _playbackSessions[input['session']];
+    if (session != null) return session.fallback();
     throw const CatPawSourceFailure('无备用播放流', code: 'NO_ALTERNATIVE');
   }
 

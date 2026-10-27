@@ -8,6 +8,7 @@ class PlaybackPreferences {
   const PlaybackPreferences({
     this.speed = 1,
     this.quality = 0,
+    this.sourceRoutes = const {},
     this.engine = PlaybackEngine.automatic,
     this.autoAdvance = true,
     this.pictureInPicture = false,
@@ -19,6 +20,7 @@ class PlaybackPreferences {
 
   final double speed;
   final int quality;
+  final Map<String, String> sourceRoutes;
   final PlaybackEngine engine;
   final bool autoAdvance;
   final bool pictureInPicture;
@@ -30,6 +32,7 @@ class PlaybackPreferences {
   PlaybackPreferences copyWith({
     double? speed,
     int? quality,
+    Map<String, String>? sourceRoutes,
     PlaybackEngine? engine,
     bool? autoAdvance,
     bool? pictureInPicture,
@@ -40,6 +43,7 @@ class PlaybackPreferences {
   }) => PlaybackPreferences(
     speed: speed ?? this.speed,
     quality: quality ?? this.quality,
+    sourceRoutes: sourceRoutes ?? this.sourceRoutes,
     engine: engine ?? this.engine,
     autoAdvance: autoAdvance ?? this.autoAdvance,
     pictureInPicture: pictureInPicture ?? this.pictureInPicture,
@@ -52,6 +56,7 @@ class PlaybackPreferences {
   Map<String, dynamic> toJson() => {
     'speed': speed,
     'quality': quality,
+    'sourceRoutes': sourceRoutes,
     'engine': engine.name,
     'autoAdvance': autoAdvance,
     'pictureInPicture': pictureInPicture,
@@ -77,6 +82,17 @@ class PlaybackPreferences {
     return PlaybackPreferences(
       speed: speed,
       quality: quality,
+      sourceRoutes: Map.unmodifiable({
+        for (final entry
+            in (value['sourceRoutes'] is Map
+                    ? value['sourceRoutes'] as Map
+                    : const {})
+                .entries)
+          if (entry.key is String &&
+              entry.value is String &&
+              (entry.value as String).isNotEmpty)
+            entry.key as String: entry.value as String,
+      }),
       engine: PlaybackEngine.values.firstWhere(
         (engine) => engine.name == value['engine'],
         orElse: () => PlaybackEngine.automatic,

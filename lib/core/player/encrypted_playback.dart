@@ -182,6 +182,10 @@ class EncryptedPlayback {
         session: plan.session,
         danmakuId: plan.danmakuId,
         expiresAt: 0,
+        routeIndex: plan.routeIndex,
+        routeCount: plan.routeCount,
+        routes: plan.routes,
+        alternativesAvailable: plan.alternativesAvailable,
         prefetchedBytes: await File(output).length(),
       );
     } finally {

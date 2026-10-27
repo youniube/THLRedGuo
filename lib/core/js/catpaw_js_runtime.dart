@@ -45,6 +45,8 @@ class CatPawDetailResult {
 
 class CatPawPlayResult {
   final String url;
+  final String name;
+  final String routeKey;
   final Map<String, String> header;
   final int parse;
   final int quality;
@@ -58,6 +60,8 @@ class CatPawPlayResult {
   const CatPawPlayResult({
     required this.url,
     required this.header,
+    this.name = '',
+    this.routeKey = '',
     this.parse = 0,
     this.quality = 0,
     this.qualities = const [],
@@ -632,6 +636,8 @@ globalThis.__native_save_device = function(json) {
     }
     return CatPawPlayResult(
       url: url,
+      name: map['name']?.toString().trim() ?? '',
+      routeKey: map['routeKey']?.toString().trim() ?? '',
       header: header,
       parse: parse,
       decryptionKey: contentKey,
@@ -654,6 +660,8 @@ globalThis.__native_save_device = function(json) {
                   _playResult({
                     ...map,
                     ...stream,
+                    'name': stream['name'] ?? '',
+                    'routeKey': stream['routeKey'] ?? '',
                     'quality': stream['quality'] ?? 0,
                     'mediaBytes': stream['mediaBytes'] ?? 0,
                     'qualities': const [],

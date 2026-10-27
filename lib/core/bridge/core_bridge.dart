@@ -190,6 +190,10 @@ abstract class AppRepository {
     int quality = 0,
   }) => resolveOnline(drama, episode, quality: quality);
   Future<PlaybackPlan> fallback(PlaybackPlan current);
+  Future<PlaybackPlan> selectRoute(
+    PlaybackPlan current,
+    int routeIndex,
+  ) async => throw AppFailure('当前环境不支持手动切换线路');
   Future<void> cancelPlayback();
   Future<void> release(String session);
 }
@@ -667,6 +671,11 @@ class NativeRepository extends AppRepository {
       if (action == 'resolve' && access != null && !access!.canDownload) {
         input['force'] = true;
       }
+      if ({'resolve', 'preload', 'prepareHandoff'}.contains(action)) {
+        final source = (input['drama'] as Map)['source'] as String;
+        input['preferredRoute'] =
+            access?.playbackPreferences.sourceRoutes[source] ?? '';
+      }
       final operation = DartCoreEngine.instance.dispatch(input);
       final response =
           {'jsSource.importUrl', 'jsSource.importSubscription'}.contains(action)
@@ -940,6 +949,18 @@ class NativeRepository extends AppRepository {
           'sequence': ++_playbackSequence,
         }),
       );
+  @override
+  Future<PlaybackPlan> selectRoute(
+    PlaybackPlan current,
+    int routeIndex,
+  ) async => PlaybackPlan.fromJson(
+    await _call({
+      'action': 'selectRoute',
+      'session': current.session,
+      'routeIndex': routeIndex,
+      'sequence': ++_playbackSequence,
+    }),
+  );
   @override
   Future<PlaybackPlan> refreshPlayback(
     Drama drama,

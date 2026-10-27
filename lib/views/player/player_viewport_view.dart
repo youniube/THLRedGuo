@@ -72,6 +72,7 @@ class PlayerViewportView extends StatelessWidget {
     required this.onSwitchOnline,
     required this.onSaveProgress,
     required this.onOpenPanel,
+    this.onRoutes,
     required this.onToggleDanmaku,
     this.onDanmakuSettings,
     required this.onRetryDanmaku,
@@ -138,6 +139,7 @@ class PlayerViewportView extends StatelessWidget {
   final Future<void> Function()? onRestorePictureInPicture;
   final Future<void> Function(BuildContext) onTelevisionEpisodes;
   final Future<void> Function(BuildContext) onTelevisionSettings;
+  final Future<void> Function()? onRoutes;
 
   @override
   Widget build(BuildContext context) {
@@ -290,6 +292,7 @@ class PlayerViewportView extends StatelessWidget {
                 : null,
             onEpisodes: () => onTelevisionEpisodes(context),
             onSettings: () => onTelevisionSettings(context),
+            onRoutes: onRoutes,
             onBack: onBack,
           )
         : PlayerControls(
@@ -316,6 +319,7 @@ class PlayerViewportView extends StatelessWidget {
             onEpisodes: () => onOpenPanel(PlayerMenuSection.episodes),
             onSpeed: () => onOpenPanel(PlayerMenuSection.speed),
             onQuality: () => onOpenPanel(PlayerMenuSection.quality),
+            onRoutes: onRoutes,
             onDanmaku: detail.drama.source == 'hongguo'
                 ? onToggleDanmaku
                 : null,
@@ -460,6 +464,12 @@ class PlayerViewportView extends StatelessWidget {
                       alignment: WrapAlignment.center,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        if (onRoutes != null)
+                          FilledButton.tonalIcon(
+                            onPressed: onRoutes,
+                            icon: const Icon(Icons.alt_route_rounded),
+                            label: const Text('切换线路'),
+                          ),
                         FilledButton.tonalIcon(
                           onPressed: () =>
                               DiaryService.showDiaryDialog(context),
