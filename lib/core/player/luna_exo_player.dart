@@ -302,8 +302,8 @@ class LunaExoPlayer implements Player {
     _seekOperations = Future<void>.value();
     _positionPollTimer?.cancel();
 
-    // 切换新节目时，旧控制器先静音/暂停，彻底防止新旧双重音频重叠
     final old = _controller;
+    _controller = null;
     if (old != null) {
       if (_valueListener != null) {
         try {
@@ -314,7 +314,16 @@ class LunaExoPlayer implements Player {
       try {
         await old.pause();
       } catch (_) {}
+      revision.value++;
+      try {
+        await old.dispose();
+      } catch (_) {}
+      if (Platform.isAndroid) {
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      }
     }
+
+    if (_disposed || myGen != _openGeneration) return;
 
     state = state.copyWith(completed: false);
     _safeAdd(stream.completedController, false);
@@ -510,19 +519,6 @@ class LunaExoPlayer implements Player {
       }
       DiaryService.add('[MPV] 系统播放器未识别视频轨，切换兼容播放');
       return _openMpv(compatibilityMedia(), play: play, compatibility: true);
-    }
-
-    if (old != null) {
-      try {
-        await old.dispose();
-      } catch (_) {}
-    }
-
-    if (myGen != _openGeneration) {
-      try {
-        await c.dispose();
-      } catch (_) {}
-      return;
     }
 
     _controller = c;
@@ -857,7 +853,10 @@ class LunaExoVideoView extends StatelessWidget {
               )
             else if (hasVideo)
               Center(
-                child: AspectRatio(aspectRatio: ratio, child: VideoPlayer(c)),
+                child: AspectRatio(
+                  aspectRatio: ratio,
+                  child: VideoPlayer(key: ObjectKey(c), c),
+                ),
               )
             else
               const ColoredBox(color: AppColors.black),

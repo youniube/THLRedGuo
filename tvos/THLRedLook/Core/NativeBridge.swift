@@ -1,6 +1,34 @@
 import Foundation
 import JavaScriptCore
 
+final class HttpTraceHolder: @unchecked Sendable {
+    static let shared = HttpTraceHolder()
+    private let lock = NSLock()
+    private var _url = ""
+    private var _method = "GET"
+    private var _status = 0
+    private var _logId = ""
+    private var _snippet = ""
+    private var _tabsSummary = ""
+
+    func record(url: String, method: String, status: Int, logId: String, snippet: String, tabsSummary: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        _url = url
+        _method = method
+        _status = status
+        _logId = logId
+        _snippet = snippet
+        _tabsSummary = tabsSummary
+    }
+
+    var snapshot: (url: String, method: String, status: Int, logId: String, snippet: String, tabsSummary: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (_url, _method, _status, _logId, _snippet, _tabsSummary)
+    }
+}
+
 /// 纯 Swift 原生 CatPawOpen 协议桥接引擎
 /// 基于系统级 JavaScriptCore 运行时与 URLSession 端侧闭环执行 Spider 数据源解析。
 public actor NativeBridge {
@@ -10,6 +38,7 @@ public actor NativeBridge {
     private let httpSession: URLSession
     private let diagnostics: SourceDiagnostics
     private let diagnosticContext: String
+    private let persistentDeviceSession: Bool
 
     // 沙盒路径
     private var baseDirURL: URL
@@ -23,7 +52,7 @@ public actor NativeBridge {
     // JS 运行时上下文缓存
     private var jsContexts: [String: JSContext] = [:]
 
-    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用") {
+    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用", persistentDeviceSession: Bool = true) {
         if let httpSession {
             self.httpSession = httpSession
         } else {
@@ -38,6 +67,7 @@ public actor NativeBridge {
         }
         self.diagnostics = diagnostics
         self.diagnosticContext = diagnosticContext
+        self.persistentDeviceSession = persistentDeviceSession
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.baseDirURL = baseDirectory ?? cachesDir.appendingPathComponent("THLRedLook_Data")
@@ -179,14 +209,20 @@ public actor NativeBridge {
         context.setObject(logBlock, forKeyedSubscript: "__console_log" as NSString)
 
         // 1.5 注入官方设备认证持久化桥接，避免每次冷启动/重新初始化产生额外的设备注册网络延迟
+        let persistentSession = persistentDeviceSession
         let saveDeviceBlock: @convention(block) (String) -> Void = { json in
-            guard !json.isEmpty else { return }
+            guard persistentSession, !json.isEmpty else { return }
             UserDefaults.standard.set(json, forKey: "thl_tv_hongguo_device_session")
         }
         context.setObject(saveDeviceBlock, forKeyedSubscript: "__native_save_device" as NSString)
 
-        if let cachedDevice = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session"), !cachedDevice.isEmpty {
-            context.evaluateScript("try { globalThis.__hongguoCachedDevice = JSON.parse(\(cachedDevice.debugDescription)); } catch(_) {}")
+        if persistentDeviceSession, let cachedDevice = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session"), !cachedDevice.isEmpty {
+            context.evaluateScript("""
+            try {
+                var raw = \(cachedDevice.debugDescription);
+                globalThis.__hongguoCachedDevice = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            } catch(_) {}
+            """)
         }
 
         // 2. 注入原生高性能 HTTP 请求桥接
@@ -229,12 +265,39 @@ public actor NativeBridge {
             let timedOut = semaphore.wait(timeout: .now() + timeout) == .timedOut
             if timedOut { task.cancel() }
             let response = result.snapshot(timedOut: timedOut)
+
+            var tabsDesc = ""
+            var snippet = ""
+            if !response.body.isEmpty {
+                let trimmed = response.body.trimmingCharacters(in: .whitespacesAndNewlines)
+                snippet = SourceDiagnostics.responseSummary(trimmed)
+                if url.path.contains("/search/tab/v"),
+                   let data = response.body.data(using: .utf8),
+                   let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                   let tabs = parsed["search_tabs"] as? [[String: Any]] {
+                    let descs = tabs.map { "\($0["tab_type"] ?? -1):\($0["title"] ?? $0["tab_name"] ?? "")((\(($0["data"] as? [Any])?.count ?? 0)条)" }
+                    tabsDesc = "tabs[\(tabs.count)]: [" + descs.joined(separator: ", ") + "]"
+                }
+            }
+
+            let logId = response.headers["x-tt-logid"] ?? response.headers["x-tt-traceid"] ?? response.headers["x-ss-req-ticket"] ?? ""
+            HttpTraceHolder.shared.record(
+                url: SourceDiagnostics.desensitizeUrl(url.absoluteString),
+                method: method,
+                status: response.status,
+                logId: logId,
+                snippet: snippet,
+                tabsSummary: tabsDesc
+            )
+
             recorder.record(
                 url: url,
                 context: diagnosticContext,
                 elapsedMs: Int((ProcessInfo.processInfo.systemUptime - started) * 1000),
                 status: response.status,
                 body: response.body,
+                method: method,
+                headers: response.headers,
                 errorCode: response.error,
                 error: response.rawError
             )
@@ -307,6 +370,7 @@ public actor NativeBridge {
             var respHeaders = res.headers || {};
             if (status === 0 && (res.error || res.errorDetail)) {
                 var netErr = new Error("网络请求失败: " + (res.errorDetail || res.error || "未知网络错误"));
+                netErr.code = res.error || "HTTP_0";
                 netErr.category = res.category || "network_timeout";
                 netErr.isNetworkError = true;
                 throw netErr;
@@ -615,6 +679,20 @@ public actor NativeBridge {
             activeSourceId = installedSources.keys.contains("hongguo") ? "hongguo" : ""
             return ["ok": true, "active": activeSourceId]
 
+        case "jsSource.resetOfficial":
+            let hongguoFile = sourcesDirURL.appendingPathComponent("hongguo.js")
+            let script = BuiltInHongguoJSContent
+            guard !script.isEmpty else { return ["ok": false, "active": activeSourceId] }
+            try script.write(to: hongguoFile, atomically: true, encoding: .utf8)
+
+            if persistentDeviceSession { UserDefaults.standard.removeObject(forKey: "thl_tv_hongguo_device_session") }
+            httpSession.configuration.urlCache?.removeAllCachedResponses()
+            jsContexts.removeValue(forKey: "hongguo")
+            scanSourcesDirectory()
+            let restored = sourceScripts["hongguo"] == script
+            if restored { activeSourceId = "hongguo" }
+            return ["ok": restored, "active": activeSourceId]
+
         case "categories":
             let targetSrc = (payload["source"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? activeSourceId
             guard !targetSrc.isEmpty, let ctx = getOrCreateContext(sourceId: targetSrc) else {
@@ -661,28 +739,48 @@ public actor NativeBridge {
                         errCat = parsedCat
                     } else if errMsg.contains("网络") || errMsg.contains("DNS") {
                         errCat = .dnsError
+                    } else if ["SEARCH_TAB_MISSING", "INVALID_SEARCH_CURSOR", "INVALID_RESPONSE"].contains(rawCode) {
+                        errCat = .invalidResponse
                     } else if rawCode == "SEARCH_REJECTED" || rawCode == "BUSINESS_REJECTED" || rawCode == "GUEST_REGISTRATION_FAILED" || errMsg.contains("官方搜索") || errMsg.contains("官方会话") {
                         errCat = .businessRejected
-                    } else if rawCode == "INVALID_RESPONSE" {
-                        errCat = .invalidResponse
                     } else {
                         errCat = .jsError
                     }
+                    if targetSrc == "hongguo" && errCat == .businessRejected {
+                        if persistentDeviceSession { UserDefaults.standard.removeObject(forKey: "thl_tv_hongguo_device_session") }
+                        jsContexts.removeValue(forKey: targetSrc)
+                    }
                     let errDetail = "搜索执行失败: \(errMsg)"
-                    let advice = SourceDiagnostics.advice(SourceDiagnosticEntry(context: diagnosticContext, stage: "搜索执行", category: errCat, errorDetail: errDetail))
+                    let advice = SourceDiagnostics.advice(SourceDiagnosticEntry(context: diagnosticContext, stage: "搜索执行", errorCode: rawCode, category: errCat, errorDetail: errDetail))
+                    let trace = HttpTraceHolder.shared.snapshot
+                    let hasCached = persistentDeviceSession && UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session") != nil
+                    let sessionStatus = hasCached ? "使用本地缓存设备凭据" : "全新游客会话"
                     diagnostics.add(SourceDiagnosticEntry(
                         context: diagnosticContext,
                         stage: "搜索执行",
+                        host: URL(string: trace.url)?.host ?? "reading.snssdk.com",
+                        url: trace.url,
+                        method: trace.method,
+                        logId: trace.logId,
+                        status: trace.status,
                         errorCode: rawCode.isEmpty ? errCat.tag : rawCode,
                         category: errCat,
                         errorDetail: errMsg,
-                        suggestion: advice
+                        suggestion: advice,
+                        responseSnippet: trace.snippet,
+                        searchTabsSummary: trace.tabsSummary,
+                        sessionStatus: sessionStatus
                     ))
                     throw NSError(domain: "CatPawOpen", code: -1, userInfo: [
                         NSLocalizedDescriptionKey: errMsg,
                         "diagnosticCategory": errCat.rawValue,
                         "diagnosticCode": rawCode.isEmpty ? errCat.tag : rawCode,
-                        "diagnosticAdvice": advice
+                        "diagnosticAdvice": advice,
+                        "diagnosticUrl": trace.url,
+                        "diagnosticLogId": trace.logId,
+                        "diagnosticSnippet": trace.snippet,
+                        "diagnosticTabs": trace.tabsSummary,
+                        "diagnosticSession": sessionStatus
                     ])
                 }
                 var searchItems: [[String: Any]] = []

@@ -79,6 +79,8 @@
 		A8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */; };
 		A8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift */; };
 		A8C54B9C6E924AF1947F3003 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = C8C54B9C6E924AF1947F3001 /* MPVKit */; };
+		ABE3FEB2542D475BB3C6F7D7 /* DiagnosticsShareServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */; };
+		12F647818F7F44998727220E /* OverseasSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -179,6 +181,8 @@
 		E546AAF2A007402D961770A4 /* StartupPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupPerformanceTests.swift; sourceTree = "<group>"; };
 		B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSCompatibilityProbe.swift; sourceTree = "<group>"; };
 		B8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVPlayerView.swift; sourceTree = "<group>"; };
+		98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsShareServer.swift; sourceTree = "<group>"; };
+		6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverseasSearchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -257,6 +261,7 @@
 				ADCC53A4B80992B7FB26447F /* ListLoadingTests.swift */,
 				8A05A2DA4811816BFC444CF4 /* ICloudSyncTests.swift */,
 				E546AAF2A007402D961770A4 /* StartupPerformanceTests.swift */,
+				6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */,
 			);
 			path = THLRedLookTests;
 			sourceTree = "<group>";
@@ -327,6 +332,7 @@
 			children = (
 				B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */,
 				E34571822EE6111100000022 /* SourceDiagnostics.swift */,
+				98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */,
 				E34571822EE6222200000022 /* VideoCacheManager.swift */,
 				B10000102C00000100000001 /* LocalStore.swift */,
 				ICLOUD001C00000100000001 /* ICloudSyncService.swift */,
@@ -689,6 +695,7 @@
 				90DA19CCFD6C5C493E36FED0 /* ListLoadingTests.swift in Sources */,
 				81C7FE1DA08787168F35C136 /* ICloudSyncTests.swift in Sources */,
 				7689C3C1BE0A477888B3828B /* StartupPerformanceTests.swift in Sources */,
+				12F647818F7F44998727220E /* OverseasSearchTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -716,6 +723,7 @@
 				A10000082C00000100000001 /* RankingBoard.swift in Sources */,
 				A10000092C00000100000001 /* LanModels.swift in Sources */,
 				E34571822EE6111100000021 /* SourceDiagnostics.swift in Sources */,
+				ABE3FEB2542D475BB3C6F7D7 /* DiagnosticsShareServer.swift in Sources */,
 				E34571822EE6222200000021 /* VideoCacheManager.swift in Sources */,
 				A10000102C00000100000001 /* LocalStore.swift in Sources */,
 				ICLOUD002C00000100000001 /* ICloudSyncService.swift in Sources */,
