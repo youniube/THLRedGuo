@@ -179,7 +179,7 @@ void main() {
         'fileName': 'hongguo.js',
         'script': """
 const meta={id:'hongguo',name:'Synthetic',version:'1.0.0'};
-const spider={play:async function(flag,id,flags){const quality=Number(flags.find(value=>'quality' in value)?.quality||0);return {url:'https://media.example.test/'+quality+'.mp4',quality:quality,qualities:[1080,720,360]};}};
+const spider={play:async function(flag,id,flags){const series=flags.find(value=>'seriesId' in value)?.seriesId;if(series!=='7345678901234567123')throw new Error('missing synthetic series');const quality=Number(flags.find(value=>'quality' in value)?.quality||0);return {url:'https://media.example.test/'+quality+'.mp4',quality:quality,qualities:[1080,720,360]};}};
 """,
       });
       expect(loaded['ok'], true);
@@ -220,6 +220,8 @@ const spider={
  play:async function(flag,id,flags){
   if(String(id).endsWith('8456'))throw Object.assign(new Error('stale synthetic episode'),{code:'MISSING_EPISODE'});
   const quality=Number(flags.find(value=>'quality' in value)?.quality||0);
+  const series=flags.find(value=>'seriesId' in value)?.seriesId;
+  if(series!=='7345678901234567123')throw new Error('missing synthetic series');
   const avoided=flags.find(value=>'avoidUrl' in value)?.avoidUrl;
   if(avoided!=='https://failed.example.test/old.mp4')throw new Error('missing failed CDN');
   return {url:'https://media.example.test/'+quality+'.mp4',quality,qualities:[1080,720,360]};
@@ -243,6 +245,37 @@ const spider={
         expect(result['data']['quality'], 720);
         expect(result['data']['url'], 'https://media.example.test/720.mp4');
       }
+      await engine.dispatch({'action': 'cancelPlayback'});
+    },
+  );
+  test(
+    'Flutter engine does not pass an old public preview through after source failure',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'thl_preview_rejection_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final engine = DartCoreEngine.instance;
+      await engine.dispatch({
+        'action': 'initialize',
+        'directory': directory.path,
+      });
+      await engine.dispatch({
+        'action': 'jsSource.load',
+        'fileName': 'hongguo.js',
+        'script':
+            "const meta={id:'hongguo',name:'Synthetic',version:'1'};const spider={play:async function(){return {url:'',error:'EMPTY_RESPONSE'};},detail:async function(){return {list:[]};}};",
+      });
+      final result = await engine.dispatch({
+        'action': 'resolve',
+        'drama': {'id': 'hongguo:7345678901234567123', 'source': 'hongguo'},
+        'chapter': {
+          'url':
+              'https://hongguoduanju.com/video/public/7345678901234568456/360p.mp4',
+        },
+        'index': 1,
+      });
+      expect(result['ok'], false);
       await engine.dispatch({'action': 'cancelPlayback'});
     },
   );

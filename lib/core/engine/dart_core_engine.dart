@@ -1228,6 +1228,7 @@ class DartCoreEngine {
       final flags = <Map<String, dynamic>>[
         {
           'quality': requestedQuality,
+          'seriesId': sourceId,
           if (avoidUrl.isNotEmpty) 'avoidUrl': avoidUrl,
         },
       ];
@@ -1334,6 +1335,11 @@ class DartCoreEngine {
     if (results.isEmpty &&
         chapter is Map &&
         chapter['url'] is String &&
+        !(source == 'hongguo' &&
+            (Uri.tryParse(
+                  chapter['url'] as String,
+                )?.path.startsWith('/video/public/') ??
+                false)) &&
         RegExp(
           r'^https?://.+\.(mp4|m3u8)(?:[?#]|$)',
           caseSensitive: false,
