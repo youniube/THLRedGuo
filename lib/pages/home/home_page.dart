@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:THLRedLook/utils/theme/app_colors.dart';
-import 'package:THLRedLook/core/js/js_source_presets.dart';
 import 'package:THLRedLook/pages/settings/js_sources_page.dart';
 
 import 'package:THLRedLook/utils/screen/app_layout.dart';
@@ -758,6 +757,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       accept(result);
     } catch (error) {
       if (!mounted || generation != _generation) return;
+      final errorStr = error.toString();
+      final isCursorExpired =
+          errorStr.contains('CURSOR_EXPIRED') ||
+          errorStr.contains('MISSING_CURSOR') ||
+          errorStr.contains('游标');
+      if (isCursorExpired && more) {
+        unawaited(_load(more: false, force: true));
+        return;
+      }
       setState(() {
         _loading = false;
         _loadingMore = false;
@@ -1017,12 +1025,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openJsSourceManagement(BuildContext context) async {
+  Future<void> _openJsSourceManagement(
+    BuildContext context, {
+    bool openNetworkImport = false,
+  }) async {
     await Navigator.push(
       context,
       MaterialPageRoute<void>(
-        builder: (_) =>
-            JsSourcesPage(repository: widget.repository, store: widget.store),
+        builder: (_) => JsSourcesPage(
+          repository: widget.repository,
+          store: widget.store,
+          openNetworkImport: openNetworkImport,
+        ),
       ),
     );
     if (!mounted) return;
@@ -1074,112 +1088,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           behavior: SnackBarBehavior.floating,
         ),
       );
-    }
-  }
-
-  Future<void> _importJsPluginFromUrl() async {
-    final service = JsSourceService.current;
-    if (service == null) return;
-
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('网络订阅 / URL 导入插件'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '请输入远程 JavaScript 插件的直接下载地址 (如 GitHub Raw 链接)：',
-                style: TextStyle(fontSize: 12, color: AppColors.grey),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: '插件脚本 URL',
-                  hintText: 'https://example.com/source.js',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.hongguoRed,
-            ),
-            onPressed: () {
-              final url = controller.text.trim();
-              if (url.isNotEmpty) Navigator.pop(ctx, url);
-            },
-            child: const Text('拉取并导入'),
-          ),
-        ],
-      ),
-    );
-
-    if (result != null && result.isNotEmpty && mounted) {
-      final ok = await service.importFromUrl(result);
-      if (!mounted) return;
-      if (ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('成功拉取并激活远程插件'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        await _loadCategories(force: true);
-        await _load(force: true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('远程拉取失败，请检查链接可达性'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _showPresetSelection() async {
-    final service = JsSourceService.current;
-    if (service == null) return;
-    await showPresetSourceSelectionDialog(
-      context: context,
-      service: service,
-      onSourceChanged: () async {
-        if (!mounted) return;
-        await _loadCategories(force: true);
-        await _load(force: true);
-      },
-    );
-  }
-
-  Future<void> _importPresetPlugins() async {
-    final service = JsSourceService.current;
-    if (service == null) return;
-    final count = await importPresetSources(service);
-    if (!mounted) return;
-    if (count > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已成功导入 $count 个数据源插件'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      await _loadCategories(force: true);
-      await _load(force: true);
     }
   }
 
@@ -1285,7 +1193,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    '本应用出厂不内置任何第三方站源，请从外部导入或订阅 .js 插件。各插件在沙箱内独立运行、互不干扰。',
+                    '软件内置官方免费短剧，其他数据源可通过网络合集订阅、JS 直链或本地文件导入。',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 13,
@@ -1299,30 +1207,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     runSpacing: 12,
                     alignment: WrapAlignment.center,
                     children: [
-                      FilledButton.icon(
-                        key: const ValueKey('btn-select-preset-import-home'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.hongguoRed,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 12,
-                          ),
-                        ),
-                        onPressed: _showPresetSelection,
-                        icon: const Icon(Icons.checklist_rounded, size: 18),
-                        label: const Text('选择预设源分别导入'),
-                      ),
-                      FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 12,
-                          ),
-                        ),
-                        onPressed: _importPresetPlugins,
-                        icon: const Icon(Icons.flash_on_rounded, size: 18),
-                        label: const Text('一键导入全部预设'),
-                      ),
                       FilledButton.icon(
                         style: FilledButton.styleFrom(
                           backgroundColor: AppColors.hongguoRed,
@@ -1342,9 +1226,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             vertical: 12,
                           ),
                         ),
-                        onPressed: _importJsPluginFromUrl,
+                        onPressed: () => _openJsSourceManagement(
+                          context,
+                          openNetworkImport: true,
+                        ),
                         icon: const Icon(Icons.link_rounded, size: 18),
-                        label: const Text('网络链接导入'),
+                        label: const Text('网络订阅导入'),
                       ),
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
@@ -1648,32 +1535,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _catalog({required bool selectionInBody}) {
     final items = _visible;
     final television = AppLayout.isTelevision(context);
-    final sourceChip =
-        (widget.store.isZhenguojianActivated || widget.store.sources.length > 1)
-        ? Padding(
-            key: const ValueKey('catalog-source-chip'),
-            padding: const EdgeInsets.only(right: 8),
-            child: ActionChip(
-              avatar: const Icon(Icons.swap_horiz_rounded, size: 16),
-              label: Text(_searching ? _searchGroup.name : _group.name),
-              tooltip: _searching
-                  ? '搜索范围：全部 ${_searchGroup.sources.length} 个站源'
-                  : '切换数据源（当前：${_group.name}）',
-              shape: const StadiumBorder(),
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              labelStyle: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
-              ),
-              side: BorderSide(
-                color: Theme.of(
-                  context,
-                ).colorScheme.primary.withValues(alpha: 0.3),
-              ),
-              onPressed: _openSourceSwitcher,
-            ),
-          )
-        : null;
     return Column(
       children: [
         if (_searchVisible && !television)
@@ -1694,7 +1555,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         CatalogFilters(
           key: ValueKey('filters-${_group.id}'),
-          leading: sourceChip,
           categories: _searching
               ? const [CatalogCategory('search:all', '全部站源')]
               : _displayCategories,

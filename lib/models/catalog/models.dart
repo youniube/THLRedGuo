@@ -436,6 +436,36 @@ class CatalogPage {
   );
 }
 
+class PlaybackRoute {
+  const PlaybackRoute({
+    required this.index,
+    this.key = '',
+    this.name = '',
+    this.host = '',
+    this.quality = 0,
+    this.expiresAt = 0,
+  });
+
+  final int index;
+  final String key;
+  final String name;
+  final String host;
+  final int quality;
+  final int expiresAt;
+  bool get expired =>
+      expiresAt > 0 && expiresAt <= DateTime.now().millisecondsSinceEpoch;
+  String get title => name.isEmpty || name == 'flag' ? '线路 ${index + 1}' : name;
+
+  factory PlaybackRoute.fromJson(Map<String, dynamic> json) => PlaybackRoute(
+    index: intValue(json['index']),
+    key: json['key']?.toString() ?? '',
+    name: json['name']?.toString().trim() ?? '',
+    host: json['host']?.toString() ?? '',
+    quality: intValue(json['quality']),
+    expiresAt: intValue(json['expiresAt']),
+  );
+}
+
 class PlaybackPlan {
   const PlaybackPlan({
     required this.url,
@@ -450,6 +480,8 @@ class PlaybackPlan {
     this.expiresAt = 0,
     this.routeIndex = 0,
     this.routeCount = 1,
+    this.routes = const [],
+    this.alternativesAvailable,
     this.local = false,
     this.onlineCache = false,
   });
@@ -465,10 +497,14 @@ class PlaybackPlan {
   final int expiresAt;
   final int routeIndex;
   final int routeCount;
+  final List<PlaybackRoute> routes;
+  final bool? alternativesAvailable;
   final bool local;
   final bool onlineCache;
   bool get offline => local && !onlineCache;
-  bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
+  bool get hasAlternative =>
+      session.isNotEmpty &&
+      (alternativesAvailable ?? routeIndex + 1 < routeCount);
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',
     local: json['local'] == true,
@@ -489,6 +525,12 @@ class PlaybackPlan {
     routeCount: intValue(json['routeCount']) > 0
         ? intValue(json['routeCount'])
         : 1,
+    routes: [
+      for (final route
+          in (json['routes'] as List? ?? const []).whereType<Map>())
+        PlaybackRoute.fromJson(Map<String, dynamic>.from(route)),
+    ],
+    alternativesAvailable: json['hasAlternative'] as bool?,
   );
 }
 

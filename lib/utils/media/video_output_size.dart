@@ -6,13 +6,23 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 Size? videoDisplaySize(VideoParams parameters) {
-  final width = (parameters.dw ?? 0) > 0 ? parameters.dw! : parameters.w ?? 0;
-  final height = (parameters.dh ?? 0) > 0 ? parameters.dh! : parameters.h ?? 0;
+  final hasDisplaySize = (parameters.dw ?? 0) > 0 && (parameters.dh ?? 0) > 0;
+  var width = (hasDisplaySize ? parameters.dw! : parameters.w ?? 0).toDouble();
+  final height = (hasDisplaySize ? parameters.dh! : parameters.h ?? 0)
+      .toDouble();
   if (width <= 0 || height <= 0) return null;
+  if (!hasDisplaySize) {
+    final aspect = parameters.aspect;
+    final pixelAspect = parameters.par;
+    if (aspect != null && aspect.isFinite && aspect > 0) {
+      width = height * aspect;
+    } else if (pixelAspect != null && pixelAspect.isFinite && pixelAspect > 0) {
+      width *= pixelAspect;
+    }
+  }
+  if (!width.isFinite || width <= 0) return null;
   final rotation = (parameters.rotate ?? 0) % 180;
-  return rotation == 90
-      ? Size(height.toDouble(), width.toDouble())
-      : Size(width.toDouble(), height.toDouble());
+  return rotation == 90 ? Size(height, width) : Size(width, height);
 }
 
 class VideoOutputSizeAdapter {

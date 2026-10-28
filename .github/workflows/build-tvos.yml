@@ -6,14 +6,27 @@ on:
     tags: ['v*']
     paths:
       - 'tvos/**'
+      - 'assets/sources/hongguo.js'
       - 'scripts/**'
       - '.github/workflows/build-tvos.yml'
   pull_request:
     paths:
       - 'tvos/**'
+      - 'assets/sources/hongguo.js'
       - 'scripts/**'
       - '.github/workflows/build-tvos.yml'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '将构建产物发布至 GitHub Releases'
+        required: true
+        default: false
+        type: boolean
+      upload_testflight:
+        description: '将已签名的 tvOS 安装包上传至 TestFlight'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -32,6 +45,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -89,6 +104,7 @@ jobs:
             python scripts/build_tvos.py --package
           fi
       - name: 上传 tvOS 至 App Store Connect (TestFlight)
+        if: github.event_name != 'workflow_dispatch' || inputs.upload_testflight
         env:
           HAS_SIGNING: ${{ steps.signing.outputs.has_signing }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID || vars.APP_STORE_CONNECT_KEY_ID }}
@@ -113,6 +129,7 @@ jobs:
           signed_ipa=$(find dist/tvos -type f -name "*tvos-signed.ipa" | head -n1)
           if [ -n "$signed_ipa" ] && [ -f "$signed_ipa" ]; then
             echo "正在上传 tvOS 签名包到 App Store Connect: $signed_ipa"
+            python scripts/source_manifest.py verify --ipa "$signed_ipa"
             xcrun altool --upload-app -f "$signed_ipa" -t ios --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
             echo "✅ tvOS 版本成功上传到 App Store Connect！"
             python scripts/set_testflight_notes.py || true
@@ -136,7 +153,7 @@ jobs:
   release-tvos:
     name: Apple tvOS 产物自动发布至 GitHub Release
     needs: tvos
-    if: always() && github.event_name != 'pull_request' && needs.tvos.result == 'success'
+    if: always() && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish_release) && needs.tvos.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

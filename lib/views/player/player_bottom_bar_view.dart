@@ -26,6 +26,7 @@ class PlayerBottomBarView extends StatelessWidget {
     this.onEpisodes,
     this.onPush,
     this.onPictureInPicture,
+    this.onRoutes,
     this.pictureInPictureRequested = false,
   });
 
@@ -49,6 +50,7 @@ class PlayerBottomBarView extends StatelessWidget {
   final VoidCallback? onEpisodes;
   final VoidCallback? onPush;
   final VoidCallback? onPictureInPicture;
+  final VoidCallback? onRoutes;
 
   Widget _toolButton({
     required BuildContext context,
@@ -66,9 +68,7 @@ class PlayerBottomBarView extends StatelessWidget {
     final background = selected
         ? AppColors.hongguoRed
         : const Color(0x40000000);
-    final border = selected
-        ? AppColors.hongguoRed
-        : const Color(0x26FFFFFF);
+    final border = selected ? AppColors.hongguoRed : const Color(0x26FFFFFF);
     final targetWidth = visualWidth < 40 ? 48.0 : visualWidth + 8;
 
     return Tooltip(
@@ -127,9 +127,15 @@ class PlayerBottomBarView extends StatelessWidget {
     final leftCount = tools.length ~/ 2;
     return Row(
       children: [
-        Row(mainAxisSize: MainAxisSize.min, children: tools.take(leftCount).toList()),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: tools.take(leftCount).toList(),
+        ),
         const Spacer(),
-        Row(mainAxisSize: MainAxisSize.min, children: tools.skip(leftCount).toList()),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: tools.skip(leftCount).toList(),
+        ),
       ],
     );
   }
@@ -163,14 +169,24 @@ class PlayerBottomBarView extends StatelessWidget {
                   secondaryActiveTrackColor: AppColors.playerProgressBuffered,
                   thumbColor: AppColors.hongguoRed,
                   overlayColor: AppColors.hongguoRedWithAlpha(0.2),
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 6,
+                  ),
+                  overlayShape: const RoundSliderOverlayShape(
+                    overlayRadius: 14,
+                  ),
                 ),
                 child: Slider(
                   key: const ValueKey('player-progress'),
-                  value: effectivePosition.clamp(0, duration > 0 ? duration : 1),
+                  value: effectivePosition.clamp(
+                    0,
+                    duration > 0 ? duration : 1,
+                  ),
                   max: duration > 0 ? duration : 1,
-                  secondaryTrackValue: buffered.clamp(0, duration > 0 ? duration : 1),
+                  secondaryTrackValue: buffered.clamp(
+                    0,
+                    duration > 0 ? duration : 1,
+                  ),
                   semanticFormatterCallback: formatPosition,
                   onChangeStart: enabled && duration > 0 ? onSeekStart : null,
                   onChangeEnd: enabled && duration > 0 ? onSeekEnd : null,
@@ -219,6 +235,14 @@ class PlayerBottomBarView extends StatelessWidget {
           child: Text(qualityLabel),
         ),
       ],
+      if (onRoutes != null)
+        _toolButton(
+          context: context,
+          key: const ValueKey('player-routes'),
+          tooltip: '切换播放线路',
+          onPressed: enabled ? onRoutes : null,
+          child: const Text('线路'),
+        ),
       if (onPictureInPicture != null)
         _toolButton(
           context: context,

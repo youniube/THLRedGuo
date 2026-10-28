@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:THLRedLook/core/store/local_profiles.dart';
 import 'package:THLRedLook/core/store/local_snapshot.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
+import 'package:THLRedLook/models/feed/feed_source_selection.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
 import 'package:THLRedLook/core/download/download_preferences.dart';
 import 'package:THLRedLook/core/catalog/catalog_sort.dart';
@@ -640,6 +641,21 @@ class LocalStore extends ChangeNotifier {
   bool isFeedSeen(String dramaId) => _feedSeenSet.contains(dramaId);
   int get feedOffset => _feedOffset;
 
+  FeedSourceSelection get feedSources {
+    try {
+      return FeedSourceSelection.fromJson(
+        Map<String, dynamic>.from(
+          jsonDecode(_string(_key('feedSources')) ?? '{}') as Map,
+        ),
+      );
+    } catch (_) {
+      return const FeedSourceSelection();
+    }
+  }
+
+  Future<void> setFeedSources(FeedSourceSelection selection) =>
+      _setting(_key('feedSources'), jsonEncode(selection.toJson()));
+
   Future<void> markFeedSeen(String dramaId) {
     if (dramaId.isEmpty) return Future.value();
     final epoch = _epoch;
@@ -660,9 +676,9 @@ class LocalStore extends ChangeNotifier {
 
   int stepFeedOffset([int step = 6]) {
     _feedOffset = (_feedOffset + step) % 60;
-    unawaited(_commit({
-      _key('feedOffset'): _feedOffset.toString(),
-    }, trackSync: false));
+    unawaited(
+      _commit({_key('feedOffset'): _feedOffset.toString()}, trackSync: false),
+    );
     return _feedOffset;
   }
 
@@ -672,9 +688,7 @@ class LocalStore extends ChangeNotifier {
       if (locked || epoch != _epoch) return;
       _feedSeenIds.clear();
       _feedSeenSet.clear();
-      await _commit({
-        _key('feedSeenDramas'): jsonEncode([]),
-      }, trackSync: false);
+      await _commit({_key('feedSeenDramas'): jsonEncode([])}, trackSync: false);
     });
   }
 

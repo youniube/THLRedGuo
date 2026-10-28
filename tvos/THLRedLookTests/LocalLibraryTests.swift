@@ -8,6 +8,52 @@ final class LocalLibraryTests: XCTestCase {
         return (try XCTUnwrap(UserDefaults(suiteName: name)), name)
     }
 
+    func testOfficialSourceUpgradeRefreshesMetadataAndRuntimeIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sources = root.appendingPathComponent("sources")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        let old = "const meta={id:'hongguo',name:'stale',version:'old-cache'};const spider={play:function(){return {url:''}}};"
+        try old.write(to: sources.appendingPathComponent("hongguo.js"), atomically: true, encoding: .utf8)
+        let recorder = SourceDiagnostics()
+        let bridge = NativeBridge(baseDirectory: root, diagnostics: recorder, diagnosticContext: "升级验证", persistentDeviceSession: false)
+        let response = try await bridge.request(action: "jsSource.identity", payload: [:])
+        XCTAssertEqual(response["sha256"] as? String, SourceDiagnostics.sourceHash)
+        XCTAssertEqual(response["runtimeReady"] as? Bool, true)
+        XCTAssertEqual(SourceDiagnostics.sourceManifest["sha256"], SourceDiagnostics.sourceHash)
+        XCTAssertFalse(SourceDiagnostics.sourceManifest["sourceCommit"]?.isEmpty ?? true)
+        let listing = try await bridge.request(action: "jsSource.list", payload: [:])
+        let official = (listing["items"] as? [[String: Any]])?.first { $0["id"] as? String == "hongguo" }
+        XCTAssertEqual(official?["version"] as? String, SourceDiagnostics.sourceManifest["sourceVersion"])
+        XCTAssertEqual(official?["sha256"] as? String, SourceDiagnostics.sourceHash)
+        XCTAssertEqual(try String(contentsOf: sources.appendingPathComponent("hongguo.js"), encoding: .utf8), BuiltInHongguoJSContent)
+        XCTAssertEqual(recorder.sourceRuntimeStatus, "运行 JS 与本包一致")
+        XCTAssertTrue(recorder.report.contains(SourceDiagnostics.sourceHash))
+        print("THL_SOURCE_IDENTITY staleCacheReplaced=true metadataFresh=true runtimeMatchesBundle=true source=\(SourceDiagnostics.sourceHash)")
+    }
+
+    func testOfficialSourceStillLoadsWhenSourceCacheCannotBeWritten() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("blocked cache directory".utf8).write(to: root.appendingPathComponent("sources"))
+        let bridge = NativeBridge(baseDirectory: root, persistentDeviceSession: false)
+        let identity = try await bridge.request(action: "jsSource.identity", payload: [:])
+        XCTAssertEqual(identity["sha256"] as? String, SourceDiagnostics.sourceHash)
+        XCTAssertEqual(identity["runtimeReady"] as? Bool, true)
+    }
+
+    func testSourceRuntimeReportDetectsMismatchedOrFailedContext() {
+        let recorder = SourceDiagnostics()
+        recorder.registerSourceRuntime(context: "播放", script: BuiltInHongguoJSContent, ready: true)
+        XCTAssertEqual(recorder.sourceRuntimeStatus, "运行 JS 与本包一致")
+        recorder.registerSourceRuntime(context: "下一集", script: "stale", ready: true)
+        XCTAssertTrue(recorder.sourceRuntimeStatus.contains("异常"))
+        recorder.registerSourceRuntime(context: "下一集", script: BuiltInHongguoJSContent, ready: false)
+        XCTAssertTrue(recorder.sourceRuntimeStatus.contains("异常"))
+        XCTAssertTrue(recorder.report.contains("加载失败"))
+    }
+
     func testFavoritesAreVisibleAndPersistWithoutMetadataLoss() throws {
         let (defaults, name) = try storage()
         defer { defaults.removePersistentDomain(forName: name) }
@@ -124,7 +170,7 @@ final class LocalLibraryTests: XCTestCase {
         print("THL_TV_DIAGNOSTICS_CAPTURE registration=true search=true pagination=true detail=true privateDataExcluded=true libraryUnchanged=true")
     }
 
-    func testSourceDiagnosticsCategoryClassificationAndDetailedReport() throws {
+    func testSourceDiagnosticsCategoryClassificationAndDetailedReport() async throws {
         // 1. 验证各种常见故障的分类精准度
         // DNS 解析错误
         let dnsErr = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost, userInfo: nil)
@@ -194,6 +240,24 @@ final class LocalLibraryTests: XCTestCase {
             suggestion: "更新 Spider 脚本"
         ))
 
+        recorder.add(SourceDiagnosticEntry(
+            context: "单元测试",
+            stage: "搜索",
+            host: "reading.snssdk.com",
+            url: "https://reading.snssdk.com/reading/bookapi/search/tab/v?query=test&tab_type=29",
+            method: "GET",
+            logId: "20261026210000010000000000000000",
+            status: 200,
+            businessCode: "",
+            errorCode: "SEARCH_REJECTED",
+            elapsedMs: 85,
+            category: .businessRejected,
+            errorDetail: "官方搜索未返回剧集分类",
+            suggestion: "当前游客凭据可能已过期，系统已自动重置会话。",
+            responseSnippet: "{\"code\":0,\"search_tabs\":[{\"tab_type\":11,\"title\":\"综合\"}]}",
+            searchTabsSummary: "分类列表[1]: [11:综合(10条)] (缺少 29:剧集 分类)"
+        ))
+
         let report = recorder.report
         XCTAssertTrue(report.contains("糖葫芦Haw (THLRedLook) 核心技术诊断报告"))
         XCTAssertTrue(report.contains("应用版本:"))
@@ -202,11 +266,24 @@ final class LocalLibraryTests: XCTestCase {
         XCTAssertTrue(report.contains("【JS报错】"))
         XCTAssertTrue(report.contains("排查建议: 检查网络 DNS 配置"))
         XCTAssertTrue(report.contains("排查建议: 更新 Spider 脚本"))
+        XCTAssertTrue(report.contains("请求接口: https://reading.snssdk.com/reading/bookapi/search/tab/v"))
+        XCTAssertTrue(report.contains("字节 LogID: 20261026210000010000000000000000"))
+        XCTAssertTrue(report.contains("搜索分类详情: 分类列表[1]: [11:综合(10条)] (缺少 29:剧集 分类)"))
+        XCTAssertTrue(report.contains("响应结构摘要:"))
+
+        // 验证沙盒日志文件自动写入
+        if let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let logFile = cacheDir.appendingPathComponent("diagnostics_latest.log")
+            for _ in 0..<100 where !FileManager.default.fileExists(atPath: logFile.path) {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: logFile.path), "诊断报告应自动写入沙盒文件")
+        }
 
         let qr = recorder.qrText
         XCTAssertTrue(qr.contains("DNS解析错误"))
         XCTAssertTrue(qr.contains("JS报错"))
-        print("THL_TV_DIAGNOSTICS_CLASSIFICATION_AND_REPORT dns=true offline=true timeout=true tls=true js=true http403=true http429=true report=true qr=true")
+        print("THL_TV_DIAGNOSTICS_CLASSIFICATION_AND_REPORT dns=true offline=true timeout=true tls=true js=true http403=true http429=true report=true qr=true logTrace=true")
     }
 
     func testHongguoStripVipBadges() throws {

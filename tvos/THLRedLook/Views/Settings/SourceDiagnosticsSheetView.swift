@@ -13,11 +13,11 @@ public struct SourceDiagnosticsSheetView: View {
     @ObservedObject private var recorder = SourceDiagnostics.shared
     @ObservedObject private var runner = SourceDiagnosticRunner.shared
     @FocusState private var focusedTarget: DiagFocusTarget?
-    @State private var showingQR = false
     @State private var showingFullReport = false
-    @State private var reportImage: UIImage?
+    @State private var sharedReport: DiagnosticsShareReport?
     @State private var selectedDetailEntry: SourceDiagnosticEntry? = nil
     @State private var lastSelectedEntryId: UUID? = nil
+    @State private var preparingReport = false
 
     public init() {}
 
@@ -36,8 +36,18 @@ public struct SourceDiagnosticsSheetView: View {
             Text("数据源诊断").font(.system(size: 48, weight: .bold))
             Text("红果官方源 · 应用 \(SourceDiagnostics.version) · 源指纹 \(SourceDiagnostics.sourceHash.prefix(12))")
                 .font(.system(size: 29))
+            Text(SourceDiagnostics.sourceRevision + " · " + recorder.sourceRuntimeStatus)
+                .font(.system(size: 25)).foregroundStyle(.secondary)
+                .accessibilityIdentifier("sourceDiagnostics.sourceRuntime")
             Text("检测使用独立游客会话，不影响收藏、历史和当前数据源。包含网络DNS、JS引擎、游客会话与剧集解析全链路检测。")
                 .font(.system(size: 24)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recorder.networkEgress?.summary ?? "出口 IP：正在检测…")
+                    .font(.system(size: 24, weight: .medium))
+                    .accessibilityIdentifier("sourceDiagnostics.egress")
+                Text(NetworkEgressResult.notice + " 来源：" + (recorder.networkEgress?.provider ?? "IP.SB / IPWho.is"))
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
+            }
 
             // 操作按钮栏
             HStack(spacing: 24) {
@@ -60,8 +70,14 @@ public struct SourceDiagnosticsSheetView: View {
                     isExternalFocused: focusedTarget == .action("report"),
                     onDownCommand: { focusFirstEntry() }
                 ) {
-                    showingFullReport = true
+                    preparingReport = true
+                    Task {
+                        await recorder.refreshNetworkEgress()
+                        preparingReport = false
+                        showingFullReport = true
+                    }
                 }
+                .disabled(preparingReport)
                 .focused($focusedTarget, equals: .action("report"))
                 .accessibilityIdentifier("sourceDiagnostics.report")
 
@@ -71,15 +87,14 @@ public struct SourceDiagnosticsSheetView: View {
                     isExternalFocused: focusedTarget == .action("qr"),
                     onDownCommand: { focusFirstEntry() }
                 ) {
-                    let filter = CIFilter.qrCodeGenerator()
-                    filter.message = Data(recorder.qrText.utf8)
-                    filter.correctionLevel = "L"
-                    if let output = filter.outputImage,
-                       let image = CIContext().createCGImage(output.transformed(by: CGAffineTransform(scaleX: 4, y: 4)), from: output.extent.applying(CGAffineTransform(scaleX: 4, y: 4))) {
-                        reportImage = UIImage(cgImage: image)
-                        showingQR = true
+                    preparingReport = true
+                    Task {
+                        await recorder.refreshNetworkEgress()
+                        preparingReport = false
+                        sharedReport = DiagnosticsShareReport(text: recorder.report)
                     }
                 }
+                .disabled(preparingReport)
                 .focused($focusedTarget, equals: .action("qr"))
                 .accessibilityIdentifier("sourceDiagnostics.qr")
 
@@ -197,6 +212,7 @@ public struct SourceDiagnosticsSheetView: View {
         .padding(.horizontal, 64)
         .padding(.vertical, 40)
         .defaultFocus($focusedTarget, .action("run"))
+        .task { await recorder.refreshNetworkEgress() }
         .onExitCommand { dismiss() }
         .sheet(item: $selectedDetailEntry, onDismiss: {
             if let id = lastSelectedEntryId {
@@ -213,9 +229,9 @@ public struct SourceDiagnosticsSheetView: View {
                 showingFullReport = false
             }
         }
-        .sheet(isPresented: $showingQR, onDismiss: { focusedTarget = .action("qr") }) {
-            SourceDiagnosticsQRSheet(reportImage: reportImage) {
-                showingQR = false
+        .sheet(item: $sharedReport, onDismiss: { focusedTarget = .action("qr") }) { report in
+            SourceDiagnosticsQRSheet(report: report.text) {
+                sharedReport = nil
             }
         }
     }
@@ -271,6 +287,17 @@ private struct SourceDiagnosticEntryCardView: View {
 
                 if !entry.suggestion.isEmpty {
                     suggestionRow
+                }
+
+                if !entry.logId.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("LogID:")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.cyan)
+                        Text(entry.logId)
+                            .font(.system(size: 16, design: .monospaced))
+                            .foregroundColor(.cyan.opacity(0.85))
+                    }
                 }
             }
             .padding(22)
@@ -523,6 +550,72 @@ private struct SourceDiagnosticEntryDetailSheet: View {
                         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
                     }
 
+                    if !entry.url.isEmpty || !entry.logId.isEmpty || !entry.searchTabsSummary.isEmpty {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "network.badge.shield.half.filled")
+                                    .foregroundColor(.cyan)
+                                Text("网络链路与请求追踪")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(.cyan)
+                            }
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                                if !entry.method.isEmpty {
+                                    infoRow(label: "HTTP 方法", value: entry.method)
+                                }
+                                if !entry.logId.isEmpty {
+                                    infoRow(label: "字节 LogID", value: entry.logId)
+                                }
+                                if !entry.sessionStatus.isEmpty {
+                                    infoRow(label: "会话状态", value: entry.sessionStatus)
+                                }
+                                if !entry.searchTabsSummary.isEmpty {
+                                    infoRow(label: "分类分布", value: entry.searchTabsSummary)
+                                }
+                            }
+
+                            if !entry.url.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("脱敏请求 URL:")
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.6))
+                                    Text(entry.url)
+                                        .font(.system(size: 16, design: .monospaced))
+                                        .foregroundColor(.cyan)
+                                        .padding(12)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color.black.opacity(0.35))
+                                        .cornerRadius(8)
+                                }
+                            }
+                        }
+                        .padding(24)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    if !entry.responseSnippet.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "curlybraces")
+                                    .foregroundColor(.yellow)
+                                Text("脱敏响应结构摘要")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(.yellow)
+                            }
+                            Text(entry.responseSnippet)
+                                .font(.system(size: 16, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.9))
+                                .padding(16)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.black.opacity(0.55))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.15), lineWidth: 1))
+                                .cornerRadius(12)
+                        }
+                        .padding(24)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+                    }
+
                     // 原始摘要信息
                     VStack(alignment: .leading, spacing: 12) {
                         Text("原始摘要信息")
@@ -652,25 +745,49 @@ private struct SourceDiagnosticsFullReportSheet: View {
     }
 }
 
+private struct DiagnosticsShareReport: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
 @MainActor
 private struct SourceDiagnosticsQRSheet: View {
-    let reportImage: UIImage?
+    let report: String
     let onClose: () -> Void
+    @StateObject private var server = DiagnosticsShareServer()
+
+    private var image: UIImage? {
+        guard let url = server.url else { return nil }
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(url.absoluteString.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage,
+              let image = CIContext().createCGImage(output.transformed(by: CGAffineTransform(scaleX: 8, y: 8)), from: output.extent.applying(CGAffineTransform(scaleX: 8, y: 8))) else { return nil }
+        return UIImage(cgImage: image)
+    }
 
     var body: some View {
-        VStack(spacing: 24) {
-            Text("扫码获取诊断报告").font(.system(size: 42, weight: .bold))
-            if let reportImage {
-                Image(uiImage: reportImage).interpolation(.none).resizable()
-                    .scaledToFit().frame(width: 500, height: 500)
+        VStack(spacing: 22) {
+            Text("手机扫码导出完整日志").font(.system(size: 42, weight: .bold))
+            if let image {
+                Image(uiImage: image).interpolation(.none).resizable()
+                    .scaledToFit().frame(width: 420, height: 420)
                     .padding(24).background(.white)
+            } else if server.message.hasPrefix("正在") { ProgressView().frame(height: 260) }
+            else { Image(systemName: "wifi.exclamationmark").font(.system(size: 90)).frame(height: 200) }
+            Text(server.message).font(.system(size: 27)).multilineTextAlignment(.center)
+            if let url = server.url {
+                Text(url.absoluteString).font(.system(size: 21, design: .monospaced))
+                    .accessibilityIdentifier("sourceDiagnostics.shareURL")
             }
-            Text("包含版本、源指纹和最多最近 8 条脱敏记录。扫码读取文本后手动反馈，不会自动上传。")
-                .font(.system(size: 29)).multilineTextAlignment(.center)
+            Text("打开后可复制或下载报告并手动发送。关闭此页即失效，最长有效 10 分钟，不会自动上传。")
+                .font(.system(size: 23)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             TVButton(title: "返回诊断", icon: "arrow.backward", isProminent: true) { onClose() }
                 .accessibilityIdentifier("sourceDiagnostics.qrBack")
         }
-        .padding(60)
+        .padding(48)
+        .onAppear { server.start(report: report) }
+        .onDisappear { server.stop() }
         .onExitCommand { onClose() }
     }
 }

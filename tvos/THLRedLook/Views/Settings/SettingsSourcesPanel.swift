@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - 站源管理与导入面板
 public struct SettingsSourcesPanel: View {
     @EnvironmentObject private var jsService: JSSourceService
+    @ObservedObject private var sourceDiagnostics = SourceDiagnostics.shared
     @Binding public var showingSourceDiagnostics: Bool
     @Binding public var saveNotice: String?
 
@@ -13,6 +14,7 @@ public struct SettingsSourcesPanel: View {
 
     private enum SourcesFocus: Hashable {
         case diagnostics
+        case resetOfficial
         case officialSource
         case importNetwork
         case clearAll
@@ -38,6 +40,14 @@ public struct SettingsSourcesPanel: View {
                     .foregroundColor(.white.opacity(0.65))
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text("应用 " + SourceDiagnostics.version + " · " + SourceDiagnostics.sourceRevision)
+                    .font(.system(size: 29)).accessibilityIdentifier("settings.sourceRevision")
+                Text(SourceDiagnostics.sourceBundleStatus + " · " + sourceDiagnostics.sourceRuntimeStatus)
+                    .font(.system(size: 25)).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.sourceRuntime")
+            }
+
             // 顶部操作栏
             HStack(spacing: 20) {
                 TVButton(
@@ -50,6 +60,26 @@ public struct SettingsSourcesPanel: View {
                 }
                 .focused($focusedButton, equals: .diagnostics)
                 .accessibilityIdentifier("settings.sourceDiagnostics")
+
+                TVButton(
+                    title: "重置数据源与凭证",
+                    icon: "arrow.counterclockwise.circle.fill",
+                    isProminent: false,
+                    isExternalFocused: focusedButton == .resetOfficial
+                ) {
+                    Task {
+                        isImporting = true
+                        let success = await jsService.resetOfficialSourceAndSession()
+                        isImporting = false
+                        if success {
+                            saveNotice = "已重置官方数据源与设备凭证，可重新检测连接。"
+                        } else {
+                            saveNotice = "重置失败，请重试。"
+                        }
+                    }
+                }
+                .focused($focusedButton, equals: .resetOfficial)
+                .accessibilityIdentifier("settings.resetSourceAndSession")
 
                 let isHongguoInstalled = jsService.sources.contains(where: { ($0["id"] as? String) == "hongguo" })
                 let isHongguoActive = jsService.activeSourceId == "hongguo"
@@ -136,7 +166,7 @@ public struct SettingsSourcesPanel: View {
                         let src = jsService.sources[index]
                         let id = src["id"] as? String ?? ""
                         let name = src["name"] as? String ?? "Unknown"
-                        let version = src["version"] as? String ?? "1.0.0"
+                        let version = id == "hongguo" ? (SourceDiagnostics.sourceManifest["sourceVersion"] ?? (src["version"] as? String ?? "")) : (src["version"] as? String ?? "")
                         let author = src["author"] as? String ?? "Unknown"
                         let isActive = jsService.activeSourceId == id
                         

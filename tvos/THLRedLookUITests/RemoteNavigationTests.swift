@@ -626,7 +626,8 @@ final class RemoteNavigationTests: XCTestCase {
         print("THL_TV_STALE_REMOTE fifth=11 fourth=12 drawer=7 next=8 second=5 next=6 relaunch=4:8 focus=true back=true")
     }
 
-    func testSourceDiagnosticsReportAndRemoteReturn() throws {
+    @MainActor
+    func testSourceDiagnosticsReportAndRemoteReturn() async throws {
         continueAfterFailure = false
         app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
         app.launchArguments = ["-testPage", "settings_sources"]
@@ -636,12 +637,15 @@ final class RemoteNavigationTests: XCTestCase {
         }
 
         let diagId = app.buttons["settings.sourceDiagnostics"].exists ? "settings.sourceDiagnostics" : "settings.source.diagnose.hongguo"
+        XCTAssertTrue(app.staticTexts["settings.sourceRevision"].label.contains("JS "))
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos-source-release-20261028/source-settings.png"))
         // 导航至诊断按钮
         for _ in 0..<8 {
             if app.buttons[diagId].hasFocus { break }
             let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasFocus == true")).firstMatch
             trace("diagnostics-locate")
-            if focused.identifier == "nav.settings" { press(.down) }
+            if focused.identifier == "nav.settings" { press(.right, focus: "settings.nav.sources") }
+            else if focused.identifier == "settings.nav.sources" { press(.right) }
             else if focused.label.contains("站源管理") { press(.right) }
             else if app.buttons["settings.source.card.hongguo"].hasFocus { press(.up) }
             else { press(.down) }
@@ -651,11 +655,15 @@ final class RemoteNavigationTests: XCTestCase {
         }
         wait("diagnostics entry focus") { self.app.buttons[diagId].hasFocus }
         press(.select, focus: "sourceDiagnostics.run")
+        wait("actual runtime source identity visible") { self.app.staticTexts["sourceDiagnostics.sourceRuntime"].exists }
+        XCTAssertTrue(app.staticTexts["sourceDiagnostics.sourceRuntime"].label.contains("JS "))
         press(.select)
         wait("diagnostics live result", seconds: 120) { self.app.staticTexts["sourceDiagnostics.result"].label.contains("检测完成") || self.app.staticTexts["sourceDiagnostics.result"].label.contains("检测失败") }
+        XCTAssertTrue(app.staticTexts["sourceDiagnostics.sourceRuntime"].label.contains("运行 JS 与本包一致"))
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos-source-release-20261028/source-diagnostics.png"))
         print("THL_TV_DIAGNOSTICS_LIVE \(app.staticTexts["sourceDiagnostics.result"].label)")
         let shot = XCUIScreen.main.screenshot()
-        try? shot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos27-focus-20261020/tvos_source_diagnostics_modal.png"))
+        try? shot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/tvos_source_diagnostics_modal.png"))
         let visible = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator:" ")
         XCTAssertTrue(visible.contains("检索") || visible.contains("搜索") || visible.contains("DNS") || visible.contains("网络"))
         XCTAssertFalse(visible.contains("device_id="))
@@ -669,8 +677,13 @@ final class RemoteNavigationTests: XCTestCase {
         press(.select)
         wait("full diagnostics report sheet opens", seconds: 15) { self.app.staticTexts["sourceDiagnostics.reportContent"].exists }
         let reportShot = XCUIScreen.main.screenshot()
-        try? reportShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos27-focus-20261020/tvos_source_diagnostics_report.png"))
+        try? reportShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/tvos_source_diagnostics_report.png"))
         let reportText = app.staticTexts["sourceDiagnostics.reportContent"].label
+        XCTAssertTrue(app.staticTexts["sourceDiagnostics.egress"].exists || reportText.contains("出口 IP"))
+        XCTAssertTrue(reportText.contains("IP 归属地区"))
+        XCTAssertTrue(reportText.contains("IP 查询来源"))
+        XCTAssertFalse(reportText.contains("出口 IP: 尚未检测"))
+        XCTAssertFalse(reportText.contains("出口 IP: 未取得"))
         XCTAssertTrue(reportText.contains("核心技术诊断报告") || reportText.contains("应用版本"))
         XCTAssertTrue(reportText.contains("hongguo"))
 
@@ -684,6 +697,20 @@ final class RemoteNavigationTests: XCTestCase {
         wait("diagnostics QR focused") { self.app.buttons["sourceDiagnostics.qr"].hasFocus }
         press(.select)
         wait("diagnostics report QR") { self.app.buttons["sourceDiagnostics.qrBack"].exists }
+        wait("phone download URL ready", seconds: 20) { self.app.staticTexts["sourceDiagnostics.shareURL"].exists }
+        let shareURL = try XCTUnwrap(URL(string: app.staticTexts["sourceDiagnostics.shareURL"].label))
+        let (phonePage, pageResponse) = try await URLSession.shared.data(from: shareURL)
+        XCTAssertEqual((pageResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertTrue(String(decoding: phonePage, as: UTF8.self).contains("下载日志文件"))
+        let (phoneLog, logResponse) = try await URLSession.shared.data(from: shareURL.appendingPathComponent("report.txt"))
+        XCTAssertEqual((logResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertTrue(String(decoding: phoneLog, as: UTF8.self).contains("hongguo"))
+        XCTAssertTrue(String(decoding: phoneLog, as: UTF8.self).contains("IP 归属地区"))
+        XCTAssertTrue(String(decoding: phoneLog, as: UTF8.self).contains("代理分流"))
+        XCTAssertTrue((logResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.contains("attachment") == true)
+        try phonePage.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/phone-report.html"))
+        try phoneLog.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/phone-report.txt"))
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/tvos_phone_share.png"))
         press(.menu, focus: "sourceDiagnostics.qr")
         wait("diagnostics return modal after qr", seconds: 10) { self.app.buttons["sourceDiagnostics.qr"].hasFocus }
 
@@ -705,7 +732,7 @@ final class RemoteNavigationTests: XCTestCase {
 
         // 截取焦点下移到列表卡片的高亮图
         let listFocusShot = XCUIScreen.main.screenshot()
-        try? listFocusShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos27-focus-20261020/tvos_source_diagnostics_entry_focus.png"))
+        try? listFocusShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/tvos_source_diagnostics_entry_focus.png"))
 
         // 继续按 down 键下移到第 1 项（如果存在）
         if app.buttons["sourceDiagnostics.entry.1"].exists {
@@ -728,7 +755,7 @@ final class RemoteNavigationTests: XCTestCase {
             self.app.buttons["sourceDiagnostics.detailClose"].hasFocus
         }
         let detailShot = XCUIScreen.main.screenshot()
-        try? detailShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos27-focus-20261020/tvos_source_diagnostics_entry_detail.png"))
+        try? detailShot.pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/overseas-routing-20261028/tvos_source_diagnostics_entry_detail.png"))
 
         // 关闭详细信息弹窗
         press(.select) // 点击“关闭详情”按钮
@@ -753,7 +780,7 @@ final class RemoteNavigationTests: XCTestCase {
         // 5. 返回设置页
         press(.menu)
         wait("diagnostics return settings") { self.app.buttons["settings.sourceDiagnostics"].hasFocus || self.app.buttons["settings.source.card.hongguo"].hasFocus || self.app.buttons["settings.source.diagnose.hongguo"].hasFocus }
-        print("THL_TV_DIAGNOSTICS_REMOTE report=true qr=true entry_focus=true detail_sheet=true back=true")
+        print("THL_TV_DIAGNOSTICS_REMOTE report=true qr=true phone_download=true entry_focus=true detail_sheet=true back=true")
     }
 
     func testAutoWaterfallPagination() throws {
@@ -980,6 +1007,31 @@ final class RemoteNavigationTests: XCTestCase {
         print("THL_REMOTE_RESULT danmakuSettings=true speedSelection=true focus=true")
     }
 
+    func testQualitySelectionDrawerAndReturnFocus() throws {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "controls", "-testEpisode", "5", "-thl_icloud_sync_enabled", "NO"]
+        app.launch()
+        wait("quality controls ready") { self.app.buttons["player.playPause"].hasFocus }
+        for target in ["seekForward", "prevEpisode", "episodeDrawer", "nextEpisode", "speed", "quality"] {
+            press(.right, focus: "player." + target)
+        }
+        press(.select)
+        wait("automatic quality focus") { self.app.buttons["player.quality.option.0"].hasFocus }
+        press(.down, focus: "player.quality.option.1080")
+        press(.down, focus: "player.quality.option.720")
+        press(.select)
+        wait("720 chosen and control restored") {
+            self.app.buttons["player.quality"].hasFocus && self.app.buttons["player.quality"].label.contains("720")
+        }
+        press(.select)
+        wait("remembered quality row focus") { self.app.buttons["player.quality.option.720"].hasFocus }
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/build/verification/tvos-quality-20261028/quality-drawer.png"))
+        press(.menu)
+        wait("menu returns to quality control") { self.app.buttons["player.quality"].hasFocus }
+        print("THL_QUALITY_REMOTE options=true chosen720=true rowFocusRestored=true menuReturn=true")
+    }
+
     func testAllPlayerControlButtonsFocusAndAction() throws {
         continueAfterFailure = false
         app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
@@ -1068,6 +1120,9 @@ final class RemoteNavigationTests: XCTestCase {
         press(.right, focus: "player.quality")
         XCTAssertTrue(app.buttons["player.quality"].hasFocus)
         press(.select)
+        wait("quality choices open") { self.app.buttons["player.quality.option.0"].exists }
+        press(.menu)
+        wait("quality control focus restored") { self.app.buttons["player.quality"].hasFocus }
 
         // 11. 测试向右导航至弹幕开关并点击切换
         press(.right, focus: "player.danmaku")
@@ -1671,6 +1726,8 @@ final class RemoteNavigationTests: XCTestCase {
         wait("detail play focused") { self.app.buttons["detail.play"].hasFocus }
 
         // 1. 直接按 Select 进入播放
+        let playLabel = app.buttons["detail.play"].label
+        let episode = playLabel.range(of: "[0-9]+", options: .regularExpression).map { String(playLabel[$0]) } ?? "1"
         press(.select)
 
         // 2. 验证默认不弹出控制栏：画面纯净，player.wake 处于等待或获得焦点状态
@@ -1696,7 +1753,9 @@ final class RemoteNavigationTests: XCTestCase {
         // 5. 再次按遥控器 Menu 键：此时正常退出播放页回到选集详情页！
         press(.menu)
         wait("second menu returns to episode detail") {
-            !self.app.buttons["player.wake"].exists && (self.app.buttons["detail.episode.76"].hasFocus || self.app.buttons["detail.play"].hasFocus || self.app.buttons["detail.play"].exists)
+            let selected = self.app.buttons["detail.episode.\(episode)"]
+            let play = self.app.buttons["detail.play"]
+            return !self.app.buttons["player.wake"].exists && ((selected.exists && selected.hasFocus) || (play.exists && play.hasFocus))
         }
 
         print("THL_TV_PLAYER_CONTROLS_VERIFICATION initialHidden=true tapScreenHide=true menuDismissControls=true menuExitToDetail=true")
@@ -2384,7 +2443,8 @@ final class RemoteNavigationTests: XCTestCase {
         let shotDiag = XCUIScreen.main.screenshot()
         try? shotDiag.pngRepresentation.write(to: shotDir.appendingPathComponent("tvos_settings_source_diag_focused.png"))
 
-        // 按 Right 移动到「官方数据源」，再按 Right 移动到「网络链接导入」
+        press(.right) // 聚焦重置数据源与凭证
+        sleep(1)
         press(.right) // 聚焦官方数据源
         sleep(1)
         press(.right) // 聚焦网络链接导入
@@ -2692,5 +2752,85 @@ extension RemoteNavigationTests {
         press(.menu, focus: "nav.feed")
         print("THL_TV_LIST_RESULT feed=true unique=5 verticalSwitch=true autoPaging=true previous=true controlsFocus=true detailEntry=true detailTitle=true detailSelection=true detailReturn=true menuReturn=true resume=true")
         app.terminate()
+    }
+
+    func testResetOfficialSourceAndSession() throws {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "settings_sources"]
+        app.launch()
+
+        wait("settings sources ready", seconds: 20) {
+            self.app.buttons["settings.sourceDiagnostics"].exists || self.app.buttons["settings.resetSourceAndSession"].exists
+        }
+
+        if self.app.buttons["nav.settings"].hasFocus {
+            press(.select)
+        }
+
+        wait("settings sources nav focused", seconds: 15) {
+            self.app.buttons["settings.nav.sources"].hasFocus
+        }
+
+        press(.right)
+        wait("source diagnostics focused", seconds: 15) {
+            self.app.buttons["settings.sourceDiagnostics"].hasFocus
+        }
+
+        press(.right, focus: "settings.resetSourceAndSession")
+        XCTAssertTrue(app.buttons["settings.resetSourceAndSession"].hasFocus)
+
+        press(.select)
+
+        wait("reset notice appears", seconds: 10) {
+            self.app.staticTexts.allElementsBoundByIndex.contains { $0.label.contains("已重置官方数据源与设备凭证") }
+        }
+
+        print("THL_TV_RESET_OFFICIAL_SESSION_VERIFIED resetFocus=true resetSuccess=true noticeShown=true")
+        app.terminate()
+    }
+}
+
+extension RemoteNavigationTests {
+    func testLongSeriesEpisode101And127WithRemote() {
+        continueAfterFailure = false
+        app.launchEnvironment["DISABLE_REMOTE_IMAGES"] = "1"
+        app.launchArguments = ["-testPage", "detail", "-testDramaId", "hongguo:7673742740500270105", "-testDramaTitle", "觉醒伪神：神明弃我我自为神", "-thl_icloud_sync_enabled", "NO"]
+        app.launch()
+        defer { app.terminate() }
+        wait("long series detail ready", seconds: 60) { self.app.buttons["detail.play"].hasFocus }
+        focusChunk(2)
+        press(.select)
+        press(.down, focus: "detail.episode.101")
+        press(.select)
+        wait("episode 101 player", seconds: 30) { self.app.buttons["player.wake"].exists }
+        showControls()
+        wait("episode 101 playing", seconds: 60) {
+            self.app.staticTexts["player.episode"].label.contains("第 101 集") && self.seconds(self.app.staticTexts["player.position"].label) > 0
+        }
+        focusDrawer()
+        press(.right, focus: "player.nextEpisode")
+        press(.select)
+        wait("episode 102 playing", seconds: 60) {
+            self.showControls()
+            return self.app.staticTexts["player.episode"].label.contains("第 102 集") && self.seconds(self.app.staticTexts["player.position"].label) > 0
+        }
+        press(.menu, focus: "player.wake")
+        press(.menu)
+        wait("return to episode 102 focus") { self.app.buttons["detail.episode.102"].hasFocus }
+        press(.down, focus: "detail.episode.110")
+        press(.down, focus: "detail.episode.118")
+        press(.down, focus: "detail.episode.126")
+        press(.right, focus: "detail.episode.127")
+        press(.select)
+        wait("last episode player", seconds: 30) { self.app.buttons["player.wake"].exists }
+        showControls()
+        wait("episode 127 playing", seconds: 60) {
+            self.app.staticTexts["player.episode"].label.contains("第 127 集") && self.seconds(self.app.staticTexts["player.position"].label) > 0
+        }
+        press(.menu, focus: "player.wake")
+        press(.menu)
+        wait("return to final episode focus") { self.app.buttons["detail.episode.127"].hasFocus }
+        print("THL_LONG_SERIES_REMOTE episode101=true next102=true last127=true returnFocus=true")
     }
 }

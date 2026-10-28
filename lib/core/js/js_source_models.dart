@@ -93,9 +93,20 @@ class JsSourceUpdateResult {
     required this.name,
     required this.success,
     this.changed = false,
+    this.added = false,
     this.error = '',
   });
 
   final String sourceId, name, error;
-  final bool success, changed;
+  final bool success, changed, added;
+
+  factory JsSourceUpdateResult.fromJson(Map<String, dynamic> json) =>
+      JsSourceUpdateResult(
+        sourceId: json['sourceId'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        success: json['success'] == true,
+        changed: json['changed'] == true,
+        added: json['added'] == true,
+        error: json['error'] as String? ?? '',
+      );
 }

@@ -1,5 +1,25 @@
 import Foundation
 
+public enum PlaybackEngine: String, CaseIterable {
+    case automatic, system, mpv
+
+    public var label: String {
+        switch self {
+        case .automatic: return "自动"
+        case .system: return "AVPlayer"
+        case .mpv: return "MPV"
+        }
+    }
+
+    public var next: PlaybackEngine {
+        switch self {
+        case .automatic: return .system
+        case .system: return .mpv
+        case .mpv: return .automatic
+        }
+    }
+}
+
 public struct PlaybackPlan: Hashable, Codable {
     public let url: String
     public let headers: [String: String]
@@ -64,6 +84,10 @@ public struct PlaybackPlan: Hashable, Codable {
         self.routeIndex = try container.decodeIfPresent(Int.self, forKey: .routeIndex) ?? 0
         self.routeCount = try container.decodeIfPresent(Int.self, forKey: .routeCount) ?? 1
         self.local = try container.decodeIfPresent(Bool.self, forKey: .local) ?? false
+    }
+
+    public func isReusable(at date: Date = Date(), minimumLifetime: TimeInterval = 5) -> Bool {
+        !url.isEmpty && (local || expiresAt <= 0 || Double(expiresAt) > date.addingTimeInterval(minimumLifetime).timeIntervalSince1970 * 1000)
     }
 
     public var hasAlternative: Bool {

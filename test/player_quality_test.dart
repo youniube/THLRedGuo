@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
 
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/core/player/luna_exo_player.dart';
@@ -12,6 +13,8 @@ import 'package:THLRedLook/pages/player/player_page.dart';
 import 'package:THLRedLook/views/player/player_controls_view.dart';
 import 'package:THLRedLook/views/player/player_menu.dart';
 import 'package:THLRedLook/views/player/player_quality_sheet_view.dart';
+import 'package:THLRedLook/views/player/player_viewport_view.dart';
+import 'package:THLRedLook/utils/media/video_output_size.dart';
 
 const _drama = Drama(
   id: 'synthetic:quality',
@@ -49,8 +52,14 @@ class _QualityPlayer extends LunaExoPlayer {
     stream.durationController.add(state.duration);
   }
 
-  void emitSize(int width, int height) {
-    final parameters = VideoParams(w: width, h: height, dw: width, dh: height);
+  void emitSize(int width, int height, {int rotation = 0}) {
+    final parameters = VideoParams(
+      w: width,
+      h: height,
+      dw: width,
+      dh: height,
+      rotate: rotation,
+    );
     state = state.copyWith(
       width: width,
       height: height,
@@ -58,6 +67,25 @@ class _QualityPlayer extends LunaExoPlayer {
     );
     stream.videoParamsController.add(parameters);
   }
+}
+
+class _SizedVideoPlayer extends LunaExoPlayer {
+  _SizedVideoPlayer(Size size, int rotation)
+    : surfaceController = VideoPlayerController.networkUrl(
+        Uri.parse('https://synthetic.invalid/frame.mp4'),
+      ) {
+    surfaceController.value = VideoPlayerValue(
+      duration: const Duration(minutes: 1),
+      isInitialized: true,
+      size: size,
+      rotationCorrection: rotation,
+    );
+  }
+
+  final VideoPlayerController surfaceController;
+
+  @override
+  VideoPlayerController get controller => surfaceController;
 }
 
 class _FallbackRepository extends _QualityRepository {
@@ -127,6 +155,7 @@ Future<_QualityPlayer> _openPlayer(
   int requestedQuality = 0,
   _QualityRepository? repository,
   _QualityPlayer? player,
+  ValueChanged<bool>? onBackgroundWorkAllowed,
 }) async {
   tester.view.physicalSize = const Size(430, 1000);
   tester.view.devicePixelRatio = 1;
@@ -153,6 +182,7 @@ Future<_QualityPlayer> _openPlayer(
         store: store,
         playerFactory: () => activePlayer,
         videoBuilder: (controls) => controls,
+        onBackgroundWorkAllowed: onBackgroundWorkAllowed,
       ),
     ),
   );
@@ -166,6 +196,126 @@ String _qualityLabel(WidgetTester tester) =>
     tester.widget<PlayerControls>(find.byType(PlayerControls)).qualityLabel;
 
 void main() {
+  testWidgets('首播和缓冲不足时暂停后台请求，缓冲充足后才放行', (tester) async {
+    final allowed = <bool>[];
+    final player = await _openPlayer(
+      tester,
+      onBackgroundWorkAllowed: allowed.add,
+    );
+    void progress(int position, int buffer, {bool buffering = false}) {
+      player.state = player.state.copyWith(
+        position: Duration(milliseconds: position),
+        buffer: Duration(milliseconds: buffer),
+        buffering: buffering,
+      );
+      player.stream.positionController.add(player.state.position);
+    }
+
+    progress(500, 20000);
+    await tester.pump();
+    expect(allowed, isEmpty);
+    progress(4000, 7000);
+    await tester.pump();
+    expect(allowed, isEmpty);
+    progress(4000, 15000);
+    await tester.pump();
+    expect(allowed, [true]);
+    progress(4500, 15000, buffering: true);
+    await tester.pump();
+    expect(allowed, [true, false]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  test('显示尺寸使用完整的显示宽高、旋转及像素比例，缺失时不混用尺寸', () {
+    expect(
+      videoDisplaySize(const VideoParams(w: 1920, h: 1080, rotate: 90)),
+      const Size(1080, 1920),
+    );
+    expect(
+      videoDisplaySize(const VideoParams(w: 1920, h: 1080, rotate: -90)),
+      const Size(1080, 1920),
+    );
+    expect(
+      videoDisplaySize(const VideoParams(w: 720, h: 576, dw: 1024, dh: 576)),
+      const Size(1024, 576),
+    );
+    expect(
+      videoDisplaySize(const VideoParams(w: 720, h: 576, dw: 1024)),
+      const Size(720, 576),
+    );
+    expect(
+      videoDisplaySize(const VideoParams(w: 720, h: 576, aspect: 16 / 9)),
+      const Size(1024, 576),
+    );
+    expect(
+      videoDisplaySize(const VideoParams(w: 720, h: 576, par: 64 / 45)),
+      const Size(1024, 576),
+    );
+    expect(videoDisplaySize(const VideoParams()), isNull);
+    expect(videoDisplaySize(const VideoParams(w: 1920, h: 0)), isNull);
+  });
+
+  for (final viewport in [const Size(390, 800), const Size(800, 390)]) {
+    for (final (width, height, rotation, expected) in [
+      (1080.0, 1920.0, 0, 9 / 16),
+      (1920.0, 1080.0, 0, 16 / 9),
+      (1920.0, 1080.0, 90, 9 / 16),
+      (1080.0, 1920.0, 270, 16 / 9),
+      (1000.0, 1000.0, 0, 1.0),
+      (2520.0, 1080.0, 0, 21 / 9),
+    ]) {
+      testWidgets('$width×$height 旋转 $rotation 在 $viewport 中完整等比居中', (
+        tester,
+      ) async {
+        tester.view.physicalSize = viewport;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final player = _SizedVideoPlayer(Size(width, height), rotation);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: LunaExoVideoView(player: player)),
+          ),
+        );
+        final frame = tester.getRect(find.byType(AspectRatio));
+        expect(frame.width / frame.height, closeTo(expected, 0.000001));
+        expect(frame.left, greaterThanOrEqualTo(-0.000001));
+        expect(frame.top, greaterThanOrEqualTo(-0.000001));
+        expect(frame.right, lessThanOrEqualTo(viewport.width + 0.000001));
+        expect(frame.bottom, lessThanOrEqualTo(viewport.height + 0.000001));
+        expect(frame.center.dx, closeTo(viewport.width / 2, 0.000001));
+        expect(frame.center.dy, closeTo(viewport.height / 2, 0.000001));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await player.surfaceController.dispose();
+        await player.dispose();
+      });
+    }
+  }
+
+  testWidgets('实际尺寸未识别和切换视频时清除旧比例，横竖画幅按解码尺寸更新', (tester) async {
+    final player = await _openPlayer(tester);
+    double? ratio() => tester
+        .widget<PlayerViewportView>(find.byType(PlayerViewportView))
+        .aspectRatio;
+    expect(ratio(), isNull);
+    player.emitSize(1080, 1920);
+    await tester.pumpAndSettle();
+    expect(ratio(), 9 / 16);
+    player.emitSize(0, 0);
+    await tester.pumpAndSettle();
+    expect(ratio(), isNull);
+    player.emitSize(1920, 1080);
+    await tester.pumpAndSettle();
+    expect(ratio(), 16 / 9);
+    player.emitSize(1920, 1080, rotation: 90);
+    await tester.pumpAndSettle();
+    expect(ratio(), 9 / 16);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   for (final exhausted in [false, true]) {
     testWidgets(exhausted ? '备用流耗尽时刷新地址，不重复尝试失效会话' : '原生播放失败自动切备用流，并保留当前会话', (
       tester,

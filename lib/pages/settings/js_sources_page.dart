@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/core/js/js_source_models.dart';
-import 'package:THLRedLook/core/js/js_source_presets.dart';
+import 'package:THLRedLook/core/js/js_source_subscription.dart';
 import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 
@@ -16,11 +16,13 @@ class JsSourcesPage extends StatefulWidget {
     required this.repository,
     required this.store,
     this.service,
+    this.openNetworkImport = false,
   });
 
   final AppRepository repository;
   final LocalStore store;
   final JsSourceService? service;
+  final bool openNetworkImport;
 
   @override
   State<JsSourcesPage> createState() => _JsSourcesPageState();
@@ -40,6 +42,18 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
   void initState() {
     super.initState();
     _service.addListener(_refreshService);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await _service.loadSubscriptions();
+        if (mounted && widget.openNetworkImport) await _showUrlImportDialog();
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('读取合集订阅失败：$error')));
+        }
+      }
+    });
   }
 
   void _refreshService() {
@@ -112,19 +126,21 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
     if (!_service.hasSubscriptions) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('尚未保存更新链接，请先在插件下方设置更新链接')));
+      ).showSnackBar(const SnackBar(content: Text('请先导入网络合集订阅，或为插件设置更新链接')));
       return;
     }
     final results = await _service.updateAll();
     if (!mounted) return;
+    final added = results.where((item) => item.success && item.added).length;
     final updated = results
-        .where((item) => item.success && item.changed)
+        .where((item) => item.success && item.changed && !item.added)
         .length;
     final unchanged = results
         .where((item) => item.success && !item.changed)
         .length;
     final failed = results.where((item) => !item.success).toList();
-    final summary = '更新 $updated 个，已是最新 $unchanged 个，失败 ${failed.length} 个';
+    final summary =
+        '${added > 0 ? "新增 $added 个，" : ""}更新 $updated 个，已是最新 $unchanged 个，失败 ${failed.length} 个';
     if (failed.isEmpty) {
       ScaffoldMessenger.of(
         context,
@@ -311,9 +327,8 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: Text(
-            target == null ? '网络订阅 / URL 导入插件' : '${target.name}的更新链接',
-          ),
+          title: Text(target == null ? '网络订阅导入' : '${target.name}的更新链接'),
+          scrollable: true,
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
@@ -322,7 +337,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
               children: [
                 Text(
                   target == null
-                      ? '请输入 JS 插件直链（如 GitHub Raw、Gist Raw）。导入后会保存地址，供后续更新。'
+                      ? '支持单个 JS 脚本直链或多源 JSON 合集清单。合集地址会自动保存，刷新订阅可获取新增源和脚本更新。'
                       : '填写此插件的 JS 直链，保存时会拉取更新并核对源 ID。旧版导入的插件需先补填一次链接。',
                   style: const TextStyle(fontSize: 12, color: AppColors.grey),
                 ),
@@ -330,10 +345,12 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                 TextField(
                   controller: controller,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: '插件脚本 URL',
-                    hintText: 'https://example.com/source.js',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: target == null ? '合集清单或 JS 脚本 URL' : 'JS 脚本 URL',
+                    hintText: target == null
+                        ? 'https://example.com/sources.json'
+                        : 'https://example.com/source.js',
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                 ),
@@ -370,6 +387,11 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
       final ok = await _service.importFromUrl(result);
       if (!mounted) return;
       if (ok) {
+        final subscription = _service.lastSubscriptionImport;
+        if (subscription != null) {
+          await _showSubscriptionResult(subscription);
+          return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('成功从网络拉取并装载 JS 数据源插件'),
@@ -382,7 +404,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
             content: Text(
               _service.lastError.isNotEmpty
                   ? _service.lastError
-                  : '网络拉取或导入失败，请检查 URL 可达性及脚本内容规范',
+                  : '网络导入失败，请检查链接、合集清单或 JS 脚本内容',
             ),
             behavior: SnackBarBehavior.floating,
           ),
@@ -391,28 +413,145 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
     }
   }
 
-  Future<void> _showPresetSelection() async {
-    await showPresetSourceSelectionDialog(
+  Future<void> _showSubscriptionResult(
+    JsSubscriptionImportResult result,
+  ) async {
+    final added = result.results
+        .where((item) => item.success && item.added)
+        .length;
+    final updated = result.results
+        .where((item) => item.success && item.changed && !item.added)
+        .length;
+    final unchanged = result.results
+        .where((item) => item.success && !item.changed)
+        .length;
+    final failed = result.results.where((item) => !item.success).length;
+    await showDialog<void>(
       context: context,
-      service: _service,
-      onSourceChanged: () {
-        if (mounted) setState(() {});
-      },
+      builder: (ctx) => AlertDialog(
+        title: Text('${result.subscription.name} · 订阅结果'),
+        scrollable: true,
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('合集地址已保存，可在数据源管理页刷新订阅。'),
+              const SizedBox(height: 8),
+              Text('新增 $added 个，更新 $updated 个，已是最新 $unchanged 个，失败 $failed 个'),
+              for (final item in result.results)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    '${item.name}：${!item.success
+                        ? item.error
+                        : item.added
+                        ? "已新增"
+                        : item.changed
+                        ? "已更新"
+                        : "已是最新"}',
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
     );
   }
 
-  Future<void> _importPresets() async {
-    final count = await importPresetSources(_service);
+  Future<void> _refreshSubscription(JsSourceSubscription subscription) async {
+    final result = await _service.refreshSubscription(subscription);
     if (!mounted) return;
-    if (count > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已导入 $count 个测试数据源插件（当前测试包专用）'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    if (result != null) {
+      await _showSubscriptionResult(result);
+    } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('合集刷新失败：${_service.lastError}')));
     }
   }
+
+  Future<void> _removeSubscription(JsSourceSubscription subscription) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('移除合集订阅'),
+        content: Text('移除「${subscription.name}」的合集订阅地址？已导入的源和单源更新链接会保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('移除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final removed = await _service.removeSubscription(subscription.url);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(removed ? '已移除合集订阅' : _service.lastError)),
+    );
+  }
+
+  Widget _buildSubscriptionCard(JsSourceSubscription subscription) => Card(
+    margin: const EdgeInsets.only(bottom: 12),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            subscription.name,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${subscription.sources.length} 个源',
+            style: const TextStyle(color: AppColors.grey),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subscription.url,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: AppColors.grey),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                key: ValueKey('refresh-subscription-${subscription.url}'),
+                onPressed: _service.loading
+                    ? null
+                    : () => _refreshSubscription(subscription),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('刷新合集'),
+              ),
+              TextButton.icon(
+                key: ValueKey('remove-subscription-${subscription.url}'),
+                onPressed: _service.loading
+                    ? null
+                    : () => _removeSubscription(subscription),
+                icon: const Icon(Icons.link_off_rounded, size: 18),
+                label: const Text('移除订阅'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
 
   Future<void> _confirmDeleteSource(JsSourceMeta meta) async {
     final confirmed = await showDialog<bool>(
@@ -485,10 +624,10 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
           children: [
             Icon(Icons.delete_forever_rounded, color: AppColors.hongguoRed),
             SizedBox(width: 8),
-            Text('清空所有数据源'),
+            Text('清空外部数据源'),
           ],
         ),
-        content: const Text('确定要清空所有已导入的 JS 数据源插件吗？\n此操作将删除本地所有插件脚本文件，不可恢复。'),
+        content: const Text('确定要清空外部数据源和合集订阅地址吗？\n内置的官方免费短剧会保留，外部插件需重新导入。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -506,7 +645,16 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
     );
 
     if (confirmed == true && mounted) {
-      await _service.clearAll();
+      try {
+        await _service.clearAll();
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('清空外部数据源失败：$error')));
+        }
+        return;
+      }
       if (!mounted) return;
       try {
         await widget.store.setSource('hongguo');
@@ -514,7 +662,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('已清空所有数据源插件'),
+          content: Text('已清空外部数据源和合集订阅，官方免费短剧已保留'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -532,7 +680,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
         actions: [
           IconButton(
             key: const ValueKey('update-all-js-sources'),
-            tooltip: '更新全部 URL 订阅',
+            tooltip: '更新全部订阅',
             icon: _service.updatingAll
                 ? const SizedBox(
                     width: 20,
@@ -556,12 +704,6 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
             elevation: 4,
             onSelected: (action) {
               switch (action) {
-                case 'select_presets':
-                  _showPresetSelection();
-                  break;
-                case 'presets':
-                  _importPresets();
-                  break;
                 case 'url':
                   _showUrlImportDialog();
                   break;
@@ -589,7 +731,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                   children: [
                     Icon(Icons.system_update_alt_rounded, size: 20),
                     SizedBox(width: 12),
-                    Text('更新全部 URL 订阅'),
+                    Text('更新全部订阅'),
                   ],
                 ),
               ),
@@ -604,34 +746,6 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                 ),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem<String>(
-                value: 'select_presets',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.checklist_rounded,
-                      size: 20,
-                      color: AppColors.hongguoRed,
-                    ),
-                    SizedBox(width: 12),
-                    Text('选择预设源分别导入'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'presets',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.flash_on_rounded,
-                      size: 20,
-                      color: AppColors.hongguoRed,
-                    ),
-                    SizedBox(width: 12),
-                    Text('一键导入测试预设源'),
-                  ],
-                ),
-              ),
               const PopupMenuItem<String>(
                 value: 'url',
                 child: Row(
@@ -674,7 +788,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                     ),
                     SizedBox(width: 12),
                     Text(
-                      '清空所有数据源',
+                      '清空外部数据源',
                       style: TextStyle(color: AppColors.hongguoRed),
                     ),
                   ],
@@ -698,7 +812,9 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                 Text(
                   _service.updatingSourceId.isNotEmpty
                       ? '正在更新：${sources.where((source) => source.id == _service.updatingSourceId).firstOrNull?.name ?? "插件"}'
-                      : '正在处理插件…',
+                      : _service.updatingSubscriptionUrl.isNotEmpty
+                      ? '正在刷新合集：${_service.subscriptions.where((item) => item.url == _service.updatingSubscriptionUrl).firstOrNull?.name ?? "网络订阅"}'
+                      : '正在处理订阅或插件…',
                 ),
                 const SizedBox(height: 12),
               ],
@@ -757,8 +873,20 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
               ),
               const SizedBox(height: 18),
 
+              if (_service.subscriptions.isNotEmpty) ...[
+                Text(
+                  '网络合集订阅 (${_service.subscriptions.length})',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                for (final subscription in _service.subscriptions)
+                  _buildSubscriptionCard(subscription),
+                const SizedBox(height: 6),
+              ],
               Text(
-                '已装载的外部 JS 插件 (${sources.length})',
+                '已装载的 JS 数据源 (${sources.length})',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: isDark ? AppColors.white : AppColors.darkBackground,
@@ -808,7 +936,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          '本应用出厂不内置任何站源，请从外部导入或添加 .js 插件。各插件在沙箱内独立运行、互不干扰。',
+                          '软件内置官方免费短剧，其他数据源可通过网络合集订阅、JS 直链或本地文件导入。',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 13,
@@ -823,28 +951,14 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                           alignment: WrapAlignment.center,
                           children: [
                             FilledButton.icon(
-                              key: const ValueKey('btn-select-preset-import'),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: AppColors.hongguoRed,
-                                shape: const StadiumBorder(),
+                              key: const ValueKey(
+                                'btn-network-subscription-import',
                               ),
-                              onPressed: _showPresetSelection,
-                              icon: const Icon(
-                                Icons.checklist_rounded,
-                                size: 18,
-                              ),
-                              label: const Text('选择预设源分别导入'),
-                            ),
-                            FilledButton.tonalIcon(
-                              style: FilledButton.styleFrom(
-                                shape: const StadiumBorder(),
-                              ),
-                              onPressed: _importPresets,
-                              icon: const Icon(
-                                Icons.flash_on_rounded,
-                                size: 18,
-                              ),
-                              label: const Text('一键导入全部预设'),
+                              onPressed: _service.loading
+                                  ? null
+                                  : () => _showUrlImportDialog(),
+                              icon: const Icon(Icons.link_rounded, size: 18),
+                              label: const Text('网络订阅导入'),
                             ),
                             FilledButton.icon(
                               style: FilledButton.styleFrom(
@@ -1045,18 +1159,21 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                                         ),
                                       ),
                                     const SizedBox(width: 4),
-                                    IconButton(
-                                      key: ValueKey('delete-source-${meta.id}'),
-                                      tooltip: '删除数据源',
-                                      icon: const Icon(
-                                        Icons.delete_outline_rounded,
-                                        size: 20,
-                                        color: AppColors.grey,
+                                    if (!_service.isBuiltinSource(meta.id))
+                                      IconButton(
+                                        key: ValueKey(
+                                          'delete-source-${meta.id}',
+                                        ),
+                                        tooltip: '删除数据源',
+                                        icon: const Icon(
+                                          Icons.delete_outline_rounded,
+                                          size: 20,
+                                          color: AppColors.grey,
+                                        ),
+                                        onPressed: _service.loading
+                                            ? null
+                                            : () => _confirmDeleteSource(meta),
                                       ),
-                                      onPressed: _service.loading
-                                          ? null
-                                          : () => _confirmDeleteSource(meta),
-                                    ),
                                   ],
                                 ),
                               ],

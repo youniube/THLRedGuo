@@ -80,8 +80,12 @@ abstract class AppRepository {
   Future<void> cancelCategories() async {}
   Future<void> cancelSuggestions() async {}
   Future<void> cancelRecommendations() async {}
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async =>
-      throw AppFailure('当前数据源暂不支持视频流推荐');
+  Future<void> cancelVideoFeed() async {}
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async => throw AppFailure('当前数据源暂不支持视频流推荐');
   Future<Drama?> supplementMetadata(Drama drama) async => null;
   Future<CatalogPage> recommendations(
     String genre, {
@@ -112,6 +116,8 @@ abstract class AppRepository {
     String url, {
     String sourceId = '',
   }) async => throw AppFailure('当前环境不支持 URL 插件更新');
+  Future<Map<String, dynamic>> jsSourceImportSubscription(String url) async =>
+      throw AppFailure('当前环境不支持合集订阅');
   bool get supportsSourceManagement => false;
   Future<void> activateAllSources() async {}
   Future<SourceStatus> sourceStatus(String source) async =>
@@ -188,6 +194,10 @@ abstract class AppRepository {
     int quality = 0,
   }) => resolveOnline(drama, episode, quality: quality);
   Future<PlaybackPlan> fallback(PlaybackPlan current);
+  Future<PlaybackPlan> selectRoute(
+    PlaybackPlan current,
+    int routeIndex,
+  ) async => throw AppFailure('当前环境不支持手动切换线路');
   Future<void> cancelPlayback();
   Future<void> release(String session);
 }
@@ -350,12 +360,19 @@ class NativeRepository extends AppRepository {
   Future<void> cancelRecommendations() => _cancelReads('recommendations-');
 
   @override
-  Future<FeedPage> videoFeed({int page = 1, required String session}) async {
-    _authorize('hongguo');
+  Future<void> cancelVideoFeed() => _cancelReads('feed-');
+
+  @override
+  Future<FeedPage> videoFeed({
+    String source = 'hongguo',
+    int page = 1,
+    required String session,
+  }) async {
+    _authorize(source);
     return FeedPage.fromJson(
-      await _read('feed', {
+      await _read('feed-$source', {
         'action': 'feed',
-        'source': 'hongguo',
+        'source': source,
         'page': page,
         'feedSession': '$_readOwner:$session',
       }),
@@ -665,19 +682,26 @@ class NativeRepository extends AppRepository {
       if (action == 'resolve' && access != null && !access!.canDownload) {
         input['force'] = true;
       }
-      final response = await DartCoreEngine.instance
-          .dispatch(input)
-          .timeout(
-            Duration(
-              seconds: action == 'moveDownloads'
-                  ? 620
-                  : action == 'danmaku'
-                  ? 15
-                  : action == 'preload'
-                  ? 20
-                  : 70,
-            ),
-          );
+      if ({'resolve', 'preload', 'prepareHandoff'}.contains(action)) {
+        final source = (input['drama'] as Map)['source'] as String;
+        input['preferredRoute'] =
+            access?.playbackPreferences.sourceRoutes[source] ?? '';
+      }
+      final operation = DartCoreEngine.instance.dispatch(input);
+      final response =
+          {'jsSource.importUrl', 'jsSource.importSubscription'}.contains(action)
+          ? await operation
+          : await operation.timeout(
+              Duration(
+                seconds: action == 'moveDownloads'
+                    ? 620
+                    : action == 'danmaku'
+                    ? 15
+                    : action == 'preload'
+                    ? 20
+                    : 70,
+              ),
+            );
       if (response['ok'] != true) {
         throw AppFailure(
           response['error'] as String? ?? '读取失败，请重试',
@@ -828,6 +852,13 @@ class NativeRepository extends AppRepository {
   );
 
   @override
+  Future<Map<String, dynamic>> jsSourceImportSubscription(String url) async =>
+      Map<String, dynamic>.from(
+        await _call({'action': 'jsSource.importSubscription', 'url': url})
+            as Map,
+      );
+
+  @override
   Future<bool> jsSourceRemove(String sourceId) async {
     final result = await _call({
       'action': 'jsSource.remove',
@@ -929,6 +960,18 @@ class NativeRepository extends AppRepository {
           'sequence': ++_playbackSequence,
         }),
       );
+  @override
+  Future<PlaybackPlan> selectRoute(
+    PlaybackPlan current,
+    int routeIndex,
+  ) async => PlaybackPlan.fromJson(
+    await _call({
+      'action': 'selectRoute',
+      'session': current.session,
+      'routeIndex': routeIndex,
+      'sequence': ++_playbackSequence,
+    }),
+  );
   @override
   Future<PlaybackPlan> refreshPlayback(
     Drama drama,

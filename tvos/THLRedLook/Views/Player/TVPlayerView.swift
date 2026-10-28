@@ -102,7 +102,12 @@ public struct TVPlayerView: View {
     private var videoSurfaceView: some View {
         TVTheme.backgroundGradient.ignoresSafeArea()
 
-        if let player = viewModel.player {
+        if let compatible = viewModel.mpvPlayer {
+            MPVPlayerView(controller: compatible)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        } else if let player = viewModel.player {
             AVPlayerView(player: player)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
@@ -126,7 +131,7 @@ public struct TVPlayerView: View {
                 position: viewModel.currentTime,
                 anchor: viewModel.playbackClockDate,
                 rate: Double(viewModel.playbackRate),
-                moving: viewModel.isPlaying && viewModel.player?.timeControlStatus == .playing,
+                moving: viewModel.isPlaying && !viewModel.isBuffering,
                 style: viewModel.danmakuStyle
             )
         }
@@ -368,7 +373,7 @@ public struct TVPlayerView: View {
 
     @ViewBuilder
     private var controlsOverlayView: some View {
-        if viewModel.isControlsVisible && (viewModel.errorMessage == nil || viewModel.keepControlsVisible) && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible {
+        if viewModel.isControlsVisible && (viewModel.errorMessage == nil || viewModel.keepControlsVisible) && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible && !viewModel.isQualitySheetVisible {
             TVPlayerControlsOverlay(viewModel: viewModel, forceFocusPlayButton: viewModel.keepControlsVisible, feedActions: playerFeedActions) {
                 handleExit()
             }
@@ -394,6 +399,12 @@ public struct TVPlayerView: View {
 
         if viewModel.isSpeedSheetVisible {
             TVSpeedSelectionDrawer(viewModel: viewModel, isPresented: $viewModel.isSpeedSheetVisible)
+                .ignoresSafeArea()
+                .zIndex(100)
+        }
+
+        if viewModel.isQualitySheetVisible {
+            TVQualitySelectionDrawer(viewModel: viewModel, isPresented: $viewModel.isQualitySheetVisible)
                 .ignoresSafeArea()
                 .zIndex(100)
         }
@@ -431,7 +442,7 @@ public struct TVPlayerView: View {
     private func handlePictureMoveCommand(_ direction: MoveCommandDirection) {
         guard isInteractive, !isSwitchingFeed,
               !viewModel.isControlsVisible, !viewModel.isEpisodeDrawerVisible,
-              !viewModel.isDanmakuSettingsVisible, !viewModel.isSpeedSheetVisible else { return }
+              !viewModel.isDanmakuSettingsVisible, !viewModel.isSpeedSheetVisible && !viewModel.isQualitySheetVisible else { return }
         switch direction {
         case .left:
             handleQuickSeek(by: -10)
@@ -469,23 +480,26 @@ public struct TVPlayerView: View {
             .onChange(of: viewModel.isSpeedSheetVisible) { _, isVisible in
                 if !isVisible { viewModel.showControls() }
             }
+            .onChange(of: viewModel.isQualitySheetVisible) { _, isVisible in
+                if !isVisible { viewModel.restoreFocusTarget = .quality; viewModel.showControls() }
+            }
             .onChange(of: viewModel.isControlsVisible) { _, isVisible in
                 guard isInteractive else { return }
-                if !isVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible {
+                if !isVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible && !viewModel.isQualitySheetVisible {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { activeWakeFocus = .centerWake }
                 }
             }
             .onChange(of: isInteractive) { _, interactive in
                 if !interactive {
                     activeWakeFocus = nil
-                } else if !viewModel.isControlsVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible {
+                } else if !viewModel.isControlsVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible && !viewModel.isQualitySheetVisible {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { activeWakeFocus = .centerWake }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { activeWakeFocus = .centerWake }
                 }
             }
             .onChange(of: focusWakeTrigger) { _, _ in
                 guard isInteractive else { return }
-                if !viewModel.isControlsVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible {
+                if !viewModel.isControlsVisible && !viewModel.isEpisodeDrawerVisible && !viewModel.isDanmakuSettingsVisible && !viewModel.isSpeedSheetVisible && !viewModel.isQualitySheetVisible {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { activeWakeFocus = .centerWake }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { activeWakeFocus = .centerWake }
                 }
@@ -517,6 +531,10 @@ public struct TVPlayerView: View {
             withAnimation(.easeInOut(duration: 0.2)) {
                 viewModel.isDanmakuSettingsVisible = false
             }
+            viewModel.showControls()
+        } else if viewModel.isQualitySheetVisible {
+            viewModel.restoreFocusTarget = .quality
+            viewModel.isQualitySheetVisible = false
             viewModel.showControls()
         } else if viewModel.isSpeedSheetVisible {
             withAnimation(.easeInOut(duration: 0.2)) {

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A41C80E59CBF4F2096A85A01 /* TVQualitySelectionDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41C80E59CBF4F2096A85A02 /* TVQualitySelectionDrawer.swift */; };
+		E6E285CB14404C4988A2A1A1 /* NetworkEgressLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6E285CB14404C4988A2A1A2 /* NetworkEgressLookup.swift */; };
 		308BB92FAD6A638F5B858747 /* CENCMediaDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70F9F945791042E6F2FE9F1 /* CENCMediaDownloader.swift */; };
 		3B9F1C5ADE795910FBD0AD03 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6299EBC862612C3A90774337 /* Foundation.framework */; };
 		3EB52B87EAB6FA6FA6506647 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6299EBC862612C3A90774337 /* Foundation.framework */; };
@@ -76,6 +78,11 @@
 		BC32017434634EDB97D9747C /* EncryptedMediaStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5AC1048D4D429CBF09340E /* EncryptedMediaStream.swift */; };
 		C2CF716976FB47A0AF61ABA3 /* CENCStreamIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = D176E2EF155444349D7D7EAB /* CENCStreamIndex.swift */; };
 		7689C3C1BE0A477888B3828B /* StartupPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E546AAF2A007402D961770A4 /* StartupPerformanceTests.swift */; };
+		A8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */; };
+		A8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift */; };
+		A8C54B9C6E924AF1947F3003 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = C8C54B9C6E924AF1947F3001 /* MPVKit */; };
+		ABE3FEB2542D475BB3C6F7D7 /* DiagnosticsShareServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */; };
+		12F647818F7F44998727220E /* OverseasSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -96,6 +103,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A41C80E59CBF4F2096A85A02 /* TVQualitySelectionDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVQualitySelectionDrawer.swift; sourceTree = "<group>"; };
+		E6E285CB14404C4988A2A1A2 /* NetworkEgressLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkEgressLookup.swift; sourceTree = "<group>"; };
 		041C7B5549D0E24FBE7D25F6 /* Pods_THLRedLook.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_THLRedLook.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		1D9437790F04A5D01FEC2D84 /* Pods-THLRedLookTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-THLRedLookTests.debug.xcconfig"; path = "Target Support Files/Pods-THLRedLookTests/Pods-THLRedLookTests.debug.xcconfig"; sourceTree = "<group>"; };
 		221C9DFACA76E6DED5DC2B01 /* Pods_THLRedLookTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_THLRedLookTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -174,6 +183,10 @@
 		EE5AC1048D4D429CBF09340E /* EncryptedMediaStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../ios/Runner/EncryptedMediaStream.swift"; sourceTree = SOURCE_ROOT; };
 		D176E2EF155444349D7D7EAB /* CENCStreamIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../ios/Runner/CENCStreamIndex.swift"; sourceTree = SOURCE_ROOT; };
 		E546AAF2A007402D961770A4 /* StartupPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupPerformanceTests.swift; sourceTree = "<group>"; };
+		B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSCompatibilityProbe.swift; sourceTree = "<group>"; };
+		B8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVPlayerView.swift; sourceTree = "<group>"; };
+		98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsShareServer.swift; sourceTree = "<group>"; };
+		6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverseasSearchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -189,6 +202,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A8C54B9C6E924AF1947F3003 /* MPVKit in Frameworks */,
 				6A2238549A7893510B3D7A7C /* Pods_THLRedLook.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -251,6 +265,7 @@
 				ADCC53A4B80992B7FB26447F /* ListLoadingTests.swift */,
 				8A05A2DA4811816BFC444CF4 /* ICloudSyncTests.swift */,
 				E546AAF2A007402D961770A4 /* StartupPerformanceTests.swift */,
+				6D65F6E5782B4A27B4F2B7C1 /* OverseasSearchTests.swift */,
 			);
 			path = THLRedLookTests;
 			sourceTree = "<group>";
@@ -319,7 +334,10 @@
 		G10000032C00000100000001 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				B8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift */,
 				E34571822EE6111100000022 /* SourceDiagnostics.swift */,
+				E6E285CB14404C4988A2A1A2 /* NetworkEgressLookup.swift */,
+				98E5CF00A15647D68EF83727 /* DiagnosticsShareServer.swift */,
 				E34571822EE6222200000022 /* VideoCacheManager.swift */,
 				B10000102C00000100000001 /* LocalStore.swift */,
 				ICLOUD001C00000100000001 /* ICloudSyncService.swift */,
@@ -401,8 +419,10 @@
 		G10000102C00000100000001 /* Player */ = {
 			isa = PBXGroup;
 			children = (
+				B8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift */,
 				B10000262C00000100000001 /* TVPlayerView.swift */,
 				B10000252C00000100000001 /* TVPlayerControlsOverlay.swift */,
+				A41C80E59CBF4F2096A85A02 /* TVQualitySelectionDrawer.swift */,
 				B10000242C00000100000001 /* TVDanmakuView.swift */,
 				B10000392C00000100000001 /* AVPlayerView.swift */,
 			);
@@ -514,6 +534,9 @@
 			dependencies = (
 			);
 			name = THLRedLook;
+			packageProductDependencies = (
+				C8C54B9C6E924AF1947F3001 /* MPVKit */,
+			);
 			productName = THLRedLook;
 			productReference = B10000002C00000100000001 /* THLRedLook.app */;
 			productType = "com.apple.product-type.application";
@@ -543,6 +566,9 @@
 			mainGroup = D10000012C00000100000001;
 			productRefGroup = D10000032C00000100000001 /* Products */;
 			projectDirPath = "";
+			packageReferences = (
+				C8C54B9C6E924AF1947F3002 /* XCRemoteSwiftPackageReference "MPVKit" */,
+			);
 			projectRoot = "";
 			targets = (
 				E10000012C00000100000001 /* THLRedLook */,
@@ -659,7 +685,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n#!/bin/bash\nexport TZ=\"Asia/Shanghai\"\nbuildNumber=${BUILD_NUMBER:-$(TZ=\"Asia/Shanghai\" date +%Y%m%d%H%M%S)}\nif [ \"$CONFIGURATION\" == \"Release\" ] || [ -n \"$BUILD_NUMBER\" ] || [ \"$FORCE_BUMP_BUILD\" == \"1\" ]; then\n    echo \"Bumping build number to $buildNumber (Beijing Time)...\"\n    target_plist=\"${SRCROOT}/${INFOPLIST_FILE}\"\n    if [ -f \"$target_plist\" ]; then\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$target_plist\"\n    fi\n    if [ -n \"$TARGET_BUILD_DIR\" ] && [ -n \"$INFOPLIST_PATH\" ] && [ -f \"$TARGET_BUILD_DIR/$INFOPLIST_PATH\" ]; then\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$TARGET_BUILD_DIR/$INFOPLIST_PATH\" || true\n    fi\nelse\n    echo \"$CONFIGURATION build - Keep current build number.\"\nfi\n\nHONGGUO_SRC=\"${SRCROOT}/../assets/sources/hongguo.js\"\nif [ -f \"$HONGGUO_SRC\" ] && [ -n \"$TARGET_BUILD_DIR\" ] && [ -n \"$UNLOCALIZED_RESOURCES_FOLDER_PATH\" ]; then\n    mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n    cp -f \"$HONGGUO_SRC\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/hongguo.js\"\n    echo \"Synced hongguo.js to bundle resources.\"\nfi\n";
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n#!/bin/bash\nexport TZ=\"Asia/Shanghai\"\nbuildNumber=${BUILD_NUMBER:-$(TZ=\"Asia/Shanghai\" date +%Y%m%d%H%M%S)}\nif [ \"$CONFIGURATION\" == \"Release\" ] || [ -n \"$BUILD_NUMBER\" ] || [ \"$FORCE_BUMP_BUILD\" == \"1\" ]; then\n    echo \"Bumping build number to $buildNumber (Beijing Time)...\"\n    target_plist=\"${SRCROOT}/${INFOPLIST_FILE}\"\n    if [ -f \"$target_plist\" ]; then\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$target_plist\"\n    fi\n    if [ -n \"$TARGET_BUILD_DIR\" ] && [ -n \"$INFOPLIST_PATH\" ] && [ -f \"$TARGET_BUILD_DIR/$INFOPLIST_PATH\" ]; then\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$TARGET_BUILD_DIR/$INFOPLIST_PATH\" || true\n    fi\nelse\n    echo \"$CONFIGURATION build - Keep current build number.\"\nfi\n\nset -e\npython3 \"${SRCROOT}/../scripts/source_manifest.py\" write --bundle \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -675,6 +701,7 @@
 				90DA19CCFD6C5C493E36FED0 /* ListLoadingTests.swift in Sources */,
 				81C7FE1DA08787168F35C136 /* ICloudSyncTests.swift in Sources */,
 				7689C3C1BE0A477888B3828B /* StartupPerformanceTests.swift in Sources */,
+				12F647818F7F44998727220E /* OverseasSearchTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -690,6 +717,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A8C54B9C6E924AF1947F3001 /* HLSCompatibilityProbe.swift in Sources */,
+				A8C54B9C6E924AF1947F3002 /* MPVPlayerView.swift in Sources */,
 				A10000012C00000100000001 /* THLRedLookApp.swift in Sources */,
 				A10000022C00000100000001 /* SourceSite.swift in Sources */,
 				A10000032C00000100000001 /* Drama.swift in Sources */,
@@ -700,6 +729,8 @@
 				A10000082C00000100000001 /* RankingBoard.swift in Sources */,
 				A10000092C00000100000001 /* LanModels.swift in Sources */,
 				E34571822EE6111100000021 /* SourceDiagnostics.swift in Sources */,
+				E6E285CB14404C4988A2A1A1 /* NetworkEgressLookup.swift in Sources */,
+				ABE3FEB2542D475BB3C6F7D7 /* DiagnosticsShareServer.swift in Sources */,
 				E34571822EE6222200000021 /* VideoCacheManager.swift in Sources */,
 				A10000102C00000100000001 /* LocalStore.swift in Sources */,
 				ICLOUD002C00000100000001 /* ICloudSyncService.swift in Sources */,
@@ -724,6 +755,7 @@
 				A10000232C00000100000001 /* CatalogView.swift in Sources */,
 				A10000242C00000100000001 /* TVDanmakuView.swift in Sources */,
 				A10000252C00000100000001 /* TVPlayerControlsOverlay.swift in Sources */,
+				A41C80E59CBF4F2096A85A01 /* TVQualitySelectionDrawer.swift in Sources */,
 				A10000262C00000100000001 /* TVPlayerView.swift in Sources */,
 				FEED00022C00000100000001 /* TVVideoFeedView.swift in Sources */,
 				FEED00012C00000100000001 /* VideoFeedViewModel.swift in Sources */,
@@ -1008,6 +1040,22 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C8C54B9C6E924AF1947F3002 /* XCRemoteSwiftPackageReference "MPVKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mpvkit/MPVKit.git";
+			requirement = {kind = exactVersion; version = 1.0.0; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C8C54B9C6E924AF1947F3001 /* MPVKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C8C54B9C6E924AF1947F3002 /* XCRemoteSwiftPackageReference "MPVKit" */;
+			productName = MPVKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 010000012C00000100000001 /* Project object */;
 }

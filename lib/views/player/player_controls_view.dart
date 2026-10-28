@@ -43,6 +43,7 @@ class PlayerControls extends StatefulWidget {
     this.onRetryDanmaku,
     this.onPush,
     this.onPictureInPicture,
+    this.onRoutes,
     this.pictureInPictureRequested = false,
     this.playbackRequested,
     this.enhancement,
@@ -77,6 +78,7 @@ class PlayerControls extends StatefulWidget {
   final Future<void> Function()? onRetryDanmaku;
   final Future<void> Function()? onPush;
   final Future<void> Function()? onPictureInPicture;
+  final Future<void> Function()? onRoutes;
   final bool pictureInPictureRequested;
   final VideoEnhancementController? enhancement;
 
@@ -349,6 +351,9 @@ class _PlayerControlsState extends State<PlayerControls> {
                         seekValue: _seekValue,
                         onSpeed: () => _panel(widget.onSpeed),
                         onQuality: () => _panel(widget.onQuality),
+                        onRoutes: widget.onRoutes != null
+                            ? () => _panel(widget.onRoutes!)
+                            : null,
                         onFullscreen: widget.onFullscreen,
                         onEpisodes: () => _panel(widget.onEpisodes),
                         onPush: widget.onPush != null

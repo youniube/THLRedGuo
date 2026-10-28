@@ -4,8 +4,28 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart' as kit;
 import 'package:video_player/video_player.dart';
+import 'package:THLRedLook/core/player/hls_compatibility.dart';
+import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/utils/diary/diary_service.dart';
+import 'package:THLRedLook/utils/media/video_output_size.dart';
+
+VideoParams _systemVideoParameters(VideoPlayerValue value) {
+  final size = value.size;
+  if (!size.width.isFinite ||
+      !size.height.isFinite ||
+      size.width <= 0 ||
+      size.height <= 0) {
+    return const VideoParams();
+  }
+  return VideoParams(
+    w: size.width.round(),
+    h: size.height.round(),
+    dw: size.width.round(),
+    dh: size.height.round(),
+    rotate: value.rotationCorrection,
+  );
+}
 
 /// 模拟与 media_kit.PlayerStream 接口对齐的流集合
 class LunaPlayerStreams implements PlayerStream {
@@ -135,12 +155,16 @@ class _LunaVideoPlayerController extends VideoPlayerController {
 /// 采用和 LunaTV-Mobile 完全相同架构的 ExoPlayer (AndroidX Media3) 播放器封装，
 /// 同时对上层播控 UI (PlayerControls & TelevisionControls) 暴露完全兼容的 Player 契约。
 class LunaExoPlayer implements Player {
-  LunaExoPlayer({this.initializationTimeout = const Duration(seconds: 30)}) {
+  LunaExoPlayer({
+    this.initializationTimeout = const Duration(seconds: 30),
+    this.engine = PlaybackEngine.automatic,
+  }) {
     state = const PlayerState().copyWith(volume: 100.0);
   }
 
   VideoPlayerController? _controller;
   final Duration initializationTimeout;
+  PlaybackEngine engine;
   VoidCallback? _valueListener;
   Timer? _positionPollTimer;
 
@@ -154,6 +178,8 @@ class LunaExoPlayer implements Player {
   Player? _streamPlayer;
   kit.VideoController? _streamVideo;
   final List<StreamSubscription<dynamic>> _streamSubscriptions = [];
+  final _compatibilityProbe = HlsCompatibilityProbe();
+  bool _compatibilityPlayback = false;
 
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
@@ -171,6 +197,7 @@ class LunaExoPlayer implements Player {
 
   VideoPlayerController? get controller => _controller;
   bool get streamingDecryption => _streamPlayer != null;
+  bool get compatibilityPlayback => _compatibilityPlayback;
   String get mediaUri {
     final playlist = _streamPlayer?.state.playlist.medias;
     if (playlist != null && playlist.isNotEmpty) return playlist.first.uri;
@@ -191,14 +218,19 @@ class LunaExoPlayer implements Player {
     return (await _controller?.getAudioTracks())?.length ?? 0;
   }
 
-  Future<void> _openEncrypted(Media media, String key, bool play) async {
-    if (!RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(key)) {
+  Future<void> _openMpv(
+    Media media, {
+    required bool play,
+    String key = '',
+    bool compatibility = false,
+  }) async {
+    if (key.isNotEmpty && !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(key)) {
       throw const FormatException('视频内容密钥无效');
     }
+    final generation = _openGeneration + 1;
     await stop();
-    if (_disposed) return;
+    if (_disposed || generation != _openGeneration) return;
     MediaKit.ensureInitialized();
-    final generation = ++_openGeneration;
     final volume = state.volume;
     final rate = state.rate;
     final native = Player(
@@ -208,7 +240,12 @@ class LunaExoPlayer implements Player {
       ),
     );
     _streamPlayer = native;
-    _streamVideo = kit.VideoController(native);
+    _compatibilityPlayback = compatibility;
+    _streamVideo = kit.VideoController(
+      native,
+      configuration: const kit.VideoControllerConfiguration(hwdec: 'auto-safe'),
+    );
+    revision.value++;
     WidgetsBinding.instance.scheduleFrame();
     void mirror<T>(
       Stream<T> input,
@@ -245,11 +282,16 @@ class LunaExoPlayer implements Player {
     mirror(native.stream.rate, stream.rateController);
     try {
       final backend = native.platform as NativePlayer;
-      await backend.setProperty('demuxer-lavf-o', 'decryption_key=$key');
+      if (key.isNotEmpty) {
+        await backend.setProperty('demuxer-lavf-o', 'decryption_key=$key');
+      }
       await backend.setProperty('network-timeout', '20');
       await native.setVolume(volume);
       await native.setRate(rate);
       if (_disposed || generation != _openGeneration) return;
+      DiaryService.add(
+        '[MPV] open: compatibility=$compatibility, encrypted=${key.isNotEmpty}, host=${Uri.tryParse(media.uri)?.host}',
+      );
       await native.open(media, play: play);
       if (!_disposed && generation == _openGeneration) revision.value++;
     } catch (_) {
@@ -267,9 +309,10 @@ class LunaExoPlayer implements Player {
     final url = media.uri;
     if (url.isEmpty) return;
     final key = media.extras?['decryptionKey']?.toString() ?? '';
-    if (key.isNotEmpty) {
-      return _openEncrypted(media, key, play);
+    if (key.isNotEmpty || engine == PlaybackEngine.mpv) {
+      return _openMpv(media, key: key, play: play, compatibility: key.isEmpty);
     }
+    _compatibilityProbe.cancel();
     if (_streamPlayer != null) await stop();
 
     final myGen = ++_openGeneration;
@@ -277,8 +320,8 @@ class LunaExoPlayer implements Player {
     _seekOperations = Future<void>.value();
     _positionPollTimer?.cancel();
 
-    // 切换新节目时，旧控制器先静音/暂停，彻底防止新旧双重音频重叠
     final old = _controller;
+    _controller = null;
     if (old != null) {
       if (_valueListener != null) {
         try {
@@ -289,7 +332,16 @@ class LunaExoPlayer implements Player {
       try {
         await old.pause();
       } catch (_) {}
+      revision.value++;
+      try {
+        await old.dispose();
+      } catch (_) {}
+      if (Platform.isAndroid) {
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      }
     }
+
+    if (_disposed || myGen != _openGeneration) return;
 
     state = state.copyWith(completed: false);
     _safeAdd(stream.completedController, false);
@@ -361,6 +413,27 @@ class LunaExoPlayer implements Player {
 
     VideoFormat? formatHint = isHls ? VideoFormat.hls : null;
 
+    Media compatibilityMedia() => Media(
+      media.uri,
+      httpHeaders: headers,
+      extras: media.extras,
+      start: media.start,
+      end: media.end,
+    );
+
+    if (engine == PlaybackEngine.automatic &&
+        (Platform.isAndroid || Platform.isIOS) &&
+        isHls &&
+        uri != null &&
+        {'http', 'https'}.contains(uri.scheme)) {
+      final needsMpv = await _compatibilityProbe.requiresMpv(uri, headers);
+      if (_disposed || myGen != _openGeneration) return;
+      if (needsMpv) {
+        return _openMpv(compatibilityMedia(), play: play, compatibility: true);
+      }
+    }
+    if (_disposed || myGen != _openGeneration) return;
+
     DiaryService.add(
       '[ExoPlayer] open(gen=$myGen): local=${url.startsWith('/') || uri?.scheme == 'file'}, host=${uri?.host}, isHls=$isHls, formatHint=$formatHint',
     );
@@ -426,23 +499,25 @@ class LunaExoPlayer implements Player {
           DiaryService.add(
             '[ExoPlayer] 自愈重试依然失败! 异常: $retryErr\n堆栈: $retryStack',
           );
-          if (myGen == _openGeneration) {
-            _safeAdd(stream.errorController, retryErr.toString());
-          }
           try {
             await c.dispose();
           } catch (_) {}
-          rethrow;
+          if (_disposed || myGen != _openGeneration) return;
+          if (engine == PlaybackEngine.system) rethrow;
+          return _openMpv(
+            compatibilityMedia(),
+            play: play,
+            compatibility: true,
+          );
         }
       } else {
         DiaryService.add('[ExoPlayer] c.initialize() 失败! 异常: $e\n堆栈: $stack');
-        if (myGen == _openGeneration) {
-          _safeAdd(stream.errorController, e.toString());
-        }
         try {
           await c.dispose();
         } catch (_) {}
-        rethrow;
+        if (_disposed || myGen != _openGeneration) return;
+        if (engine == PlaybackEngine.system) rethrow;
+        return _openMpv(compatibilityMedia(), play: play, compatibility: true);
       }
     }
 
@@ -453,33 +528,30 @@ class LunaExoPlayer implements Player {
       return;
     }
 
-    if (old != null) {
-      try {
-        await old.dispose();
-      } catch (_) {}
-    }
-
-    if (myGen != _openGeneration) {
-      try {
-        await c.dispose();
-      } catch (_) {}
-      return;
+    if ((Platform.isAndroid || Platform.isIOS) &&
+        (c.value.size.width <= 0 || c.value.size.height <= 0)) {
+      await c.dispose();
+      if (_disposed || myGen != _openGeneration) return;
+      if (engine == PlaybackEngine.system) {
+        throw StateError('系统内核未识别视频轨，请切换 MPV 内核后重试');
+      }
+      DiaryService.add('[MPV] 系统播放器未识别视频轨，切换兼容播放');
+      return _openMpv(compatibilityMedia(), play: play, compatibility: true);
     }
 
     _controller = c;
     _controllerError = null;
     final dur = c.value.duration;
-    final w = c.value.size.width.round();
-    final h = c.value.size.height.round();
-    final videoParams = VideoParams(w: w, h: h, dw: w, dh: h);
+    final videoParams = _systemVideoParameters(c.value);
+    final displaySize = videoDisplaySize(videoParams);
 
     state = state.copyWith(
       duration: dur,
       position: Duration.zero,
       playing: play,
       buffering: c.value.isBuffering,
-      width: w > 0 ? w : 1920,
-      height: h > 0 ? h : 1080,
+      width: displaySize?.width.round(),
+      height: displaySize?.height.round(),
       videoParams: videoParams,
     );
 
@@ -529,20 +601,12 @@ class LunaExoPlayer implements Player {
     final v = c.value;
 
     bool stateChanged = false;
-    final width = v.size.width.round();
-    final height = v.size.height.round();
-    if (width > 0 &&
-        height > 0 &&
-        (width != state.videoParams.w || height != state.videoParams.h)) {
-      final parameters = VideoParams(
-        w: width,
-        h: height,
-        dw: width,
-        dh: height,
-      );
+    final parameters = _systemVideoParameters(v);
+    final displaySize = videoDisplaySize(parameters);
+    if (displaySize != null && parameters != state.videoParams) {
       state = state.copyWith(
-        width: width,
-        height: height,
+        width: displaySize.width.round(),
+        height: displaySize.height.round(),
         videoParams: parameters,
       );
       _safeAdd(stream.videoParamsController, parameters);
@@ -695,6 +759,7 @@ class LunaExoPlayer implements Player {
   @override
   Future<void> stop() async {
     _openGeneration++;
+    _compatibilityProbe.cancel();
     _pendingSeekSequence = 0;
     _seekOperations = Future<void>.value();
     _positionPollTimer?.cancel();
@@ -705,6 +770,7 @@ class LunaExoPlayer implements Player {
     final native = _streamPlayer;
     _streamPlayer = null;
     _streamVideo = null;
+    _compatibilityPlayback = false;
     for (final subscription in _streamSubscriptions) {
       await subscription.cancel();
     }
@@ -724,10 +790,14 @@ class LunaExoPlayer implements Player {
       position: Duration.zero,
       duration: Duration.zero,
       buffer: Duration.zero,
+      width: 0,
+      height: 0,
+      videoParams: const VideoParams(),
     );
     _safeAdd(stream.playingController, false);
     _safeAdd(stream.bufferingController, false);
     _safeAdd(stream.positionController, Duration.zero);
+    _safeAdd(stream.videoParamsController, const VideoParams());
     if (!_disposed) revision.value++;
     if (c != null) {
       try {
@@ -779,27 +849,30 @@ class LunaExoVideoView extends StatelessWidget {
         final nativeVideo = player._streamVideo;
         final c = player.controller;
         final hasVideo = c != null && c.value.isInitialized;
-        final rawRatio = hasVideo ? c.value.aspectRatio : 16 / 9;
-        final ratio = (rawRatio > 0 && !rawRatio.isNaN && !rawRatio.isInfinite)
-            ? rawRatio
-            : 16 / 9;
+        final size = hasVideo
+            ? videoDisplaySize(_systemVideoParameters(c.value))
+            : videoDisplaySize(player.state.videoParams);
+        final ratio = size?.aspectRatio;
 
         return Stack(
           fit: StackFit.expand,
           children: [
+            const ColoredBox(color: AppColors.black),
             if (nativeVideo != null)
               kit.Video(
                 key: ObjectKey(nativeVideo),
                 controller: nativeVideo,
                 fit: fit,
+                aspectRatio: ratio,
                 controls: kit.NoVideoControls,
               )
-            else if (hasVideo)
+            else if (hasVideo && ratio != null)
               Center(
-                child: AspectRatio(aspectRatio: ratio, child: VideoPlayer(c)),
-              )
-            else
-              const ColoredBox(color: AppColors.black),
+                child: AspectRatio(
+                  aspectRatio: ratio,
+                  child: VideoPlayer(key: ObjectKey(c), c),
+                ),
+              ),
             if (controls != null) controls!(context),
           ],
         );
