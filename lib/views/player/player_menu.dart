@@ -36,6 +36,7 @@ class PlayerMenu extends StatefulWidget {
     this.enhancement,
     this.onCompareEnhancement,
     this.currentEngine = '',
+    this.feedSettings,
   });
 
   final PlayerMenuSection section;
@@ -55,6 +56,7 @@ class PlayerMenu extends StatefulWidget {
   final VideoEnhancementController? enhancement;
   final VoidCallback? onCompareEnhancement;
   final String currentEngine;
+  final Widget? feedSettings;
   final ValueChanged<int> onEpisode;
   final Future<void> Function(PlaybackPreferences) onPreferences;
   final Future<void> Function() onFavorite;
@@ -184,6 +186,10 @@ class _PlayerMenuState extends State<PlayerMenu> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (all) ...[
+          if (widget.feedSettings != null) ...[
+            widget.feedSettings!,
+            const Divider(),
+          ],
           const Text('播放内核'),
           const SizedBox(height: 8),
           if (supportsSystemPlaybackEngine)

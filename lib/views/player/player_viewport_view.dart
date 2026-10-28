@@ -82,9 +82,13 @@ class PlayerViewportView extends StatelessWidget {
     required this.onTelevisionEpisodes,
     required this.onTelevisionSettings,
     this.topPadding = 0.0,
+    this.obscureVideo = false,
+    this.onOpenFull,
   });
 
   final double topPadding;
+  final bool obscureVideo;
+  final VoidCallback? onOpenFull;
   final bool television;
   final bool fullscreen;
   final bool pictureInPictureVisible;
@@ -404,6 +408,10 @@ class PlayerViewportView extends StatelessWidget {
                         aspectRatio: aspectRatio,
                         controls: (_) => layeredControls,
                       ),
+                    if (obscureVideo)
+                      const Positioned.fill(
+                        child: ColoredBox(color: Colors.black),
+                      ),
                     if (loading && !hideOverlayForPictureInPicture)
                       DecoratedBox(
                         decoration: BoxDecoration(
@@ -558,6 +566,26 @@ class PlayerViewportView extends StatelessWidget {
                             ),
                           ],
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (onOpenFull != null && (loading || error != null))
+                Positioned(
+                  bottom: 24,
+                  left: 24,
+                  right: 24,
+                  child: SafeArea(
+                    child: Center(
+                      child: FilledButton.icon(
+                        key: const ValueKey('feed-open-full-unavailable'),
+                        onPressed: onOpenFull,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.hongguoRed,
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('看正片'),
                       ),
                     ),
                   ),

@@ -61,6 +61,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final _feed = VideoFeedController(widget.repository, widget.store);
+  bool _feedFullscreen = false;
   static const _recommendationCategory = 'app:recommendations';
   final _search = TextEditingController();
   final _scroll = ScrollController();
@@ -1347,9 +1348,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             child: SafeArea(
               top: false,
+              bottom: !_feedFullscreen,
+              left: !_feedFullscreen,
+              right: !_feedFullscreen,
               child: Row(
                 children: [
-                  if (television) ...[
+                  if (television && !_feedFullscreen) ...[
                     SizedBox(
                       width: 164,
                       child: Padding(
@@ -1392,7 +1396,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ),
                     const VerticalDivider(width: 1),
-                  ] else if (desktop) ...[
+                  ] else if (desktop && !_feedFullscreen) ...[
                     NavigationRail(
                       selectedIndex: navIndex,
                       onDestinationSelected: (index) =>
@@ -1481,6 +1485,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 key: const ValueKey('home-video-feed'),
                                 controller: _feed,
                                 active: _tab == 4,
+                                onFullscreenChanged: (value) {
+                                  if (mounted && _feedFullscreen != value) {
+                                    setState(() => _feedFullscreen = value);
+                                  }
+                                },
                               ),
                             ),
                           ),
@@ -1492,7 +1501,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
-          bottomNavigationBar: desktop || television
+          bottomNavigationBar: desktop || television || _feedFullscreen
               ? null
               : _selectionMode
               ? _selectionBar()

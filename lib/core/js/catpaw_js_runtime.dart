@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
 import 'package:THLRedLook/core/js/source_http_client.dart';
+import 'package:THLRedLook/models/catalog/vod_metadata.dart';
 
 class CatPawHomeResult {
   final List<Map<String, dynamic>> classes;
@@ -512,6 +513,11 @@ globalThis.__native_save_device = function(json) {
     );
     final map = (res is Map) ? res : {};
     final classes = _toListOfMaps(map['class'] ?? map['classes'] ?? []);
+    for (final entry in classes) {
+      final id = entry['type_id']?.toString() ?? '';
+      final name = entry['type_name']?.toString().trim() ?? '';
+      if (id.isNotEmpty && name.isNotEmpty) _categoryNames[id] = name;
+    }
     final filters = _parseFilters(map['filters'] ?? map['filter'] ?? []);
     return CatPawHomeResult(classes: classes, filters: filters);
   }
@@ -529,7 +535,18 @@ globalThis.__native_save_device = function(json) {
       timeout: const Duration(seconds: 40),
     );
     final map = (res is Map) ? res : {};
-    final list = _toListOfMaps(map['list'] ?? []);
+    final list = _toListOfMaps(map['list'] ?? [])
+        .map(
+          (vod) => {
+            ...vod,
+            'vod_category': vodCategory(
+              vod,
+              fallback: tid,
+              categoryNames: _categoryNames,
+            ),
+          },
+        )
+        .toList();
     final pg = (map['page'] as num?)?.toInt() ?? page;
     final pageCount =
         (map['pagecount'] as num?)?.toInt() ??
@@ -565,7 +582,9 @@ globalThis.__native_save_device = function(json) {
     }
     vod ??= map;
     return CatPawDetailResult(
-      vod: Map<String, dynamic>.from(vod is Map ? vod : {'vod_id': id}),
+      vod: _withCategory(
+        Map<String, dynamic>.from(vod is Map ? vod : {'vod_id': id}),
+      ),
     );
   }
 
@@ -1037,12 +1056,19 @@ globalThis.__native_save_device = function(json) {
     } catch (_) {}
   }
 
+  final _categoryNames = <String, String>{};
+
+  Map<String, dynamic> _withCategory(Map<String, dynamic> vod) => {
+    ...vod,
+    'vod_category': vodCategory(vod, categoryNames: _categoryNames),
+  };
+
   List<Map<String, dynamic>> _toListOfMaps(dynamic raw) {
     if (raw is! List) return [];
-    return raw
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
+    return raw.whereType<Map>().map((e) {
+      final value = Map<String, dynamic>.from(e);
+      return value.containsKey('vod_id') ? _withCategory(value) : value;
+    }).toList();
   }
 
   List<Map<String, dynamic>> _parseFilters(dynamic raw) {

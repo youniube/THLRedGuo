@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:THLRedLook/core/feed/video_feed_controller.dart';
+import 'package:THLRedLook/core/feed/feed_playback_policy.dart';
+import 'package:THLRedLook/core/player/playback_surface.dart';
 import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_source_selection.dart';
@@ -16,9 +18,11 @@ class VideoFeedScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.active,
+    this.onFullscreenChanged,
   });
   final VideoFeedController controller;
   final bool active;
+  final ValueChanged<bool>? onFullscreenChanged;
 
   @override
   State<VideoFeedScreen> createState() => _VideoFeedScreenState();
@@ -27,11 +31,14 @@ class VideoFeedScreen extends StatefulWidget {
 class _VideoFeedScreenState extends State<VideoFeedScreen>
     with RouteAware, WidgetsBindingObserver {
   final _pages = PageController(keepPage: false);
+  final _playbackSurface = PlaybackSurface();
   PageRoute<dynamic>? _route;
   bool _covered = false;
   bool _opening = false;
   bool _foreground = true;
   int _revision = -1;
+  bool _fullscreen = false;
+  bool _moving = false;
   VideoFeedController get feed => widget.controller;
 
   void _feedChanged() {
@@ -129,26 +136,95 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     }
   }
 
-  Future<void> _move(int direction) async {
-    var target = feed.index + direction;
-    if (target >= feed.items.length) {
-      if (feed.hasMore) {
-        await feed.loadMore();
-      } else {
-        await feed.nextBatch();
+  Future<void> _openFull(DramaDetail detail) async {
+    if (_opening || feed.current?.drama.id != detail.drama.id) return;
+    final epoch = feed.store.profileEpoch;
+    final revision = feed.revision;
+    _opening = true;
+    _syncActive();
+    try {
+      await feed.playback.idle;
+      if (!mounted ||
+          feed.store.profileEpoch != epoch ||
+          feed.store.locked ||
+          feed.revision != revision ||
+          feed.current?.drama.id != detail.drama.id) {
+        return;
+      }
+      final watched = feed.store.watched(detail.drama.id);
+      final index = resumeEpisodeIndex(detail.episodes, watched);
+      final position =
+          watched != null &&
+              !watched.finished &&
+              watched.episode == detail.episodes[index].number
+          ? watched.position
+          : 0.0;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => PlayerScreen(
+            detail: detail,
+            initialIndex: index,
+            initialPosition: position,
+            repository: feed.repository,
+            store: feed.store,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        _opening = false;
+        _syncActive();
       }
     }
-    if (!mounted ||
-        !_pages.hasClients ||
-        target < 0 ||
-        target >= feed.items.length) {
-      return;
+  }
+
+  void _fullscreenChanged(bool value) {
+    if (!mounted || _fullscreen == value) return;
+    setState(() => _fullscreen = value);
+    widget.onFullscreenChanged?.call(value);
+  }
+
+  Future<bool> _move(
+    int direction, {
+    FeedPlaybackPlan? preview,
+    bool Function()? stillAllowed,
+  }) async {
+    if (_moving || _opening || !feed.active) return false;
+    final origin = feed.index;
+    final revision = feed.revision;
+    final dramaId = feed.current?.drama.id;
+    final target = origin + direction;
+    _moving = true;
+    try {
+      if (target >= feed.items.length) {
+        if (feed.hasMore) {
+          await feed.loadMore();
+        } else {
+          await feed.nextBatch();
+        }
+      }
+      if (!mounted ||
+          !feed.active ||
+          _opening ||
+          feed.index != origin ||
+          feed.revision != revision ||
+          feed.current?.drama.id != dramaId ||
+          stillAllowed != null && !stillAllowed() ||
+          preview != null && !preview.finished ||
+          !_pages.hasClients ||
+          target < 0 ||
+          target >= feed.items.length) {
+        return false;
+      }
+      await _pages.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOut,
+      );
+      return true;
+    } finally {
+      _moving = false;
     }
-    await _pages.animateToPage(
-      target,
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOut,
-    );
   }
 
   Future<void> _chooseSources() async {
@@ -179,6 +255,13 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     feed.removeListener(_feedChanged);
     feed.setActive(false);
     _pages.dispose();
+    final playback = feed.playback;
+    unawaited(
+      Future<void>.microtask(() async {
+        await playback.idle;
+        await _playbackSurface.close();
+      }),
+    );
     super.dispose();
   }
 
@@ -186,20 +269,24 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     final current = index == feed.index;
     final detail = current ? feed.detail : null;
     if (current && feed.active && detail != null && !feed.loadingDetail) {
-      final watched = feed.store.watched(detail.drama.id);
-      final initial = watched == null
-          ? (feed.items[index].episode - 1).clamp(0, detail.episodes.length - 1)
-          : resumeEpisodeIndex(detail.episodes, watched);
+      final plan = feed.playbackFor(detail);
       return PlayerScreen(
-        key: ValueKey('feed-player-${detail.drama.id}'),
+        key: ValueKey((detail.drama.id, plan)),
         detail: detail,
-        initialIndex: initial,
-        initialPosition:
-            watched?.position.toDouble() ?? feed.items[index].position,
+        initialIndex: plan.initialIndex,
+        initialPosition: plan.initialPosition,
         repository: feed.repository,
         store: feed.store,
         feed: true,
         playbackQueue: feed.playback,
+        playbackSurface: _playbackSurface,
+        feedPlayback: plan,
+        onOpenFull: () => unawaited(_openFull(detail)),
+        onPreviewFinished: (stillAllowed) =>
+            _move(1, preview: plan, stillAllowed: stillAllowed),
+        onFullscreenChanged: _fullscreenChanged,
+        onCorrectFeedPlayback: (mode, source) =>
+            feed.correctPlayback(detail.drama, mode, source: source),
         onOpenDetail: () => unawaited(_openDetail()),
         onBackgroundWorkAllowed: (allowed) =>
             feed.setBackgroundWorkAllowed(detail.drama.id, allowed),
@@ -278,6 +365,9 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
                       child: PageView.builder(
                         key: const ValueKey('feed-pager'),
                         controller: _pages,
+                        physics: _fullscreen
+                            ? const NeverScrollableScrollPhysics()
+                            : null,
                         scrollDirection: Axis.vertical,
                         itemCount: feed.items.length,
                         onPageChanged: feed.select,
@@ -285,120 +375,121 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
                       ),
                     ),
             ),
-            SafeArea(
-              bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        TextButton(
-                          key: const ValueKey('feed-source-selector'),
-                          onPressed: () => unawaited(_chooseSources()),
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.zero,
-                            minimumSize: const Size(0, 48),
-                            textStyle: const TextStyle(
-                              fontSize: 21,
-                              fontWeight: FontWeight.bold,
+            if (!_fullscreen)
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          TextButton(
+                            key: const ValueKey('feed-source-selector'),
+                            onPressed: () => unawaited(_chooseSources()),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.zero,
+                              minimumSize: const Size(0, 48),
+                              textStyle: const TextStyle(
+                                fontSize: 21,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('推荐源'),
+                                SizedBox(width: 4),
+                                Icon(Icons.keyboard_arrow_down, size: 20),
+                              ],
                             ),
                           ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('推荐源'),
-                              SizedBox(width: 4),
-                              Icon(Icons.keyboard_arrow_down, size: 20),
-                            ],
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              '上滑换剧',
+                              maxLines: 1,
+                              overflow: TextOverflow.fade,
+                              softWrap: false,
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
+                          IconButton(
+                            key: const ValueKey('feed-refresh'),
+                            tooltip: '刷新推荐',
+                            onPressed: feed.loading || !feed.allowed
+                                ? null
+                                : _refresh,
+                            color: Colors.white,
+                            icon: const Icon(Icons.refresh),
+                          ),
+                          IconButton(
+                            key: const ValueKey('feed-previous'),
+                            tooltip: '上一部',
+                            onPressed: feed.index > 0
+                                ? () => unawaited(_move(-1))
+                                : null,
+                            color: Colors.white,
+                            icon: const Icon(Icons.keyboard_arrow_up),
+                          ),
+                          IconButton(
+                            key: const ValueKey('feed-next'),
+                            tooltip: '下一部',
+                            onPressed: feed.items.isEmpty
+                                ? null
+                                : () => unawaited(_move(1)),
+                            color: Colors.white,
+                            icon: const Icon(Icons.keyboard_arrow_down),
+                          ),
+                        ],
+                      ),
+                      if (feed.selection.mode != FeedSourceMode.discovery &&
+                          feed.current != null)
+                        Align(
+                          alignment: Alignment.centerLeft,
                           child: Text(
-                            '上滑换剧',
+                            '来源：${SourceSite.byId(feed.current!.drama.source).name}',
+                            key: const ValueKey('feed-current-source'),
                             maxLines: 1,
-                            overflow: TextOverflow.fade,
-                            softWrap: false,
-                            style: TextStyle(
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 12,
                             ),
                           ),
                         ),
-                        IconButton(
-                          key: const ValueKey('feed-refresh'),
-                          tooltip: '刷新推荐',
-                          onPressed: feed.loading || !feed.allowed
-                              ? null
-                              : _refresh,
-                          color: Colors.white,
-                          icon: const Icon(Icons.refresh),
-                        ),
-                        IconButton(
-                          key: const ValueKey('feed-previous'),
-                          tooltip: '上一部',
-                          onPressed: feed.index > 0
-                              ? () => unawaited(_move(-1))
-                              : null,
-                          color: Colors.white,
-                          icon: const Icon(Icons.keyboard_arrow_up),
-                        ),
-                        IconButton(
-                          key: const ValueKey('feed-next'),
-                          tooltip: '下一部',
-                          onPressed: feed.items.isEmpty
-                              ? null
-                              : () => unawaited(_move(1)),
-                          color: Colors.white,
-                          icon: const Icon(Icons.keyboard_arrow_down),
-                        ),
-                      ],
-                    ),
-                    if (feed.selection.mode != FeedSourceMode.discovery &&
-                        feed.current != null)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '来源：${SourceSite.byId(feed.current!.drama.source).name}',
-                          key: const ValueKey('feed-current-source'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
+                      if (feed.loadingMore)
+                        const LinearProgressIndicator(minHeight: 2),
+                      if (feed.moreError != null)
+                        Material(
+                          color: const Color(0xD9222222),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Text(
+                                  '更多推荐暂时加载失败',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              TextButton(
+                                key: const ValueKey('feed-retry-more'),
+                                onPressed: () => unawaited(feed.retryMore()),
+                                child: Text(feed.restartRequired ? '刷新' : '重试'),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                    if (feed.loadingMore)
-                      const LinearProgressIndicator(minHeight: 2),
-                    if (feed.moreError != null)
-                      Material(
-                        color: const Color(0xD9222222),
-                        borderRadius: BorderRadius.circular(8),
-                        child: Row(
-                          children: [
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Text(
-                                '更多推荐暂时加载失败',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                            ),
-                            TextButton(
-                              key: const ValueKey('feed-retry-more'),
-                              onPressed: () => unawaited(feed.retryMore()),
-                              child: Text(feed.restartRequired ? '刷新' : '重试'),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),

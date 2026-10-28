@@ -13,6 +13,7 @@ import 'package:THLRedLook/core/js/js_source_subscription.dart';
 import 'package:THLRedLook/core/player/js_playback.dart';
 import 'package:THLRedLook/core/diagnostics/source_health_check.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
+import 'package:THLRedLook/models/catalog/vod_metadata.dart';
 import 'package:THLRedLook/utils/media/cover_decoder.dart';
 
 /// 纯 Dart 核心调度引擎：
@@ -866,17 +867,7 @@ class DartCoreEngine {
         ? int.tryParse(epMatch.group(1)!) ?? 60
         : 60;
 
-    final tags = <String>[];
-    final rawTags = vod['vod_tag'] ?? vod['tags'];
-    if (rawTags is String) {
-      tags.addAll(
-        rawTags.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty),
-      );
-    } else if (rawTags is List) {
-      tags.addAll(
-        rawTags.map((e) => e.toString().trim()).where((s) => s.isNotEmpty),
-      );
-    }
+    final tags = vodTags(vod);
     if (tags.isEmpty) {
       tags.addAll(['热播', '精选']);
     }
@@ -907,9 +898,7 @@ class DartCoreEngine {
       'episodes': (vod['vod_episodes'] as num?)?.toInt() ?? episodes,
       'heat': vod['vod_heat']?.toString() ?? '',
       'views': vod['vod_views']?.toString() ?? '',
-      'category': dramaCategoryLabel(
-        vod['vod_category']?.toString() ?? category,
-      ),
+      'category': vodCategory(vod, fallback: category),
       'tags': cleanTags.isEmpty ? ['热播', '精选'] : cleanTags,
       'releaseStatus': vod['vod_release_status']?.toString() ?? '',
       'vip': isHongguo ? false : (vod['vip'] == true),
@@ -1136,6 +1125,18 @@ class DartCoreEngine {
       }
       if ((spiderVod['vod_content']?.toString() ?? '').isNotEmpty) {
         fullDrama['description'] = spiderVod['vod_content'].toString();
+      }
+      final category = vodCategory(spiderVod);
+      if (category.isNotEmpty) {
+        fullDrama['category'] = category;
+        fullDrama['rawCategory'] = category;
+      }
+      final tags = vodTags(spiderVod);
+      if (tags.isNotEmpty) {
+        fullDrama['tags'] = {
+          ...(fullDrama['tags'] as List? ?? const []).whereType<String>(),
+          ...tags,
+        }.toList();
       }
       final playUrlRaw = spiderVod['vod_play_url']?.toString() ?? '';
       chapters.addAll(

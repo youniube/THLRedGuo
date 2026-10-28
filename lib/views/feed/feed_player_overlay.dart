@@ -22,6 +22,11 @@ class FeedPlayerOverlay extends StatelessWidget {
     required this.onDetail,
     required this.onDanmaku,
     required this.onSettings,
+    this.preview = false,
+    this.previewEnded = false,
+    this.fullscreen = false,
+    this.onOpenFull,
+    this.onFullscreen,
   });
 
   final String title;
@@ -40,6 +45,11 @@ class FeedPlayerOverlay extends StatelessWidget {
   final VoidCallback onDetail;
   final VoidCallback onDanmaku;
   final VoidCallback onSettings;
+  final bool preview;
+  final bool previewEnded;
+  final bool fullscreen;
+  final VoidCallback? onOpenFull;
+  final VoidCallback? onFullscreen;
 
   Widget _action(String id, IconData icon, String label, VoidCallback action) =>
       IconButton(
@@ -120,6 +130,46 @@ class FeedPlayerOverlay extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (preview) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            previewEnded ? '试看结束 · 点击画面重播' : '随机试看',
+                            key: const ValueKey('feed-preview-label'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        FilledButton.icon(
+                          key: const ValueKey('feed-open-full'),
+                          onPressed: onOpenFull,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.hongguoRed,
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('看正片'),
+                        ),
+                        if (onFullscreen != null) ...[
+                          const SizedBox(width: 8),
+                          _action(
+                            'fullscreen',
+                            fullscreen
+                                ? Icons.fullscreen_exit
+                                : Icons.fullscreen,
+                            fullscreen ? '退出全屏' : '横屏全屏',
+                            onFullscreen!,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
@@ -260,8 +310,9 @@ class _FeedProgressState extends State<_FeedProgress> {
                 ? (d) => _updateSeek(d.localPosition.dx, width)
                 : null,
             onTapUp: isInteractive ? (_) => _finishSeek() : null,
-            onTapCancel:
-                isInteractive ? () => setState(() => _dragging = null) : null,
+            onTapCancel: isInteractive
+                ? () => setState(() => _dragging = null)
+                : null,
             onHorizontalDragStart: isInteractive
                 ? (d) => _updateSeek(d.localPosition.dx, width)
                 : null,
@@ -269,8 +320,9 @@ class _FeedProgressState extends State<_FeedProgress> {
                 ? (d) => _updateSeek(d.localPosition.dx, width)
                 : null,
             onHorizontalDragEnd: isInteractive ? (_) => _finishSeek() : null,
-            onHorizontalDragCancel:
-                isInteractive ? () => setState(() => _dragging = null) : null,
+            onHorizontalDragCancel: isInteractive
+                ? () => setState(() => _dragging = null)
+                : null,
             child: SizedBox(
               height: 20,
               width: width,
@@ -305,8 +357,7 @@ class _FeedProgressState extends State<_FeedProgress> {
                             boxShadow: isDragging
                                 ? [
                                     BoxShadow(
-                                      color:
-                                          AppColors.hongguoRedWithAlpha(0.6),
+                                      color: AppColors.hongguoRedWithAlpha(0.6),
                                       blurRadius: 6,
                                       spreadRadius: 1,
                                     ),

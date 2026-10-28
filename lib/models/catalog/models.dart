@@ -167,7 +167,7 @@ String dramaCategoryLabel(String value) {
     'real-drama' || 'real_series' => '真人剧',
     'comic-drama' || 'comic_series' || 'comic' => '漫剧',
     'ai-drama' || 'ai_series' => 'AI剧',
-    '' => '短剧',
+    '' => '未分类',
     _ => category,
   };
 }
@@ -196,6 +196,7 @@ class Drama {
     this.cover = '',
     this.episodes = 0,
     this.category = '',
+    this.rawCategory,
     bool? vip,
     this.heat = '',
     this.views = '',
@@ -211,6 +212,7 @@ class Drama {
   final String cover;
   final int episodes;
   final String category;
+  final String? rawCategory;
   String get displayCategory => dramaCategoryLabel(category);
   final bool? vipStatus;
   bool get vip => (source == 'hongguo' || id.startsWith('hongguo:'))
@@ -264,6 +266,7 @@ class Drama {
       cover: normalizeCoverUrl(json['cover'] as String? ?? ''),
       episodes: intValue(json['episodes']),
       category: category.isEmpty ? '' : dramaCategoryLabel(category),
+      rawCategory: json['rawCategory'] as String? ?? category,
       vip: isHongguo
           ? false
           : (json['vip'] == true
@@ -286,6 +289,7 @@ class Drama {
     'cover': cover,
     'episodes': episodes,
     'category': category,
+    'rawCategory': rawCategory ?? category,
     'vip': vipStatus,
     'heat': heat,
     'views': views,
@@ -307,6 +311,11 @@ class Drama {
       'AI漫剧',
       'AI 漫剧',
     };
+    final keepCategory =
+        fresh.category.isEmpty ||
+        genericCategories.contains(fresh.category) &&
+            category.isNotEmpty &&
+            !genericCategories.contains(category);
     return Drama(
       id: id,
       source: fresh.source.isEmpty ? source : fresh.source,
@@ -315,13 +324,8 @@ class Drama {
       description: fresh.description.isEmpty ? description : fresh.description,
       cover: fresh.cover.isEmpty ? cover : fresh.cover,
       episodes: fresh.episodes > 0 ? fresh.episodes : episodes,
-      category:
-          fresh.category.isEmpty ||
-              genericCategories.contains(fresh.category) &&
-                  category.isNotEmpty &&
-                  !genericCategories.contains(category)
-          ? category
-          : fresh.category,
+      category: keepCategory ? category : fresh.category,
+      rawCategory: keepCategory ? rawCategory : fresh.rawCategory,
       vip: fresh.vipStatus ?? vipStatus,
       heat: fresh.heat.isEmpty ? heat : fresh.heat,
       views: fresh.views.isEmpty ? views : fresh.views,

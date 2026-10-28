@@ -2,9 +2,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/core/feed/feed_source_mixer.dart';
+import 'package:THLRedLook/core/feed/feed_playback_policy.dart';
 import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/player/playback_lease.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
+import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_models.dart';
 import 'package:THLRedLook/models/feed/feed_source_selection.dart';
@@ -36,6 +38,7 @@ class VideoFeedController extends ChangeNotifier {
   int? _preparing;
   String _session = '';
   final _details = <String, DramaDetail>{};
+  final _playbacks = <String, FeedPlaybackPlan>{};
   Timer? _selectionTimer;
   final _sourceService = JsSourceService.current;
   FeedSourceMixer? _mixer;
@@ -90,6 +93,7 @@ class VideoFeedController extends ChangeNotifier {
     _mixer = null;
     _session = '';
     _details.clear();
+    _playbacks.clear();
     final saved = _savedScopes.remove(key);
     items = saved?.items ?? [];
     index = saved?.index ?? 0;
@@ -164,6 +168,7 @@ class VideoFeedController extends ChangeNotifier {
     _emptyPages = 0;
     _backgroundWorkAllowed = false;
     _details.clear();
+    _playbacks.clear();
     loading = true;
     loadingMore = false;
     hasMore = true;
@@ -429,6 +434,59 @@ class VideoFeedController extends ChangeNotifier {
     notifyListeners();
   }
 
+  FeedPlaybackPlan playbackFor(DramaDetail loaded) {
+    final drama = loaded.drama;
+    final rules = store.feedPlaybackRules;
+    final rule = rules['drama:${drama.id}'] ?? rules['source:${drama.source}'];
+    final override = FeedPlaybackMode.values
+        .where((mode) => mode.name == rule)
+        .firstOrNull;
+    final watched = store.watched(drama.id);
+    final resumeIndex = watched == null
+        ? ((current?.episode ?? 1) - 1).clamp(0, loaded.episodes.length - 1)
+        : resumeEpisodeIndex(loaded.episodes, watched);
+    final position = watched == null
+        ? current?.position ?? 0
+        : watched.episode == loaded.episodes[resumeIndex].number &&
+              !watched.finished
+        ? watched.position
+        : 0.0;
+    final existing = _playbacks[drama.id];
+    if (existing != null && existing.override == override) {
+      existing.resumeIndex = resumeIndex;
+      existing.resumePosition = position;
+      return existing;
+    }
+    final plan = FeedPlaybackPlan(
+      drama: drama,
+      resumeIndex: resumeIndex,
+      resumePosition: position,
+      episodeCount: loaded.episodes.length,
+      override: override,
+    );
+    _playbacks[drama.id] = plan;
+    while (_playbacks.length > 40) {
+      _playbacks.remove(_playbacks.keys.first);
+    }
+    return plan;
+  }
+
+  Future<void> correctPlayback(
+    Drama drama,
+    FeedPlaybackMode? mode, {
+    bool source = false,
+  }) async {
+    await store.setFeedPlaybackRule(
+      source ? 'source:${drama.source}' : 'drama:${drama.id}',
+      mode?.name,
+    );
+    if (_disposed || current?.drama.id != drama.id) return;
+    _playbacks.removeWhere(
+      (id, plan) => source ? plan.drama.source == drama.source : id == drama.id,
+    );
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -436,6 +494,7 @@ class VideoFeedController extends ChangeNotifier {
     _sourceService?.removeListener(_sourcesChanged);
     _mixer?.dispose();
     _savedScopes.clear();
+    _playbacks.clear();
     _generation++;
     _selection++;
     _selectionTimer?.cancel();

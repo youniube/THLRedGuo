@@ -48,6 +48,8 @@ import 'package:THLRedLook/views/player/player_speed_sheet_view.dart';
 import 'package:THLRedLook/views/player/player_danmaku_sheet_view.dart';
 import 'package:THLRedLook/utils/player/player_dialog_helper.dart';
 import 'package:THLRedLook/core/player/playback_lease.dart';
+import 'package:THLRedLook/core/player/playback_surface.dart';
+import 'package:THLRedLook/core/feed/feed_playback_policy.dart';
 import 'package:THLRedLook/views/feed/feed_player_overlay.dart';
 
 class PlayerScreen extends StatefulWidget {
@@ -70,6 +72,12 @@ class PlayerScreen extends StatefulWidget {
     this.playbackQueue,
     this.onOpenDetail,
     this.onBackgroundWorkAllowed,
+    this.playbackSurface,
+    this.feedPlayback,
+    this.onOpenFull,
+    this.onPreviewFinished,
+    this.onFullscreenChanged,
+    this.onCorrectFeedPlayback,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -86,6 +94,13 @@ class PlayerScreen extends StatefulWidget {
   final PlaybackLeaseQueue? playbackQueue;
   final VoidCallback? onOpenDetail;
   final ValueChanged<bool>? onBackgroundWorkAllowed;
+  final PlaybackSurface? playbackSurface;
+  final FeedPlaybackPlan? feedPlayback;
+  final VoidCallback? onOpenFull;
+  final Future<bool> Function(bool Function() stillAllowed)? onPreviewFinished;
+  final ValueChanged<bool>? onFullscreenChanged;
+  final Future<void> Function(FeedPlaybackMode? mode, bool source)?
+  onCorrectFeedPlayback;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -97,6 +112,7 @@ class PlayerScreen extends StatefulWidget {
 class _PlayerScreenState extends State<PlayerScreen>
     with WidgetsBindingObserver {
   late final Player _player;
+  late final PlaybackSurface _playbackSurface;
   PlaybackLease? _playbackLease;
   late final VideoController? _video;
   late final VideoEnhancementController _enhancement;
@@ -165,6 +181,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   double get _aspectRatio => _videoAspectRatio ?? 1;
   double _resumePosition = 0;
   bool _rotating = false;
+  bool _feedPreparing = false;
+  bool _feedPrepared = false;
+  bool _feedObscured = false;
+  bool _previewEnded = false;
+  bool _previewAdvancePending = false;
+  bool _previewAdvancing = false;
+  double _feedVolume = 100;
+  bool get _isFeedPreview =>
+      widget.feedPlayback != null &&
+      widget.feedPlayback!.mode != FeedPlaybackMode.full;
   bool _television = false;
   AppOrientationController? _orientationController;
   bool get _pictureInPictureVisible => _pictureInPictureActive;
@@ -234,6 +260,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void initState() {
     super.initState();
+    _feedObscured = widget.feedPlayback != null;
     _playbackLease = widget.playbackQueue?.acquire();
     WidgetsBinding.instance.addObserver(this);
     _index = widget.initialIndex;
@@ -251,24 +278,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
-    _player =
-        widget.playerFactory?.call() ??
-        ((Platform.isAndroid || Platform.isIOS)
-            ? LunaExoPlayer(engine: _engine)
-            : Player(
-                configuration: const PlayerConfiguration(
-                  bufferSize: 32 * 1024 * 1024,
-                  logLevel: MPVLogLevel.error,
-                ),
-              ));
-    _video = widget.videoBuilder == null && _player is! LunaExoPlayer
-        ? VideoController(
-            _player,
-            configuration: VideoControllerConfiguration(
-              enableHardwareAcceleration: !Platform.isIOS,
-            ),
-          )
-        : null;
+    _playbackSurface = widget.playbackSurface ?? PlaybackSurface();
+    _player = _playbackSurface.acquire(
+      engine: _engine,
+      factory: widget.playerFactory,
+    );
+    _video = widget.videoBuilder == null ? _playbackSurface.video : null;
     _enhancement = VideoEnhancementController(
       player: _player,
       video: _video,
@@ -317,6 +332,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     _subscriptions.add(
       _player.stream.completed.listen((completed) {
         if (completed &&
+            widget.feed &&
+            _feedPrepared &&
+            _isFeedPreview &&
+            !_closed &&
+            !_loading) {
+          _endFeedPreview();
+          return;
+        }
+        if (completed &&
             !_loading &&
             !_closed &&
             _acceptErrors &&
@@ -350,6 +374,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _syncDanmaku();
         _syncPreload();
         _acknowledgeHandoff();
+        _checkFeedPreview();
       }),
     );
     for (final stream in [
@@ -365,6 +390,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _syncDanmaku();
           _syncPreload();
           _acknowledgeHandoff();
+          _checkFeedPreview();
         }),
       );
     }
@@ -1148,7 +1174,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         (_plan?.local == true ||
             buffered >= (remaining < bufferTarget ? remaining : bufferTarget));
     _setBackgroundWorkAllowed(headroom);
-    if (!_preloadEnabled ||
+    if (_isFeedPreview ||
+        !_preloadEnabled ||
         !_foreground ||
         widget.localOnly ||
         _plan?.offline == true ||
@@ -1214,7 +1241,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _scheduleSystemUi() {
-    if (widget.feed) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _closed || (!_mobile && !_television)) return;
       final fullscreen = _showFullscreen;
@@ -1326,8 +1352,181 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  bool _feedOperationCurrent(int ticket) =>
+      mounted &&
+      !_closed &&
+      ticket == _generation &&
+      widget.store.profileEpoch == _profileEpoch;
+
+  Future<({int index, double position})?> _prepareFeedPlayback(
+    int ticket,
+    int index,
+    double position,
+  ) async {
+    final playback = widget.feedPlayback;
+    if (playback == null) return null;
+    final waiting = Stopwatch()..start();
+    while (_feedOperationCurrent(ticket)) {
+      final state = _player.state;
+      final ratio = videoDisplaySize(state.videoParams)?.aspectRatio;
+      if (state.duration > Duration.zero &&
+          (playback.mode != null ||
+              ratio != null ||
+              waiting.elapsed >= const Duration(seconds: 2))) {
+        break;
+      }
+      if (waiting.elapsed >= const Duration(seconds: 10)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    if (!_feedOperationCurrent(ticket)) return null;
+    final duration = _player.state.duration;
+    final previousMode = playback.mode;
+    final mode = playback.resolve(
+      duration,
+      videoDisplaySize(_player.state.videoParams)?.aspectRatio,
+    );
+    if (mode == FeedPlaybackMode.full) {
+      if (previousMode == null) {
+        if (index != playback.resumeIndex) {
+          return (
+            index: playback.resumeIndex,
+            position: playback.resumePosition,
+          );
+        }
+        position = playback.resumePosition;
+        if (position > 0) {
+          await _player.seek(Duration(milliseconds: (position * 1000).round()));
+        }
+      }
+    } else {
+      if (duration <= Duration.zero) {
+        throw AppFailure(
+          '暂时无法获取有效片长，可以重试、看正片或上滑换一部。',
+          code: 'FEED_PREVIEW_UNAVAILABLE',
+        );
+      }
+      if (previousMode != FeedPlaybackMode.randomPreview &&
+          index != playback.previewIndex) {
+        return (index: playback.previewIndex, position: 0.0);
+      }
+      if (previousMode != FeedPlaybackMode.randomPreview) position = 0;
+      final segment = playback.previewFor(index, duration);
+      final requested = Duration(milliseconds: (position * 1000).round());
+      final target = requested >= segment.start && requested < segment.end
+          ? requested
+          : segment.start;
+      setState(() => _loadingMessage = '正在定位试看片段');
+      try {
+        await _player.seek(target).timeout(const Duration(seconds: 8));
+        if (!_feedOperationCurrent(ticket)) return null;
+        final advancing = _foreground && _playIntent;
+        if (advancing) await _player.play();
+        final seeking = Stopwatch()..start();
+        while (_feedOperationCurrent(ticket)) {
+          final state = _player.state;
+          final reached = advancing
+              ? state.position >= target + const Duration(milliseconds: 150)
+              : (state.position - target).abs() <= const Duration(seconds: 2);
+          if (reached && !state.buffering && state.position < segment.end) {
+            break;
+          }
+          if (seeking.elapsed >= const Duration(seconds: 8)) {
+            throw TimeoutException('试看定位未确认');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      } catch (_) {
+        if (!_feedOperationCurrent(ticket)) return null;
+        await _player.pause();
+        throw AppFailure(
+          '这段视频暂时无法定位试看，可以重试、看正片或上滑换一部。',
+          code: 'FEED_PREVIEW_UNAVAILABLE',
+        );
+      }
+    }
+    if (!_feedOperationCurrent(ticket)) return null;
+    await _player.setVolume(_feedVolume);
+    if (!_feedOperationCurrent(ticket)) return null;
+    if (_foreground && _playIntent) await _player.play();
+    if (!_feedOperationCurrent(ticket)) return null;
+    _feedPrepared = true;
+    _feedPreparing = false;
+    _feedObscured = false;
+    return null;
+  }
+
+  void _checkFeedPreview() {
+    if (!_isFeedPreview ||
+        !_feedPrepared ||
+        _loading ||
+        _closed ||
+        _error != null) {
+      return;
+    }
+    final segment = widget.feedPlayback?.preview;
+    if (segment != null && _player.state.position >= segment.end) {
+      _endFeedPreview();
+    }
+    if (_previewAdvancePending) unawaited(_advanceFeedPreview());
+  }
+
+  void _endFeedPreview() {
+    if (_closed || !_feedPrepared) return;
+    if (!_previewEnded) {
+      final shouldAdvance = _playIntent;
+      setState(() {
+        _previewEnded = true;
+        _playIntent = false;
+        _previewAdvancePending = shouldAdvance;
+        widget.feedPlayback?.finished = true;
+      });
+      _interactions.cancel();
+      unawaited(_player.pause());
+    }
+    unawaited(_advanceFeedPreview());
+  }
+
+  Future<void> _advanceFeedPreview() async {
+    if (_closed ||
+        !_foreground ||
+        _panelOpen ||
+        _player.state.buffering ||
+        !_previewAdvancePending ||
+        _previewAdvancing) {
+      return;
+    }
+    _previewAdvancing = true;
+    _previewAdvancePending = false;
+    final ticket = _generation;
+    try {
+      final moved = await widget.onPreviewFinished?.call(
+        () =>
+            _feedOperationCurrent(ticket) &&
+            _foreground &&
+            !_panelOpen &&
+            _previewEnded,
+      );
+      if (moved == false &&
+          _feedOperationCurrent(ticket) &&
+          _previewEnded &&
+          (!_foreground || _panelOpen)) {
+        _previewAdvancePending = true;
+      }
+    } catch (_) {
+      if (mounted && !_closed) _notice('更多推荐暂时无法加载，可以看正片或手动上滑。');
+    } finally {
+      _previewAdvancing = false;
+    }
+  }
+
   void _togglePlayback() {
     if (_closed || _loading || _error != null) return;
+    if (_isFeedPreview && _previewEnded) {
+      _previewAdvancePending = false;
+      widget.feedPlayback?.finished = false;
+      unawaited(_play(_index));
+      return;
+    }
     _handoffOwned = false;
     widget.handoff?.fail('接收端已操作播放');
     _interactions.cancel();
@@ -1344,6 +1543,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _saveProgress({bool flush = false}) async {
+    if (widget.feedPlayback != null && (!_feedPrepared || _isFeedPreview)) {
+      return;
+    }
     if (_openedIndex < 0 || widget.store.profileEpoch != _profileEpoch) {
       return;
     }
@@ -1463,13 +1665,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _resumePosition = position;
     _showControlsOnPlaybackReady = showControlsOnReady;
+    if (widget.feedPlayback != null) {
+      if (!_feedPreparing) _feedVolume = _player.state.volume;
+      _feedPreparing = true;
+      _feedObscured = true;
+      _previewEnded = false;
+      _previewAdvancePending = false;
+      widget.feedPlayback!.finished = false;
+    }
     final isSeamlessAdvance =
         !showControlsOnReady &&
         recoveryAction == null &&
         (index == _index + 1 || warmed != null);
     setState(() {
       _index = index;
-      _loading = !isSeamlessAdvance && warmed == null;
+      _loading =
+          widget.feedPlayback != null || !isSeamlessAdvance && warmed == null;
       _error = null;
       _localFailure = false;
       _loadingMessage = switch (recoveryAction) {
@@ -1488,6 +1699,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     PlaybackPlan? failedPlan;
     bool installed = false;
     var failureStage = 'resolve';
+    ({int index, double position})? feedRedirect;
     try {
       await _serialize(() async {
         if (_closed || ticket != _generation) {
@@ -1495,6 +1707,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         await _saveProgress(flush: true);
         await _enhancement.beforeMedia();
+        _feedPrepared = false;
         if (_closed || ticket != _generation) return;
         _openedIndex = -1;
         if (!isSeamlessAdvance) {
@@ -1630,6 +1843,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           '[Play] 打开媒体: 剧=${widget.detail.drama.cleanSourceId}, 集=${widget.detail.episodes[index].number}, local=${plan.local}, encrypted=${plan.decryptionKey.isNotEmpty}, host=${Uri.tryParse(plan.url)?.host}',
         );
         if (_player is LunaExoPlayer) _player.engine = _engine;
+        if (widget.feedPlayback != null) await _player.setVolume(0);
         await _player.open(
           Media(
             plan.url,
@@ -1639,17 +1853,20 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ? Duration(milliseconds: (position * 1000).round())
                 : null,
           ),
-          play: _foreground && _playIntent,
+          play: widget.feedPlayback == null && _foreground && _playIntent,
         );
         if (_closed || ticket != _generation) {
           return;
         }
         _openedIndex = index;
+        if (widget.feedPlayback != null) await _player.setVolume(0);
         _updateVideoAspectRatio(_player.state.videoParams);
-        _enhancement.mediaReady();
-        _attachLanPlayback();
         _health.reset();
         await _interactions.applySpeed();
+        feedRedirect = await _prepareFeedPlayback(ticket, index, position);
+        if (!_feedOperationCurrent(ticket) || feedRedirect != null) return;
+        _enhancement.mediaReady();
+        _attachLanPlayback();
         if (mounted && !_closed && ticket == _generation) {
           setState(() {
             _loading = false;
@@ -1664,12 +1881,25 @@ class _PlayerScreenState extends State<PlayerScreen>
           }
         }
       });
+      if (feedRedirect != null && _feedOperationCurrent(ticket)) {
+        await _play(
+          feedRedirect!.index,
+          position: feedRedirect!.position,
+          playWhenReady: _playIntent,
+        );
+      }
     } catch (error) {
       DiaryService.add(
         '[Play] 播放失败: 剧=${widget.detail.drama.cleanSourceId}, 集=${widget.detail.episodes[index].number}, 阶段=$failureStage, 恢复=${_recovery.attempts}/${PlaybackRecovery.maxAttempts}, ${playbackFailureSummary(error)}',
       );
       if (!_closed && mounted && ticket == _generation) {
-        if (prepared != null && identical(_plan, prepared)) {
+        if (error is AppFailure && error.code == 'FEED_PREVIEW_UNAVAILABLE') {
+          _acceptErrors = false;
+          setState(() {
+            _loading = false;
+            _error = error.message;
+          });
+        } else if (prepared != null && identical(_plan, prepared)) {
           _acceptErrors = true;
           _queueRecovery();
         } else {
@@ -1751,14 +1981,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   bool get _showFullscreen =>
+      _fullscreen ||
       !widget.feed &&
-      (_television ||
-          _fullscreen ||
-          (_mobile &&
-              !_automaticFullscreenSuppressed &&
-              _videoAspectRatio != null &&
-              _aspectRatio > 1 &&
-              MediaQuery.orientationOf(context) == Orientation.landscape));
+          (_television ||
+              (_mobile &&
+                  !_automaticFullscreenSuppressed &&
+                  _videoAspectRatio != null &&
+                  _aspectRatio > 1 &&
+                  MediaQuery.orientationOf(context) == Orientation.landscape));
 
   Future<void> _rotate() async {
     if (_rotating || _television) {
@@ -1773,6 +2003,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _fullscreen = fullscreen;
       _automaticFullscreenSuppressed = !fullscreen;
     });
+    final orientationRatio = widget.feed && fullscreen ? 16 / 9 : _aspectRatio;
     try {
       if (Platform.isWindows) {
         await windowManager.setFullScreen(fullscreen);
@@ -1781,13 +2012,13 @@ class _PlayerScreenState extends State<PlayerScreen>
           await (_orientationController?.setPlayback(
                 this,
                 fullscreen: fullscreen,
-                aspectRatio: _aspectRatio,
+                aspectRatio: orientationRatio,
               ) ??
               SystemChrome.setPreferredOrientations(
                 AppOrientationController.orientations(
                   television: _television,
                   fullscreen: fullscreen,
-                  aspectRatio: _aspectRatio,
+                  aspectRatio: orientationRatio,
                 ),
               ));
         }
@@ -1802,7 +2033,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     } finally {
       _rotating = false;
-      if (mounted && !_closed) _scheduleSystemUi();
+      if (mounted && !_closed) {
+        _scheduleSystemUi();
+        widget.onFullscreenChanged?.call(_showFullscreen);
+      }
     }
   }
 
@@ -1929,6 +2163,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_panelOpen || _closed) return;
     _interactions.cancel();
     setState(() => _panelOpen = true);
+    var correctFeed = false;
     try {
       if (_mobile && section == PlayerMenuSection.quality) {
         final chosenQuality = await PlayerDialogHelper.openQualitySheet(
@@ -1996,6 +2231,20 @@ class _PlayerScreenState extends State<PlayerScreen>
             Navigator.pop(context);
             _openDanmakuSettings();
           },
+          feedSettings: widget.onCorrectFeedPlayback == null
+              ? null
+              : ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('推荐播放方式'),
+                  subtitle: Text(
+                    _isFeedPreview ? '随机试看 · 识别有误可修正' : '完整播放 · 识别有误可修正',
+                  ),
+                  trailing: const Icon(Icons.tune),
+                  onTap: () {
+                    correctFeed = true;
+                    Navigator.pop(context);
+                  },
+                ),
         );
         if (mounted && !_closed && index != null && index != _index) {
           await _play(index);
@@ -2005,6 +2254,59 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed) {
         setState(() => _panelOpen = false);
         _playerFocus.requestFocus();
+        if (!correctFeed) _checkFeedPreview();
+      }
+    }
+    if (correctFeed && mounted && !_closed) await _correctFeedPlayback();
+  }
+
+  Future<void> _correctFeedPlayback() async {
+    if (_closed || _panelOpen || widget.onCorrectFeedPlayback == null) return;
+    setState(() => _panelOpen = true);
+    try {
+      final choice =
+          await showModalBottomSheet<({FeedPlaybackMode? mode, bool source})>(
+            context: context,
+            isScrollControlled: true,
+            builder: (sheetContext) => SafeArea(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const ListTile(
+                      title: Text('修正推荐播放方式'),
+                      subtitle: Text('作品规则优先于站源默认规则。'),
+                    ),
+                    for (final source in [false, true]) ...[
+                      for (final mode in [...FeedPlaybackMode.values, null])
+                        ListTile(
+                          title: Text(
+                            '${source ? '此站源默认' : '仅此作品'}：${switch (mode) {
+                              FeedPlaybackMode.full => '完整播放',
+                              FeedPlaybackMode.randomPreview => '随机试看',
+                              null => '恢复自动识别',
+                            }}',
+                          ),
+                          onTap: () => Navigator.pop(sheetContext, (
+                            mode: mode,
+                            source: source,
+                          )),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+      if (choice != null && mounted && !_closed) {
+        await widget.onCorrectFeedPlayback!(choice.mode, choice.source);
+      }
+    } catch (_) {
+      if (mounted && !_closed) _notice('播放方式未能保存，请重试。');
+    } finally {
+      if (mounted && !_closed) {
+        setState(() => _panelOpen = false);
+        _checkFeedPreview();
       }
     }
   }
@@ -2267,7 +2569,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     final closing = _operations.catchError((Object _) {}).then((_) async {
       await _interactions.pendingRates.catchError((Object _) {});
       await enhancementClosed.catchError((Object _) {});
-      await _player.dispose();
+      if (widget.playbackSurface == null) {
+        await _playbackSurface.close();
+      } else {
+        await _player.stop();
+        if (widget.feedPlayback != null) await _player.setVolume(_feedVolume);
+      }
       if (!retainStream) await _encryptedPlayback.close();
     });
     unawaited(
@@ -2275,9 +2582,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         (Object _) {},
       ),
     );
-    if (!widget.feed && Platform.isWindows) {
+    if (widget.feed && _fullscreen) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => widget.onFullscreenChanged?.call(false),
+      );
+    }
+    if ((!widget.feed || _fullscreen) && Platform.isWindows) {
       unawaited(windowManager.setFullScreen(false));
-    } else if (!widget.feed && (_mobile || _television && Platform.isAndroid)) {
+    } else if ((!widget.feed || _fullscreen) &&
+        (_mobile || _television && Platform.isAndroid)) {
       unawaited(
         (_orientationController?.releasePlayback(this) ??
                 SystemChrome.setPreferredOrientations(
@@ -2314,7 +2627,18 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Widget _buildPlayer(BuildContext context) {
-    if (widget.feed) return _videoPane(context);
+    if (widget.feed) {
+      return PopScope(
+        canPop: !_showFullscreen,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop && _showFullscreen) unawaited(_rotate());
+        },
+        child: CallbackShortcuts(
+          bindings: {const SingleActivator(LogicalKeyboardKey.escape): _back},
+          child: _videoPane(context),
+        ),
+      );
+    }
     final theme = Theme.of(context);
     final title = widget.detail.drama.title;
     final fullscreen = _showFullscreen;
@@ -2482,17 +2806,15 @@ class _PlayerScreenState extends State<PlayerScreen>
           enabled: !_loading && _error == null,
           following: widget.store.following(widget.detail.drama.id) != null,
           danmakuEnabled: _danmakuEnabled,
-          position: _player.state.position,
-          duration: _player.state.duration,
+          position: _feedPosition,
+          duration: _feedDuration,
+          preview: _isFeedPreview,
+          previewEnded: _previewEnded,
+          fullscreen: _showFullscreen,
+          onOpenFull: widget.onOpenFull,
+          onFullscreen: _isFeedPreview ? () => unawaited(_rotate()) : null,
           onTogglePlayback: _togglePlayback,
-          onSeek: (value) => unawaited(
-            _seekTo(
-              Duration(
-                milliseconds: (_player.state.duration.inMilliseconds * value)
-                    .round(),
-              ),
-            ),
-          ),
+          onSeek: (value) => unawaited(_seekFeed(value)),
           onFavorite: () => unawaited(
             saveUserChange(
               context,
@@ -2508,6 +2830,30 @@ class _PlayerScreenState extends State<PlayerScreen>
     ),
   );
 
+  Duration get _feedDuration => _isFeedPreview
+      ? widget.feedPlayback?.preview?.duration ?? Duration.zero
+      : _player.state.duration;
+
+  Duration get _feedPosition {
+    final start = _isFeedPreview ? widget.feedPlayback?.preview?.start : null;
+    final value = _player.state.position - (start ?? Duration.zero);
+    return value < Duration.zero ? Duration.zero : value;
+  }
+
+  Future<void> _seekFeed(double value) async {
+    final start = _isFeedPreview ? widget.feedPlayback?.preview?.start : null;
+    final target =
+        (start ?? Duration.zero) +
+        Duration(milliseconds: (_feedDuration.inMilliseconds * value).round());
+    if (_previewEnded) {
+      _previewEnded = false;
+      _previewAdvancePending = false;
+      widget.feedPlayback?.finished = false;
+    }
+    await _seekTo(target);
+    _checkFeedPreview();
+  }
+
   Widget _videoPane(BuildContext context, {double topPadding = 0.0}) {
     return PlayerViewportView(
       topPadding: topPadding,
@@ -2519,6 +2865,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       index: _index,
       plan: _plan,
       loading: _loading,
+      obscureVideo: _feedObscured,
+      onOpenFull: _isFeedPreview ? widget.onOpenFull : null,
       loadingMessage: _loadingMessage,
       error: _error,
       localFailure: _localFailure,
