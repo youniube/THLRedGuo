@@ -43,10 +43,14 @@ class PlayerTopBarView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final topPadding = fullscreen ? MediaQuery.paddingOf(context).top : 0.0;
+    final double extraTop = topPadding > 0
+        ? (topPadding + (compact ? 4.0 : 8.0))
+        : (compact ? 8.0 : 8.0);
     return Align(
       alignment: Alignment.topCenter,
       child: Padding(
-        padding: EdgeInsets.only(top: compact ? 8 : 0),
+        padding: EdgeInsets.only(top: extraTop),
         child: Row(
           children: [
             _iconButton(
@@ -67,12 +71,7 @@ class PlayerTopBarView extends StatelessWidget {
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                     color: AppColors.white,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 6,
-                        color: AppColors.black,
-                      ),
-                    ],
+                    shadows: [Shadow(blurRadius: 6, color: AppColors.black)],
                   ),
                 ),
               ),

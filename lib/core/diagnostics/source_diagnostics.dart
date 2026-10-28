@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'network_egress_lookup.dart';
 
 /// 诊断分析结果对象，包含清晰分类、具体失败原因与针对性排查建议
 class DiagnosticAnalysisResult {
@@ -31,6 +32,8 @@ class SourceDiagnosticEntry {
     required this.stage,
     this.host = '',
     this.url = '',
+    this.method = 'GET',
+    this.logId = '',
     this.status = 0,
     this.businessCode = '',
     this.errorCode = '',
@@ -40,6 +43,9 @@ class SourceDiagnosticEntry {
     this.errorTitle = '',
     this.errorMessage = '',
     this.advice = '',
+    this.responseSnippet = '',
+    this.searchTabsSummary = '',
+    this.sessionStatus = '',
   });
 
   final DateTime at;
@@ -47,6 +53,8 @@ class SourceDiagnosticEntry {
   final String stage;
   final String host;
   final String url;
+  final String method;
+  final String logId;
   final int status;
   final String businessCode;
   final String errorCode;
@@ -56,6 +64,9 @@ class SourceDiagnosticEntry {
   final String errorTitle;
   final String errorMessage;
   final String advice;
+  final String responseSnippet;
+  final String searchTabsSummary;
+  final String sessionStatus;
 
   bool get failed =>
       errorCode.isNotEmpty ||
@@ -82,35 +93,63 @@ class SourceDiagnosticEntry {
 
   String toReportBlock() {
     final buffer = StringBuffer();
-    final timeStr = at.toIso8601String();
-    if (!failed) {
-      buffer.write('  ✓ [$timeStr] $stage');
-      if (host.isNotEmpty) buffer.write(' · $host');
-      if (elapsedMs > 0) buffer.write(' (${elapsedMs}ms)');
-      if (count != null) buffer.write(' · $count 条结果');
-      return buffer.toString();
-    }
-
-    buffer.writeln('  ✗ [$timeStr] $stage · 【$displayTitle】');
+    buffer.writeln(
+      '  ${failed ? '✗' : '✓'} [${at.toIso8601String()}] $stage · $context',
+    );
+    if (failed) buffer.writeln('    - 判定: $displayTitle · $errorCode');
     if (host.isNotEmpty) buffer.writeln('    - 目标主机: $host');
-    if (url.isNotEmpty) buffer.writeln('    - 请求接口: ${_desensitizeUrl(url)}');
+    if (url.isNotEmpty) {
+      buffer.writeln(
+        '    - 请求接口: $method ${SourceDiagnostics.desensitizeUrl(url)}',
+      );
+    }
     if (status > 0) buffer.writeln('    - HTTP 状态码: $status');
     if (businessCode.isNotEmpty) buffer.writeln('    - 接口业务码: $businessCode');
+    if (logId.isNotEmpty) buffer.writeln('    - LogID: $logId');
+    if (sessionStatus.isNotEmpty) buffer.writeln('    - 会话状态: $sessionStatus');
+    if (searchTabsSummary.isNotEmpty) {
+      buffer.writeln('    - 搜索分类: $searchTabsSummary');
+    }
     if (errorMessage.isNotEmpty) buffer.writeln('    - 具体失败原因: $errorMessage');
     if (advice.isNotEmpty) buffer.writeln('    - 排查指引: $advice');
     if (elapsedMs > 0) buffer.writeln('    - 请求耗时: ${elapsedMs}ms');
-    return buffer.toString().trimRight();
-  }
-
-  static String _desensitizeUrl(String rawUrl) {
-    final uri = Uri.tryParse(rawUrl);
-    if (uri == null) return rawUrl;
-    return '${uri.scheme}://${uri.host}${uri.path}';
+    if (count != null) buffer.writeln('    - 数据条数: $count');
+    if (responseSnippet.isNotEmpty) {
+      buffer.writeln('    - 响应结构摘要: $responseSnippet');
+    }
+    return SourceDiagnostics.redact(buffer.toString().trimRight());
   }
 }
 
 class SourceDiagnostics extends ChangeNotifier {
   static final shared = SourceDiagnostics();
+  SourceDiagnostics({this.networkLookup = const NetworkEgressLookup()});
+  final NetworkEgressLookup networkLookup;
+  NetworkEgressResult? networkEgress;
+  Future<void>? _networkTask;
+
+  Future<void> refreshNetworkEgress({bool force = false}) async {
+    final pending = _networkTask;
+    if (pending != null) return pending;
+    final previous = networkEgress;
+    if (!force &&
+        previous != null &&
+        DateTime.now().toUtc().difference(previous.at).inSeconds <
+            (previous.ip.isEmpty ? 30 : 300)) {
+      return;
+    }
+    final task = () async {
+      networkEgress = await networkLookup.lookup();
+      notifyListeners();
+    }();
+    _networkTask = task;
+    try {
+      await task;
+    } finally {
+      _networkTask = null;
+    }
+  }
+
   final List<SourceDiagnosticEntry> _entries = [];
   List<SourceDiagnosticEntry> get entries => List.unmodifiable(_entries);
 
@@ -225,6 +264,43 @@ class SourceDiagnostics extends ChangeNotifier {
       final dynamic dyn = error;
       final c = (dyn.code as Object?)?.toString().trim() ?? '';
       final msg = (dyn.message as Object?)?.toString() ?? '';
+      if ([
+        'SEARCH_TAB_MISSING',
+        'INVALID_SEARCH_CURSOR',
+        'SEARCH_EMPTY',
+        'INVALID_RESPONSE',
+        'EMPTY_RESPONSE',
+        'RESPONSE_NOT_UTF8',
+      ].contains(c)) {
+        return DiagnosticAnalysisResult(
+          category: 'DATA_PARSE',
+          title: c == 'SEARCH_TAB_MISSING' ? '官方未提供短剧分类' : '接口响应异常',
+          message: msg,
+          advice: adviceForCode(c),
+          code: c,
+        );
+      }
+      if (['DNS', 'TIMEOUT', 'CONNECTION', 'TLS', 'CANCELLED'].contains(c)) {
+        return DiagnosticAnalysisResult(
+          category: c,
+          title: switch (c) {
+            'DNS' => 'DNS 解析错误',
+            'TIMEOUT' => '网络请求超时',
+            'CONNECTION' => '网络连接不通',
+            'TLS' => 'SSL/TLS 证书握手失败',
+            _ => '请求已主动取消',
+          },
+          message: msg,
+          advice: adviceForCode(c),
+          code: c,
+        );
+      }
+      if (c.startsWith('HTTP_')) {
+        final status = int.tryParse(c.substring(5));
+        if (status != null && status > 0) {
+          return analyzeHttpResponse(status, '', url: url);
+        }
+      }
       if (c == 'MISSING_EPISODE') {
         return DiagnosticAnalysisResult(
           category: 'DATA_PARSE',
@@ -415,14 +491,15 @@ class SourceDiagnostics extends ChangeNotifier {
       );
     }
 
-    final isHtml = trimmed.startsWith('<!DOCTYPE') ||
+    final isHtml =
+        trimmed.startsWith('<!DOCTYPE') ||
         trimmed.startsWith('<!doctype') ||
         trimmed.startsWith('<html') ||
         (host.contains('hongguoduanju.com') &&
             (trimmed.contains('<html') ||
                 trimmed.contains('<head') ||
                 trimmed.contains('<body')));
-    if (isHtml) {
+    if (isHtml && stage != '搜索') {
       return const DiagnosticAnalysisResult(
         category: '',
         title: '正常',
@@ -432,7 +509,7 @@ class SourceDiagnostics extends ChangeNotifier {
       );
     }
 
-    if (body.length <= 2 * 1024 * 1024) {
+    if (body.length <= 12 * 1024 * 1024) {
       try {
         final parsed = jsonDecode(body);
         if (parsed is! Map) {
@@ -470,14 +547,40 @@ class SourceDiagnostics extends ChangeNotifier {
             code: 'GUEST_REGISTRATION_FAILED',
           );
         }
-        if (stage == '搜索' && parsed['search_tabs'] is! List) {
-          return const DiagnosticAnalysisResult(
-            category: 'DATA_PARSE',
-            title: '搜索返回结构异常',
-            message: '搜索响应缺少 search_tabs 字段',
-            advice: '接口返回的搜索结构异常，请复制报告反馈。',
-            code: 'INVALID_RESPONSE',
+        if (stage == '搜索') {
+          final tabs = parsed['search_tabs'];
+          if (tabs is! List) {
+            return const DiagnosticAnalysisResult(
+              category: 'DATA_PARSE',
+              title: '搜索返回结构异常',
+              message: '搜索响应缺少 search_tabs 字段',
+              advice: '接口返回的搜索结构异常，请导出日志反馈。',
+              code: 'INVALID_RESPONSE',
+            );
+          }
+          final hasDrama = tabs.whereType<Map>().any(
+            (tab) =>
+                tab['tab_type'] == 29 || ['剧集', '短剧'].contains(tab['title']),
           );
+          final hasVideos = tabs.whereType<Map>().any(
+            (tab) => (tab['data'] is List ? tab['data'] as List : [])
+                .whereType<Map>()
+                .any(
+                  (row) =>
+                      row['video_data'] is List &&
+                      (row['video_data'] as List).isNotEmpty,
+                ),
+          );
+          if (!hasDrama && !hasVideos) {
+            return DiagnosticAnalysisResult(
+              category: 'DATA_PARSE',
+              title: '官方未提供短剧分类',
+              message: 'HTTP 与业务码正常，但返回分类中没有短剧数据',
+              advice: adviceForCode('SEARCH_TAB_MISSING'),
+              code: 'SEARCH_TAB_MISSING',
+              businessCode: code,
+            );
+          }
         }
       } catch (e) {
         return DiagnosticAnalysisResult(
@@ -502,7 +605,7 @@ class SourceDiagnostics extends ChangeNotifier {
   static String networkCode(Object error, {bool timedOut = false}) =>
       analyzeError(error, timedOut: timedOut).code;
 
-  void record({
+  SourceDiagnosticEntry? record({
     required String url,
     required String context,
     required int elapsedMs,
@@ -510,18 +613,31 @@ class SourceDiagnostics extends ChangeNotifier {
     String body = '',
     String errorCode = '',
     Object? error,
+    Map<String, String> headers = const {},
+    String method = 'GET',
+    String sessionStatus = '',
+    bool timedOut = false,
   }) {
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
+    if (uri == null) return null;
     final stage = stageFor(uri);
-    if (stage == null) return;
+    if (stage == null) return null;
 
-    var code = '';
+    Map? structure;
+    if (body.length <= 12 * 1024 * 1024) {
+      try {
+        final value = jsonDecode(body);
+        if (value is Map) structure = value;
+      } catch (_) {}
+    }
+    var code = safeCode(
+      structure?['code'] ?? structure?['Code'] ?? structure?['status_code'],
+    );
     var failure = safeCode(errorCode);
     DiagnosticAnalysisResult? analysis;
 
     if (error != null) {
-      analysis = analyzeError(error, url: url);
+      analysis = analyzeError(error, url: url, timedOut: timedOut);
       failure = analysis.code;
     } else if (failure.isNotEmpty) {
       analysis = DiagnosticAnalysisResult(
@@ -540,23 +656,38 @@ class SourceDiagnostics extends ChangeNotifier {
       }
     }
 
-    add(
-      SourceDiagnosticEntry(
-        at: DateTime.now().toUtc(),
-        context: context,
-        stage: stage,
-        host: uri.host,
-        url: url,
-        status: status,
-        businessCode: code,
-        errorCode: failure,
-        errorCategory: analysis?.category ?? '',
-        errorTitle: analysis?.title ?? '',
-        errorMessage: analysis?.message ?? '',
-        advice: analysis?.advice ?? '',
-        elapsedMs: elapsedMs,
-      ),
+    final responseHeaders = headers.map(
+      (key, value) => MapEntry(key.toLowerCase(), value),
     );
+    final rawLogId =
+        responseHeaders['x-tt-logid'] ??
+        responseHeaders['x-tt-traceid'] ??
+        responseHeaders['x-ss-req-ticket'] ??
+        '';
+    final entry = SourceDiagnosticEntry(
+      at: DateTime.now().toUtc(),
+      context: context,
+      stage: stage,
+      host: uri.host,
+      url: desensitizeUrl(url),
+      method: method,
+      status: status,
+      businessCode: code,
+      errorCode: failure,
+      logId: RegExp(r'^[A-Za-z0-9_.:-]{1,160}$').hasMatch(rawLogId)
+          ? rawLogId
+          : '',
+      errorCategory: analysis?.category ?? '',
+      errorTitle: analysis?.title ?? '',
+      errorMessage: redact(analysis?.message ?? ''),
+      advice: analysis?.advice ?? '',
+      elapsedMs: elapsedMs,
+      responseSnippet: responseSummary(body),
+      searchTabsSummary: searchTabsSummary(structure),
+      sessionStatus: sessionStatus,
+    );
+    add(entry);
+    return entry;
   }
 
   static String adviceForCode(String code) {
@@ -564,6 +695,10 @@ class SourceDiagnostics extends ChangeNotifier {
       return '域名解析失败，请检查 DNS、去广告规则（如 AdGuard）或分流代理是否拦截，并用手机热点对照。';
     }
     return switch (code) {
+      'SEARCH_TAB_MISSING' => '官方连接成功但未提供短剧分类，请导出日志并对照不同网络；仅凭此响应无法确定地区限制。',
+      'INVALID_SEARCH_CURSOR' => '官方搜索游标未推进，请重新搜索；持续出现时导出日志反馈。',
+      'SEARCH_EMPTY' => '诊断搜索未取得样本，尚未验证分页、详情与播放解析，请导出日志反馈。',
+      'CANCELLED' => '操作已取消，可重新发起请求。',
       'TIMEOUT' => '请求超时，可换网络后重新检测。',
       'TLS' => '安全连接失败，请检查设备时间和网络证书或代理。',
       'CONNECTION' => '连接失败，可检查网络、代理并用手机热点对照。',
@@ -572,7 +707,8 @@ class SourceDiagnostics extends ChangeNotifier {
       'BUSINESS_REJECTED' => '服务端拒绝了请求；请保留报告，稍后或换网络对照。',
       'INVALID_RESPONSE' ||
       'GUEST_REGISTRATION_FAILED' => '接口返回的数据不符合预期，请复制报告反馈。',
-      'EMPTY_RESPONSE' => '服务端返回了空响应 (0 字节)，可能该端点已下线或受网关限制。',
+      'EMPTY_RESPONSE' ||
+      'RESPONSE_NOT_UTF8' => '接口未返回可用正文，请在同一设备用原网络和手机热点作对照，并导出诊断日志。',
       'MISSING_EPISODE' => '该剧暂无可用分集或已在官方站源下线，建议更换剧目播放。',
       'NO_STREAM_URL' => '官方媒体播放地址提取失败，建议尝试其他分集或稍后重试。',
       'JS_EXECUTION' => 'JS 脚本执行异常，请复制脱敏报告协助排查。',
@@ -586,19 +722,118 @@ class SourceDiagnostics extends ChangeNotifier {
   }
 
   /// 过滤并脱敏错误消息
-  static String _sanitizeErrorMessage(String message) {
-    var sanitized = message
-        .replaceAll(RegExp(r'device_id=\d+'), 'device_id=***')
-        .replaceAll(RegExp(r'install_id=\d+'), 'install_id=***')
-        .replaceAll(RegExp(r'token=[A-Za-z0-9_-]+'), 'token=***')
-        .replaceAll(
-          RegExp(r'bearer\s+[A-Za-z0-9_.-]+', caseSensitive: false),
-          'Bearer ***',
+  static String desensitizeUrl(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !['http', 'https'].contains(uri.scheme)) return '[无效地址]';
+    const visible = {
+      'tab_type',
+      'offset',
+      'count',
+      'is_first_enter_search',
+      'search_source',
+      'use_correct',
+      'use_lynx',
+      'version_code',
+      'language',
+    };
+    return Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: uri.path,
+      queryParameters: uri.hasQuery
+          ? uri.queryParameters.map(
+              (key, value) => MapEntry(
+                key,
+                visible.contains(key.toLowerCase()) ? value : '[已隐藏]',
+              ),
+            )
+          : null,
+    ).toString();
+  }
+
+  static String redact(String raw) {
+    return raw
+        .replaceAllMapped(
+          RegExp(
+            r'\b(?:Cookie|Set-Cookie|Authorization|Proxy-Authorization)\s*[:=]\s*[^\r\n]+',
+            caseSensitive: false,
+          ),
+          (_) => '[请求凭据已隐藏]',
+        )
+        .replaceAllMapped(
+          RegExp(r'''https?://[^\s<>"']+'''),
+          (match) => desensitizeUrl(match[0]!),
+        )
+        .replaceAllMapped(
+          RegExp(
+            r'''("?(?:device_id(?:_str)?|install_id(?:_str)?|iid|openudid|cdid|cookie|authorization|access_token|refresh_token|session_id|token|password|query|keyword|search_word)"?\s*[:=]\s*)("[^"]*"|[^\s,;&]+)''',
+            caseSensitive: false,
+          ),
+          (match) => '${match[1]}[已隐藏]',
         );
-    if (sanitized.length > 200) {
-      sanitized = '${sanitized.substring(0, 197)}...';
+  }
+
+  static String searchTabsSummary(Map? structure) {
+    final tabs = structure?['search_tabs'];
+    if (tabs is! List) return '';
+    return tabs
+        .whereType<Map>()
+        .map((tab) {
+          final title = (tab['title'] ?? tab['tab_name'] ?? '').toString();
+          final rows = tab['data'] is List ? (tab['data'] as List).length : 0;
+          return '${tab['tab_type']}:${title.substring(0, title.length.clamp(0, 30))}($rows条)';
+        })
+        .join(', ');
+  }
+
+  static String responseSummary(String body) {
+    if (body.isEmpty) return '';
+    final bytes = utf8.encode(body).length;
+    if (body.length <= 12 * 1024 * 1024) {
+      try {
+        final value = jsonDecode(body);
+        if (value is Map) {
+          final tabs = value['search_tabs'];
+          final summary = jsonEncode({
+            'bytes': bytes,
+            'keys': value.keys.map((e) => e.toString()).take(40).toList(),
+            'code': safeCode(
+              value['code'] ?? value['Code'] ?? value['status_code'],
+            ),
+            if (tabs is List)
+              'search_tabs': tabs.whereType<Map>().map((tab) {
+                final rows = tab['data'] is List
+                    ? (tab['data'] as List).whereType<Map>()
+                    : <Map>[];
+                return {
+                  'tab_type': tab['tab_type'],
+                  'rows': rows.length,
+                  'videos': rows.fold<int>(
+                    0,
+                    (n, row) =>
+                        n +
+                        (row['video_data'] is List
+                            ? (row['video_data'] as List).length
+                            : 0),
+                  ),
+                  'next_offset': tab['next_offset'],
+                  'has_more': tab['has_more'],
+                };
+              }).toList(),
+          });
+          return summary.substring(0, summary.length.clamp(0, 2000));
+        }
+      } catch (_) {}
     }
-    return sanitized.trim();
+    return '非 JSON 响应，$bytes 字节';
+  }
+
+  static String _sanitizeErrorMessage(String message) {
+    final sanitized = redact(message).trim();
+    return sanitized.length > 200
+        ? '${sanitized.substring(0, 197)}...'
+        : sanitized;
   }
 
   /// 生成详尽格式化的脱敏诊断报告
@@ -616,7 +851,14 @@ class SourceDiagnostics extends ChangeNotifier {
       '  - 操作系统: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
     );
     buffer.writeln('  - 数据源指纹: hongguo · SHA256 $sourceHash');
+    buffer.writeln(
+      '  - 系统地区: ${Platform.localeName} · 时区: ${DateTime.now().timeZoneName}',
+    );
     buffer.writeln('  - 诊断时间: ${DateTime.now().toUtc().toIso8601String()}');
+    for (final line
+        in networkEgress?.reportLines ?? ['  - 出口 IP: 尚未检测，请打开数据源诊断或点击开始检测']) {
+      buffer.writeln(line);
+    }
     buffer.writeln('  - 数据安全说明: 报告仅含脱敏诊断记录，不含设备唯一标识、Token、Cookie 及响应原文');
     buffer.writeln();
 
@@ -625,7 +867,11 @@ class SourceDiagnostics extends ChangeNotifier {
     buffer.writeln('  - 正常通过: ${successes.length} 项');
     buffer.writeln('  - 失败异常: ${failures.length} 项');
     buffer.writeln(
-      '  - 整体判定: ${failures.isEmpty ? "✓ 正常，全链路网络连接与数据源通畅" : "✗ 存在异常，具体原因见下方分析"}',
+      '  - 整体判定: ${_entries.isEmpty
+          ? "尚未检测"
+          : failures.isEmpty
+          ? "记录内未发现失败；请结合已执行阶段判断"
+          : "✗ 存在异常，具体原因见下方分析"}',
     );
     buffer.writeln();
 
@@ -663,6 +909,6 @@ class SourceDiagnostics extends ChangeNotifier {
       }
     }
     buffer.writeln('========================================');
-    return buffer.toString();
+    return redact(buffer.toString());
   }
 }

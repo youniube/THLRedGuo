@@ -300,6 +300,45 @@ class CatalogBrowser {
         }
       } catch (error) {
         if (generation != session.generation) return;
+        final errorStr = error.toString();
+        final isCursorExpired =
+            errorStr.contains('CURSOR_EXPIRED') ||
+            errorStr.contains('MISSING_CURSOR') ||
+            errorStr.contains('游标') ||
+            (error is AppFailure &&
+                {'CURSOR_EXPIRED', 'MISSING_CURSOR'}.contains(error.code));
+        if (isCursorExpired && more) {
+          entry.nextPage = 1;
+          entry.hasMore = true;
+          try {
+            final recovered = await repository.catalog(
+              source,
+              category: requests[source]!,
+              query: query,
+              page: 1,
+              force: true,
+            );
+            if (generation != session.generation) return;
+            entry.items = {
+              for (final item in recovered.items) item.id: item,
+            }.values.toList();
+            entry.page = recovered.page;
+            entry.nextPage = recovered.warning.isEmpty ? recovered.page + 1 : 1;
+            entry.hasMore =
+                (query.isEmpty || SourceSite.byId(source).pagedSearch) &&
+                (recovered.hasMore || recovered.warning.isNotEmpty);
+            entry.fresh = recovered.fresh && recovered.warning.isEmpty;
+            if (query.isEmpty) _remember(source, recovered.items);
+            if (recovered.warning.isEmpty) {
+              failures.remove(source);
+            } else {
+              failures[source] = recovered.warning;
+            }
+            return;
+          } catch (_) {
+            if (generation != session.generation) return;
+          }
+        }
         entry.nextPage = page;
         entry.hasMore = query.isEmpty || SourceSite.byId(source).pagedSearch;
         entry.fresh = false;

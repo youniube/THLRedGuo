@@ -17,6 +17,7 @@ public struct SourceDiagnosticsSheetView: View {
     @State private var sharedReport: DiagnosticsShareReport?
     @State private var selectedDetailEntry: SourceDiagnosticEntry? = nil
     @State private var lastSelectedEntryId: UUID? = nil
+    @State private var preparingReport = false
 
     public init() {}
 
@@ -35,8 +36,18 @@ public struct SourceDiagnosticsSheetView: View {
             Text("数据源诊断").font(.system(size: 48, weight: .bold))
             Text("红果官方源 · 应用 \(SourceDiagnostics.version) · 源指纹 \(SourceDiagnostics.sourceHash.prefix(12))")
                 .font(.system(size: 29))
+            Text(SourceDiagnostics.sourceRevision + " · " + recorder.sourceRuntimeStatus)
+                .font(.system(size: 25)).foregroundStyle(.secondary)
+                .accessibilityIdentifier("sourceDiagnostics.sourceRuntime")
             Text("检测使用独立游客会话，不影响收藏、历史和当前数据源。包含网络DNS、JS引擎、游客会话与剧集解析全链路检测。")
                 .font(.system(size: 24)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recorder.networkEgress?.summary ?? "出口 IP：正在检测…")
+                    .font(.system(size: 24, weight: .medium))
+                    .accessibilityIdentifier("sourceDiagnostics.egress")
+                Text(NetworkEgressResult.notice + " 来源：" + (recorder.networkEgress?.provider ?? "IP.SB / IPWho.is"))
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
+            }
 
             // 操作按钮栏
             HStack(spacing: 24) {
@@ -59,8 +70,14 @@ public struct SourceDiagnosticsSheetView: View {
                     isExternalFocused: focusedTarget == .action("report"),
                     onDownCommand: { focusFirstEntry() }
                 ) {
-                    showingFullReport = true
+                    preparingReport = true
+                    Task {
+                        await recorder.refreshNetworkEgress()
+                        preparingReport = false
+                        showingFullReport = true
+                    }
                 }
+                .disabled(preparingReport)
                 .focused($focusedTarget, equals: .action("report"))
                 .accessibilityIdentifier("sourceDiagnostics.report")
 
@@ -70,8 +87,14 @@ public struct SourceDiagnosticsSheetView: View {
                     isExternalFocused: focusedTarget == .action("qr"),
                     onDownCommand: { focusFirstEntry() }
                 ) {
-                    sharedReport = DiagnosticsShareReport(text: recorder.report)
+                    preparingReport = true
+                    Task {
+                        await recorder.refreshNetworkEgress()
+                        preparingReport = false
+                        sharedReport = DiagnosticsShareReport(text: recorder.report)
+                    }
                 }
+                .disabled(preparingReport)
                 .focused($focusedTarget, equals: .action("qr"))
                 .accessibilityIdentifier("sourceDiagnostics.qr")
 
@@ -189,6 +212,7 @@ public struct SourceDiagnosticsSheetView: View {
         .padding(.horizontal, 64)
         .padding(.vertical, 40)
         .defaultFocus($focusedTarget, .action("run"))
+        .task { await recorder.refreshNetworkEgress() }
         .onExitCommand { dismiss() }
         .sheet(item: $selectedDetailEntry, onDismiss: {
             if let id = lastSelectedEntryId {

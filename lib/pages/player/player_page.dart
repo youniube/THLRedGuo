@@ -1217,15 +1217,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (widget.feed) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _closed || (!_mobile && !_television)) return;
-      if (AppDevice.isPadDevice) {
-        if (_systemFullscreen != false) {
-          _systemFullscreen = false;
-          unawaited(
-            SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
-          );
-        }
-        return;
-      }
       final fullscreen = _showFullscreen;
       if (_systemFullscreen == fullscreen) return;
       _systemFullscreen = fullscreen;
@@ -2310,7 +2301,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       child: Builder(
         builder: (context) {
           final fullscreen = _showFullscreen;
-          final overlayBrightness = fullscreen
+          final overlayBrightness = (fullscreen || _mobile)
               ? Brightness.dark
               : Theme.of(context).brightness;
           return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -2357,7 +2348,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           canRequestFocus: !_television,
           skipTraversal: _television,
           child: Scaffold(
-            backgroundColor: fullscreen || pictureInPicture
+            backgroundColor: fullscreen || pictureInPicture || _mobile
                 ? AppColors.black
                 : theme.scaffoldBackgroundColor,
             appBar: pictureInPicture || fullscreen || _mobile
@@ -2379,8 +2370,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             body: pictureInPicture
                 ? _videoPane(context)
                 : SafeArea(
-                    top: !_television && (fullscreen || _mobile),
+                    top: false,
                     bottom: !fullscreen,
+                    left: !fullscreen,
+                    right: !fullscreen,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final desktop = constraints.maxWidth >= 840;
@@ -2414,14 +2407,20 @@ class _PlayerScreenState extends State<PlayerScreen>
                           );
                         }
                         if (_mobile) {
+                          final topPadding = fullscreen
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).top;
                           final height = (constraints.maxWidth / _aspectRatio)
                               .clamp(0.0, constraints.maxHeight * .56);
                           return Column(
                             children: [
                               SizedBox(
-                                height: height,
+                                height: height + topPadding,
                                 width: double.infinity,
-                                child: _videoPane(context),
+                                child: _videoPane(
+                                  context,
+                                  topPadding: topPadding,
+                                ),
                               ),
                               Expanded(
                                 child: PlayerMobilePanelView(
@@ -2509,8 +2508,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     ),
   );
 
-  Widget _videoPane(BuildContext context) {
+  Widget _videoPane(BuildContext context, {double topPadding = 0.0}) {
     return PlayerViewportView(
+      topPadding: topPadding,
       television: _television,
       fullscreen: _showFullscreen,
       pictureInPictureVisible: _pictureInPictureVisible,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:THLRedLook/utils/theme/app_colors.dart';
@@ -102,7 +104,11 @@ class _RankingsScreenState extends State<RankingsScreen> {
         _boards = boards;
         _board =
             boards
-                .where((board) => board.source == targetSource || board.groupId == targetSource)
+                .where(
+                  (board) =>
+                      board.source == targetSource ||
+                      board.groupId == targetSource,
+                )
                 .firstOrNull ??
             boards.firstOrNull;
         _loading = false;
@@ -166,6 +172,15 @@ class _RankingsScreenState extends State<RankingsScreen> {
       });
     } catch (error) {
       if (mounted && generation == _generation) {
+        final errorStr = error.toString();
+        final isCursorExpired =
+            errorStr.contains('CURSOR_EXPIRED') ||
+            errorStr.contains('MISSING_CURSOR') ||
+            errorStr.contains('游标');
+        if (isCursorExpired && more) {
+          unawaited(_load(more: false, force: true));
+          return;
+        }
         setState(() {
           _error = error.toString();
           _failedMore = more;
@@ -237,7 +252,8 @@ class _RankingsScreenState extends State<RankingsScreen> {
         actions: [
           IconButton(
             key: const ValueKey('toggle-ranking-view-mode'),
-            tooltip: (_waterfallMode ?? (MediaQuery.sizeOf(context).width >= 600))
+            tooltip:
+                (_waterfallMode ?? (MediaQuery.sizeOf(context).width >= 600))
                 ? '切换为列表视图'
                 : '切换为瀑布流视图',
             icon: Icon(
@@ -306,7 +322,12 @@ class _RankingsScreenState extends State<RankingsScreen> {
                     TextButton(
                       onPressed: _loading || _more
                           ? null
-                          : () => _load(more: _failedMore, force: true),
+                          : () => _load(
+                              more: (_error?.contains('游标') == true
+                                  ? false
+                                  : _failedMore),
+                              force: true,
+                            ),
                       child: const Text('重试'),
                     ),
                   ],
@@ -339,9 +360,9 @@ class _RankingsScreenState extends State<RankingsScreen> {
                                 : '正在同步最新榜单排行，请稍候片刻',
                             style: TextStyle(
                               fontSize: 13,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ],
@@ -411,18 +432,15 @@ class _RankingsScreenState extends State<RankingsScreen> {
                 crossAxisSpacing: spacing,
                 mainAxisExtent: itemHeight,
               ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final item = items[index];
-                  return _buildRankingWaterfallCard(
-                    context,
-                    item,
-                    itemWidth,
-                    coverHeight,
-                  );
-                },
-                childCount: items.length,
-              ),
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final item = items[index];
+                return _buildRankingWaterfallCard(
+                  context,
+                  item,
+                  itemWidth,
+                  coverHeight,
+                );
+              }, childCount: items.length),
             ),
           ),
           SliverToBoxAdapter(
@@ -722,11 +740,8 @@ class _RankingsScreenState extends State<RankingsScreen> {
                                 item.drama.title,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
                               ),
                               const SizedBox(height: 4),
                               if (item.drama.category.isNotEmpty)
