@@ -9,8 +9,9 @@ public struct TVDanmakuMedia: Equatable {
     public let kind: String
     public let season: Int?
     public let episode: Int?
+    public let episodeKey: String
     public var seriesKey: String { String(data: (try? JSONEncoder().encode([workID, title, String(year), kind, season.map(String.init) ?? ""])) ?? Data(), encoding: .utf8) ?? "" }
-    public var key: String { seriesKey + ":" + (episode.map(String.init) ?? "") }
+    public var key: String { seriesKey + ":" + (episode.map(String.init) ?? "") + ":" + episodeKey }
 
     public init(drama: Drama, episode: Episode) {
         workID = drama.id
@@ -19,7 +20,8 @@ public struct TVDanmakuMedia: Equatable {
         kind = Self.kind(drama.mediaType.isEmpty ? drama.category : drama.mediaType)
         let raw = episode.rawChapter ?? [:]
         season = raw["seasonNumber"] as? Int ?? raw["season"] as? Int ?? Self.season(episode.title) ?? Self.season(drama.title)
-        self.episode = Self.episode(episode.title) ?? raw["currentEpisode"] as? Int
+        self.episode = Self.episode(raw["title"] as? String ?? (episode.raw == nil ? episode.title : "")) ?? raw["currentEpisode"] as? Int
+        episodeKey = episode.id.isEmpty ? episode.title : episode.id
     }
 
     static func capture(_ text: String, _ pattern: String) -> String? {

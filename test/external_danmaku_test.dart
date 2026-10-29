@@ -84,6 +84,13 @@ void main() {
       );
       expect(media.season, 2);
       expect(media.episode, 5);
+      expect(
+        DanmakuMedia.from(
+          const Drama(id: 'test:1', source: 'test', title: '合成作品'),
+          Episode({'id': 'unknown'}, 99),
+        ).episode,
+        isNull,
+      );
     },
   );
 
@@ -181,6 +188,68 @@ void main() {
       expect((await session.page(30000, 120000)).items, isEmpty);
       expect(session.status, contains('多个'));
       expect(calls, 1);
+    },
+  );
+
+  test(
+    'manual binding never leaks to another episode without an explicit number',
+    () async {
+      const drama = Drama(
+        id: 'synthetic:work',
+        source: 'synthetic',
+        title: '合成作品',
+      );
+      final first = DanmakuMedia.from(
+        drama,
+        Episode({'id': 'part-a', 'title': '上篇'}, 1),
+      );
+      final second = DanmakuMedia.from(
+        drama,
+        Episode({'id': 'part-b', 'title': '下篇'}, 2),
+      );
+      var comments = 0;
+      final api = ExternalDanmakuApi(
+        client: MockClient((request) async {
+          if (request.url.path.contains('/comment/')) comments++;
+          return http.Response(
+            jsonEncode(
+              request.url.path.contains('/bangumi/')
+                  ? {
+                      'bangumi': {
+                        'animeId': '7',
+                        'animeTitle': '合成作品',
+                        'episodes': [
+                          {'episodeId': '71', 'episodeTitle': '上篇'},
+                          {'episodeId': '72', 'episodeTitle': '下篇'},
+                        ],
+                      },
+                    }
+                  : {
+                      'comments': [
+                        {'p': '1,1,0,user', 'm': '仅上篇'},
+                      ],
+                    },
+            ),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      final session = ExternalDanmakuSession(store, api: api)..setMedia(first);
+      addTearDown(session.dispose);
+      await session.choose(
+        const DanmakuCandidate(id: '7', title: '合成作品'),
+        const DanmakuLibraryEpisode('71', '上篇'),
+      );
+      expect((await session.page(0, 120000)).items.single.text, '仅上篇');
+      session.setMedia(second);
+      expect(second.episode, isNull);
+      expect(session.binding['episodeId'], isNull);
+      expect((await session.page(0, 120000)).items, isEmpty);
+      expect(session.status, contains('集数信息不足'));
+      expect(comments, 1);
+      session.setMedia(first);
+      expect(session.binding['episodeId'], '71');
     },
   );
 

@@ -275,8 +275,9 @@ void main() {
         void listener() {
           if (!ready.isCompleted &&
               !controller.loading &&
-              controller.items.any((row) => row.timeMs == time))
+              controller.items.any((row) => row.timeMs == time)) {
             ready.complete();
+          }
         }
 
         controller.addListener(listener);

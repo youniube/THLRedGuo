@@ -133,12 +133,14 @@ class DanmakuMedia {
     this.kind = '',
     this.season,
     this.episode,
+    this.episodeKey = '',
   });
-  final String workId, title, kind;
+  final String workId, title, kind, episodeKey;
   final int year;
   final int? season, episode;
   String get seriesKey => jsonEncode([workId, title, year, kind, season]);
-  String get key => jsonEncode([workId, title, year, kind, season, episode]);
+  String get key =>
+      jsonEncode([workId, title, year, kind, season, episode, episodeKey]);
   factory DanmakuMedia.from(Drama drama, Episode episode) {
     final raw = episode.raw;
     return DanmakuMedia(
@@ -154,8 +156,9 @@ class DanmakuMedia {
           danmakuSeason(episode.title) ??
           danmakuSeason(drama.title),
       episode:
-          danmakuEpisode(episode.title) ??
+          danmakuEpisode(raw['title'] as String? ?? '') ??
           (raw['currentEpisode'] as num?)?.toInt(),
+      episodeKey: episode.id.isNotEmpty ? episode.id : episode.title,
     );
   }
 }
