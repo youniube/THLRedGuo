@@ -570,7 +570,7 @@ class PlayerViewportView extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (onOpenFull != null && (loading || error != null))
+              if (onOpenFull != null && !loading && error != null)
                 Positioned(
                   bottom: 24,
                   left: 24,
