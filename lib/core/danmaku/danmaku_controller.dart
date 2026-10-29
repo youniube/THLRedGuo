@@ -77,7 +77,7 @@ class DanmakuController extends ChangeNotifier {
     if (loading && _pages.isEmpty) return '正在加载弹幕';
     if (_pages.isNotEmpty) {
       if (usesExternal && external!.status.isNotEmpty) return external!.status;
-      return items.isEmpty ? '这段暂无弹幕' : '已载入 ${items.length} 条弹幕';
+      return items.isEmpty ? '当前时段暂无弹幕' : '当前缓存 ${items.length} 条原站弹幕';
     }
     return '等待播放';
   }

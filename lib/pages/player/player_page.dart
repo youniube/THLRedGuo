@@ -2402,6 +2402,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     style: _preferences.danmakuStyle,
     sourceControls: ExternalDanmakuControls(
       session: _danmaku.external!,
+      controller: _danmaku,
       onChanged: _danmaku.reload,
       showOffset: false,
     ),

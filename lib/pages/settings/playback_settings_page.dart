@@ -1,17 +1,55 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/core/player/playback_engine.dart';
+import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/views/common/widgets.dart';
 import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
 import 'package:THLRedLook/views/player/external_danmaku_controls.dart';
+import 'package:THLRedLook/views/player/player_danmaku_sheet_view.dart';
 
 class PlaybackSettingsPage extends StatelessWidget {
   const PlaybackSettingsPage({super.key, required this.store});
 
   final LocalStore store;
+
+  Future<void> _danmakuSettings(
+    BuildContext context,
+    DanmakuSettingsTab tab,
+  ) async {
+    final epoch = store.profileEpoch;
+    final session = ExternalDanmakuSession(store);
+    try {
+      await PlayerDanmakuSheetView.show(
+        context: context,
+        initialTab: tab,
+        style: store.playbackPreferences.danmakuStyle,
+        sourceControls: ExternalDanmakuControls(
+          session: session,
+          showMatching: false,
+          showOffset: false,
+          onChanged: () {},
+        ),
+        onStyleChanged: (value) {
+          if (store.profileEpoch != epoch) return;
+          unawaited(
+            saveUserChange(
+              context,
+              () => store.setPlaybackPreferences(
+                store.playbackPreferences.copyWith(danmakuStyle: value),
+              ),
+            ),
+          );
+        },
+      );
+    } finally {
+      session.dispose();
+    }
+  }
 
   Future<void> _chooseEngine(BuildContext context) async {
     final selected = await showModalBottomSheet<PlaybackEngine>(
@@ -159,6 +197,35 @@ class PlaybackSettingsPage extends StatelessWidget {
       listenable: store,
       builder: (context, _) {
         final prefs = store.playbackPreferences;
+        final danmaku = store.externalDanmakuSettings;
+        final api = danmaku.endpoints
+            .where((source) => source.baseUrl == danmaku.baseUrl)
+            .firstOrNull;
+        final danmakuSourceSummary = [
+          switch (danmaku.mode) {
+            'native' => '仅原站',
+            'external' => '通用 API',
+            _ => '自动选择',
+          },
+          api?.name ?? '未配置通用 API',
+          if (danmaku.endpoints.isNotEmpty) '${danmaku.endpoints.length} 个 API',
+        ].join(' · ');
+        final style = prefs.danmakuStyle;
+        final danmakuDisplaySummary = [
+          '字号 ${style.fontSizeScale.toStringAsFixed(2)}x',
+          '不透明度 ${(style.opacity * 100).round()}%',
+          '区域 ${(style.displayArea * 100).round()}%',
+          switch (style.density) {
+            DanmakuDensity.low => '低密度',
+            DanmakuDensity.medium => '中密度',
+            DanmakuDensity.high => '高密度',
+          },
+        ].join(' · ');
+        final danmakuFilterSummary = [
+          '${style.keywords.length} 个屏蔽词',
+          if (style.blockColored) '屏蔽彩色弹幕',
+          '时间偏移在播放时调整',
+        ].join(' · ');
         final qualityLabel = switch (prefs.quality) {
           1080 => '1080P 超清',
           720 => '720P 高清',
@@ -188,26 +255,6 @@ class PlaybackSettingsPage extends StatelessWidget {
                 ),
                 child: Column(
                   children: [
-                    ListTile(
-                      key: const ValueKey('settings-external-danmaku'),
-                      leading: const Icon(Icons.subtitles_outlined),
-                      title: const Text('通用弹幕 API'),
-                      subtitle: Text(
-                        store.externalDanmakuSettings.configured
-                            ? '已配置自定义弹幕服务'
-                            : '为电影、电视剧、动漫等匹配弹幕',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () async {
-                        final session = ExternalDanmakuSession(store);
-                        try {
-                          await editDanmakuApi(context, session);
-                        } finally {
-                          session.dispose();
-                        }
-                      },
-                    ),
-                    const Divider(height: 1, indent: 56),
                     ListTile(
                       key: const ValueKey('settings-engine-entry'),
                       leading: const Icon(Icons.memory_rounded),
@@ -272,7 +319,7 @@ class PlaybackSettingsPage extends StatelessWidget {
 
               const SizedBox(height: 20),
               Text(
-                '弹幕呈现偏好',
+                '弹幕设置',
                 style: theme.textTheme.labelLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: AppColors.hongguoRed,
@@ -289,6 +336,7 @@ class PlaybackSettingsPage extends StatelessWidget {
                 child: Column(
                   children: [
                     SwitchListTile.adaptive(
+                      key: const ValueKey('settings-danmaku-enabled'),
                       secondary: const Icon(Icons.comment_bank_outlined),
                       title: const Text('弹幕总开关'),
                       subtitle: Text(prefs.danmaku ? '已开启弹幕渲染' : '默认静默不显示弹幕'),
@@ -304,165 +352,35 @@ class PlaybackSettingsPage extends StatelessWidget {
                       },
                     ),
                     const Divider(height: 1, indent: 56),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.format_size_rounded,
-                                size: 22,
-                                color: isDark
-                                    ? AppColors.whiteWithAlpha(0.7)
-                                    : AppColors.greyDark,
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                '弹幕字号',
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                switch (prefs.danmakuStyle.fontSizeScale) {
-                                  < 0.9 => '小号 (0.8x)',
-                                  > 1.3 => '特大 (1.5x)',
-                                  > 1.1 => '大号 (1.25x)',
-                                  _ => '标准 (1.0x)',
-                                },
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.hongguoRed,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              for (final (scale, label) in [
-                                (0.8, '小'),
-                                (1.0, '标准'),
-                                (1.25, '大'),
-                                (1.5, '特大'),
-                              ])
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 3,
-                                    ),
-                                    child: _horizontalOptionPill(
-                                      key: ValueKey(
-                                        'settings-danmaku-size-$scale',
-                                      ),
-                                      label: label,
-                                      selected:
-                                          (prefs.danmakuStyle.fontSizeScale -
-                                                  scale)
-                                              .abs() <
-                                          0.05,
-                                      isDark: isDark,
-                                      onTap: () async {
-                                        final updated = prefs.copyWith(
-                                          danmakuStyle: prefs.danmakuStyle
-                                              .copyWith(fontSizeScale: scale),
-                                        );
-                                        await saveUserChange(
-                                          context,
-                                          () => store.setPlaybackPreferences(
-                                            updated,
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
+                    ListTile(
+                      key: const ValueKey('settings-external-danmaku'),
+                      leading: const Icon(Icons.subtitles_outlined),
+                      title: const Text('弹幕来源与 API'),
+                      subtitle: Text(danmakuSourceSummary),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () =>
+                          _danmakuSettings(context, DanmakuSettingsTab.sources),
                     ),
-                    const Divider(height: 1, indent: 16, endIndent: 16),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.opacity_rounded,
-                                size: 22,
-                                color: isDark
-                                    ? AppColors.whiteWithAlpha(0.7)
-                                    : AppColors.greyDark,
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                '弹幕不透明度',
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                '${(prefs.danmakuStyle.opacity * 100).toInt()}%',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.hongguoRed,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              for (final (op, label) in [
-                                (0.4, '40%'),
-                                (0.6, '60%'),
-                                (0.8, '80%'),
-                                (1.0, '100%'),
-                              ])
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 3,
-                                    ),
-                                    child: _horizontalOptionPill(
-                                      key: ValueKey(
-                                        'settings-danmaku-opacity-$op',
-                                      ),
-                                      label: label,
-                                      selected:
-                                          (prefs.danmakuStyle.opacity - op)
-                                              .abs() <
-                                          0.05,
-                                      isDark: isDark,
-                                      onTap: () async {
-                                        final updated = prefs.copyWith(
-                                          danmakuStyle: prefs.danmakuStyle
-                                              .copyWith(opacity: op),
-                                        );
-                                        await saveUserChange(
-                                          context,
-                                          () => store.setPlaybackPreferences(
-                                            updated,
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ],
+                    const Divider(height: 1, indent: 56),
+                    ListTile(
+                      key: const ValueKey('settings-danmaku-display'),
+                      leading: const Icon(Icons.tune_rounded),
+                      title: const Text('弹幕显示设置'),
+                      subtitle: Text(danmakuDisplaySummary),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () =>
+                          _danmakuSettings(context, DanmakuSettingsTab.display),
+                    ),
+                    const Divider(height: 1, indent: 56),
+                    ListTile(
+                      key: const ValueKey('settings-danmaku-advanced'),
+                      leading: const Icon(Icons.filter_alt_outlined),
+                      title: const Text('高级与过滤'),
+                      subtitle: Text(danmakuFilterSummary),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => _danmakuSettings(
+                        context,
+                        DanmakuSettingsTab.advanced,
                       ),
                     ),
                   ],
@@ -472,59 +390,6 @@ class PlaybackSettingsPage extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-
-  Widget _horizontalOptionPill({
-    required Key key,
-    required String label,
-    required bool selected,
-    required bool isDark,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      key: key,
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.hongguoRed
-              : (isDark ? AppColors.darkSurface : AppColors.white),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected
-                ? AppColors.hongguoRed
-                : (isDark ? const Color(0x26FFFFFF) : const Color(0x1F000000)),
-            width: 1,
-          ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: AppColors.hongguoRed.withValues(alpha: 0.35),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: selected ? FontWeight.bold : FontWeight.w500,
-            color: selected
-                ? AppColors.white
-                : (isDark
-                      ? AppColors.whiteWithAlpha(0.85)
-                      : AppColors.blackWithAlpha(0.85)),
-          ),
-        ),
-      ),
     );
   }
 }

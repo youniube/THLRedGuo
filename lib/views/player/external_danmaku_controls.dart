@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'package:THLRedLook/core/danmaku/danmaku_controller.dart';
 import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
 import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
+import 'package:THLRedLook/utils/theme/app_colors.dart';
 
 Future<bool> editDanmakuApi(
   BuildContext context,
@@ -18,11 +20,239 @@ class ExternalDanmakuControls extends StatelessWidget {
     super.key,
     required this.session,
     required this.onChanged,
+    this.controller,
     this.showOffset = true,
+    this.showMatching = true,
   });
   final ExternalDanmakuSession session;
+  final DanmakuController? controller;
   final VoidCallback onChanged;
   final bool showOffset;
+  final bool showMatching;
+
+  Future<void> _manage(BuildContext context) async {
+    if (await editDanmakuApi(context, session)) onChanged();
+  }
+
+  Future<void> _search(BuildContext context) async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _DanmakuSearchDialog(session: session),
+    );
+    if (changed == true) onChanged();
+  }
+
+  Widget _matchingStatus(BuildContext context) {
+    final native = controller == null
+        ? session.settings.mode == 'native'
+        : !controller!.usesExternal;
+    final binding = session.binding;
+    final hasMatch = native
+        ? controller?.supported == true
+        : binding['episodeId'] is String;
+    final title = native
+        ? [
+            session.media?.title ?? '',
+            if (session.media?.episode != null) '第 ${session.media!.episode} 集',
+          ].where((value) => value.isNotEmpty).join(' · ')
+        : binding['title'] as String? ??
+              [
+                binding['animeTitle'],
+                binding['episodeTitle'],
+              ].whereType<String>().join(' · ');
+    final status =
+        controller?.status ??
+        (session.status.isNotEmpty
+            ? session.status
+            : !session.settings.configured && !native
+            ? '尚未配置弹幕 API，请先添加数据源'
+            : !session.settings.autoMatch && !hasMatch && !native
+            ? '自动匹配已关闭，可手动搜索作品和分集'
+            : '等待视频就绪');
+    final loading = controller?.loading == true;
+    return Column(
+      key: const ValueKey('danmaku-current-match'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              controller?.canRetry == true
+                  ? Icons.error_outline_rounded
+                  : hasMatch
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.manage_search_rounded,
+              size: 20,
+              color: AppColors.hongguoRed,
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                '当前匹配',
+                style: TextStyle(
+                  color: AppColors.textSecondaryDark,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.accentSubtle08,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                native ? '原站弹幕' : '通用 API',
+                style: const TextStyle(
+                  color: AppColors.hongguoRed,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (title.isNotEmpty && hasMatch) ...[
+          const SizedBox(height: 10),
+          Text(
+            title,
+            key: const ValueKey('danmaku-match-title'),
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+        ],
+        const SizedBox(height: 6),
+        Text(
+          status,
+          key: const ValueKey('danmaku-match-status'),
+          style: TextStyle(
+            color: controller?.canRetry == true
+                ? AppColors.error
+                : AppColors.textSecondaryDark,
+            fontSize: 13,
+            height: 1.5,
+          ),
+        ),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: const ValueKey('danmaku-manual-search'),
+              style: _actionStyle(primary: true),
+              onPressed: session.available && session.settings.mode != 'native'
+                  ? () => _search(context)
+                  : null,
+              icon: const Icon(Icons.search_rounded),
+              label: const Text('手动搜索'),
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('danmaku-rematch'),
+              style: _actionStyle(),
+              onPressed:
+                  !session.available ||
+                      loading ||
+                      session.settings.mode == 'native'
+                  ? null
+                  : () async {
+                      await session.reset();
+                      onChanged();
+                    },
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('重新匹配'),
+            ),
+            if (controller?.canRetry == true)
+              TextButton(
+                key: const ValueKey('danmaku-retry-load'),
+                onPressed: controller!.retry,
+                child: const Text('重试加载'),
+              ),
+            if (showOffset)
+              TextButton(
+                onPressed: session.media == null
+                    ? null
+                    : () => _offset(context),
+                child: Text('时间偏移 ${session.offsetMs / 1000}s'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  ButtonStyle _actionStyle({bool primary = false}) => OutlinedButton.styleFrom(
+    foregroundColor: primary ? AppColors.hongguoRed : AppColors.textPrimaryDark,
+    backgroundColor: primary ? AppColors.accentSubtle12 : AppColors.darkCard,
+    side: BorderSide(
+      color: primary ? AppColors.accentBorder40 : AppColors.darkBorder,
+    ),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  );
+
+  Widget _apiSelector(BuildContext context) {
+    final selected = session.settings.endpoints
+        .where((source) => source.baseUrl == session.settings.baseUrl)
+        .firstOrNull;
+    return Material(
+      key: const ValueKey('danmaku-current-api'),
+      color: AppColors.darkCard,
+      borderRadius: BorderRadius.circular(14),
+      child: Tooltip(
+        message: '配置通用弹幕 API',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _manage(context),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.dns_outlined,
+                  size: 20,
+                  color: AppColors.textSecondaryDark,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        selected?.name ?? '添加弹幕 API',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        selected == null
+                            ? '填写服务地址，匹配其他播放源的弹幕'
+                            : '通用 API · ${Uri.parse(selected.baseUrl).host}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondaryDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.textSecondaryDark,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<void> _offset(BuildContext context) async {
     final mediaKey = session.media?.key;
@@ -79,103 +309,108 @@ class ExternalDanmakuControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: session,
+    animation: Listenable.merge([session, controller]),
     builder: (context, _) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            const Expanded(child: Text('弹幕来源')),
-            IconButton(
-              tooltip: '配置通用弹幕 API',
-              onPressed: () async {
-                if (await editDanmakuApi(context, session)) onChanged();
-              },
-              icon: const Icon(Icons.settings_outlined),
+            const Expanded(
+              child: Text(
+                '弹幕来源',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondaryDark,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              key: const ValueKey('danmaku-api-management'),
+              onPressed: () => _manage(context),
+              icon: const Icon(Icons.tune_rounded, size: 16),
+              label: Text('API 管理 · ${session.settings.endpoints.length}'),
             ),
           ],
         ),
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          key: ValueKey('danmaku-mode-${session.settings.mode}'),
-          initialValue: session.settings.mode,
-          decoration: const InputDecoration(
-            isDense: true,
-            border: OutlineInputBorder(),
-          ),
-          items: const [
-            DropdownMenuItem(
-              value: 'automatic',
-              child: Text(
-                '自动：优先原站，否则通用 API',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+        const SizedBox(height: 4),
+        Row(
+          spacing: 8,
+          children: [
+            for (final entry in const {
+              'automatic': '自动选择',
+              'native': '仅原站',
+              'external': '通用 API',
+            }.entries)
+              Expanded(
+                child: OutlinedButton(
+                  key: ValueKey('danmaku-mode-${entry.key}'),
+                  style:
+                      _actionStyle(
+                        primary: session.settings.mode == entry.key,
+                      ).copyWith(
+                        padding: const WidgetStatePropertyAll(
+                          EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                  onPressed: () async {
+                    if (entry.key == session.settings.mode) return;
+                    await session.configure(
+                      session.settings.copyWith(mode: entry.key),
+                    );
+                    onChanged();
+                  },
+                  child: Text(
+                    entry.value,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
               ),
-            ),
-            DropdownMenuItem(value: 'native', child: Text('仅使用原站弹幕')),
-            DropdownMenuItem(value: 'external', child: Text('使用通用弹幕 API')),
           ],
-          onChanged: (mode) async {
-            if (mode == null) return;
-            await session.configure(session.settings.copyWith(mode: mode));
-            onChanged();
-          },
         ),
         const SizedBox(height: 8),
         Text(
-          session.status.isNotEmpty
-              ? session.status
-              : session.available
-              ? '通用 API 已配置，按作品和分集匹配'
-              : '通用 API 尚未配置',
-          style: Theme.of(context).textTheme.bodySmall,
+          switch (session.settings.mode) {
+            'native' => '使用当前播放源提供的弹幕',
+            'external' => '通过下方 API 匹配作品和分集',
+            _ => '优先使用原站弹幕，也可手动匹配通用 API',
+          },
+          style: const TextStyle(
+            fontSize: 12,
+            color: AppColors.textSecondaryDark,
+          ),
         ),
+        const SizedBox(height: 16),
+        _apiSelector(context),
+        const SizedBox(height: 12),
         SwitchListTile.adaptive(
           key: const ValueKey('danmaku-auto-match'),
           contentPadding: EdgeInsets.zero,
           title: const Text('自动匹配'),
-          subtitle: const Text('关闭后仅使用已保存或手动选择的匹配'),
+          subtitle: Text(
+            session.settings.mode == 'native'
+                ? '仅原站模式无需匹配外部弹幕'
+                : '按作品与分集查找，多个候选时手动选择',
+          ),
           value: session.settings.autoMatch,
-          onChanged: (value) async {
-            await session.configure(
-              session.settings.copyWith(autoMatch: value),
-            );
-            onChanged();
-          },
+          onChanged: session.settings.mode == 'native'
+              ? null
+              : (value) async {
+                  await session.configure(
+                    session.settings.copyWith(autoMatch: value),
+                  );
+                  onChanged();
+                },
         ),
-        Wrap(
-          spacing: 8,
-          children: [
-            TextButton(
-              onPressed: !session.available
-                  ? null
-                  : () async {
-                      final changed = await showDialog<bool>(
-                        context: context,
-                        builder: (_) => _DanmakuSearchDialog(session: session),
-                      );
-                      if (changed == true) onChanged();
-                    },
-              child: const Text('手动搜索 / 选择弹幕'),
-            ),
-            TextButton(
-              onPressed: session.media == null
-                  ? null
-                  : () async {
-                      await session.reset();
-                      onChanged();
-                    },
-              child: const Text('重新匹配'),
-            ),
-            if (showOffset)
-              TextButton(
-                onPressed: session.media == null
-                    ? null
-                    : () => _offset(context),
-                child: Text('时间偏移 ${session.offsetMs / 1000}s'),
-              ),
-          ],
-        ),
+        if (showMatching) ...[
+          const Divider(height: 28),
+          _matchingStatus(context),
+        ] else ...[
+          const SizedBox(height: 12),
+          const Text(
+            '播放时可查看匹配结果、手动选择作品和分集。',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondaryDark),
+          ),
+        ],
       ],
     ),
   );

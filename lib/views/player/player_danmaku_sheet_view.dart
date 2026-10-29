@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
+import 'package:THLRedLook/utils/theme/app_theme.dart';
 import 'package:THLRedLook/views/danmaku/danmaku_overlay.dart';
 
 enum DanmakuSettingsTab { sources, display, advanced }
@@ -25,6 +26,7 @@ class PlayerDanmakuSheetView extends StatefulWidget {
     required ValueChanged<DanmakuStyle> onStyleChanged,
     Widget? sourceControls,
     Widget? timingControls,
+    DanmakuSettingsTab initialTab = DanmakuSettingsTab.display,
   }) => showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
@@ -35,14 +37,33 @@ class PlayerDanmakuSheetView extends StatefulWidget {
       onStyleChanged: onStyleChanged,
       sourceControls: sourceControls,
       timingControls: timingControls,
+      initialTab: initialTab,
     ),
   );
   @override
   State<PlayerDanmakuSheetView> createState() => _PlayerDanmakuSheetViewState();
 }
 
-class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
+class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView>
+    with SingleTickerProviderStateMixin {
   late DanmakuStyle _style = widget.style;
+  late final _tabs = TabController(
+    length: 3,
+    vsync: this,
+    initialIndex: widget.initialTab.index,
+  )..addListener(_changeTab);
+  late int _tab = widget.initialTab.index;
+
+  void _changeTab() {
+    if (_tab != _tabs.index) setState(() => _tab = _tabs.index);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
   void _update(DanmakuStyle next) {
     setState(() => _style = next);
     widget.onStyleChanged(next);
@@ -52,12 +73,7 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     return Theme(
-      data: ThemeData.dark(useMaterial3: true).copyWith(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.hongguoRed,
-          brightness: Brightness.dark,
-        ),
-      ),
+      data: AppTheme.dark,
       child: Align(
         alignment: Alignment.bottomCenter,
         child: Container(
@@ -68,14 +84,14 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
           ),
           child: SafeArea(
             top: false,
-            child: SizedBox(
-              height: math.min(
-                760,
-                (size.height - MediaQuery.paddingOf(context).vertical) * .92,
-              ),
-              child: DefaultTabController(
-                length: 3,
-                initialIndex: widget.initialTab.index,
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                height: math.min(
+                  _tab == DanmakuSettingsTab.sources.index ? 620 : 760,
+                  (size.height - MediaQuery.paddingOf(context).vertical) * .92,
+                ),
                 child: FocusTraversalGroup(
                   child: Column(
                     children: [
@@ -116,8 +132,9 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
                           ],
                         ),
                       ),
-                      const TabBar(
-                        tabs: [
+                      TabBar(
+                        controller: _tabs,
+                        tabs: const [
                           Tab(text: '数据源'),
                           Tab(text: '显示'),
                           Tab(text: '高级'),
@@ -125,6 +142,7 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
                       ),
                       Expanded(
                         child: TabBarView(
+                          controller: _tabs,
                           children: [
                             _list([
                               widget.sourceControls ??

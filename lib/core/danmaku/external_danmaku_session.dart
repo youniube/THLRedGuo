@@ -13,6 +13,9 @@ class ExternalDanmakuSession extends ChangeNotifier {
   final ExternalDanmakuApi api;
   DanmakuMedia? media;
   String status = '';
+  int? _loadedCount;
+  int? get loadedCount => _loadedCount;
+  int _revision = 0;
   bool _disposed = false;
   final int _profileEpoch;
   bool get active => !_disposed && store.profileEpoch == _profileEpoch;
@@ -27,24 +30,31 @@ class ExternalDanmakuSession extends ChangeNotifier {
   void setMedia(DanmakuMedia value) {
     if (media?.key == value.key) return;
     media = value;
-    status = '';
+    _clearResult();
     _notify();
+  }
+
+  void _clearResult() {
+    _revision++;
+    status = '';
+    _loadedCount = null;
   }
 
   void _notify() {
     if (!_disposed) notifyListeners();
   }
 
-  bool _current(DanmakuMedia query, String base, int epoch) =>
+  bool _current(DanmakuMedia query, String base, int epoch, int revision) =>
       !_disposed &&
       store.profileEpoch == epoch &&
       media?.key == query.key &&
-      settings.baseUrl == base;
+      settings.baseUrl == base &&
+      _revision == revision;
 
   Future<void> configure(ExternalDanmakuSettings value) async {
     if (!active) throw StateError('当前用户已变更，请重新打开设置');
+    _clearResult();
     await store.setExternalDanmakuSettings(value);
-    status = '';
     _notify();
   }
 
@@ -60,6 +70,8 @@ class ExternalDanmakuSession extends ChangeNotifier {
     final selectedMedia = media, base = settings.baseUrl;
     final epoch = store.profileEpoch;
     if (selectedMedia == null || !active) return;
+    _clearResult();
+    final revision = _revision;
     final record = {
       'animeId': candidate.id,
       'animeTitle': candidate.title,
@@ -70,24 +82,26 @@ class ExternalDanmakuSession extends ChangeNotifier {
       'offsetMs': offsetMs,
     };
     await store.setDanmakuBinding('$base|${selectedMedia.key}', record);
-    if (_disposed || store.profileEpoch != epoch) return;
+    if (!_current(selectedMedia, base, epoch, revision)) return;
     await store.setDanmakuBinding('$base|series:${selectedMedia.seriesKey}', {
       'animeId': candidate.id,
       'title': candidate.title,
     });
-    status = '已手动匹配 ${record['title']}';
+    if (!_current(selectedMedia, base, epoch, revision)) return;
+    status = '已手动匹配，等待加载弹幕';
     _notify();
   }
 
   Future<void> reset() async {
     if (!active) return;
+    final key = _bindingKey, seriesKey = _seriesKey, offset = offsetMs;
+    _clearResult();
     api.clearMatchingCache();
     await store.setDanmakuBinding(
-      _bindingKey,
-      offsetMs == 0 ? null : {'offsetMs': offsetMs},
+      key,
+      offset == 0 ? null : {'offsetMs': offset},
     );
-    await store.setDanmakuBinding(_seriesKey, null);
-    status = '';
+    await store.setDanmakuBinding(seriesKey, null);
     _notify();
   }
 
@@ -100,7 +114,11 @@ class ExternalDanmakuSession extends ChangeNotifier {
     _notify();
   }
 
-  Future<Map<String, dynamic>?> _match(DanmakuMedia query, String base) async {
+  Future<Map<String, dynamic>?> _match(
+    DanmakuMedia query,
+    String base,
+    int revision,
+  ) async {
     final epoch = store.profileEpoch;
     final key = '$base|${query.key}', saved = store.danmakuBinding(key);
     if (saved['episodeId'] is String) {
@@ -109,6 +127,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
         saved['animeId'] as String,
         expectedTitle: saved['animeTitle'] as String,
       );
+      if (!_current(query, base, epoch, revision)) return null;
       if (!rows.any(
         (row) =>
             row.id == saved['episodeId'] && row.title == saved['episodeTitle'],
@@ -133,7 +152,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
         base,
         query.title,
       )).where((candidate) => candidate.matches(query)).toList();
-      if (!_current(query, base, epoch)) return null;
+      if (!_current(query, base, epoch, revision)) return null;
       if (candidates.length != 1) {
         status = candidates.isEmpty ? '没有确认到对应作品，请手动搜索弹幕' : '有多个同名版本，请手动选择弹幕';
         return null;
@@ -145,7 +164,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
       candidate.id,
       expectedTitle: candidate.title,
     );
-    if (!_current(query, base, epoch)) return null;
+    if (!_current(query, base, epoch, revision)) return null;
     final matching = episodes
         .where(
           (episode) =>
@@ -169,7 +188,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
       'title': '${candidate.title} · ${matching.single.title}',
       'manual': false,
     };
-    if (_current(query, base, epoch)) {
+    if (_current(query, base, epoch, revision)) {
       await store.setDanmakuBinding(key, result);
     }
     return result;
@@ -179,10 +198,11 @@ class ExternalDanmakuSession extends ChangeNotifier {
     final epoch = store.profileEpoch;
     final query = media!;
     final base = settings.baseUrl;
+    final revision = _revision;
     final requestIdentity = 'external:${query.key}';
     final next = (startMs + danmakuWindowMs).clamp(0, durationMs);
-    final selected = await _match(query, base);
-    if (selected == null) {
+    final selected = await _match(query, base, revision);
+    if (selected == null || !_current(query, base, epoch, revision)) {
       _notify();
       return DanmakuPage(
         episodeId: requestIdentity,
@@ -196,7 +216,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
       selected['episodeId'] as String,
       identity: '${selected['animeTitle']}|${selected['episodeTitle']}',
     );
-    if (!_current(query, base, epoch)) {
+    if (!_current(query, base, epoch, revision)) {
       return DanmakuPage(
         episodeId: requestIdentity,
         startMs: startMs,
@@ -209,6 +229,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
         (track.durationMs - durationMs).abs() >
             (durationMs * .15).clamp(15000, 300000)) {
       status = '弹幕版本与视频时长不符，请手动确认';
+      _loadedCount = null;
       _notify();
       return DanmakuPage(
         episodeId: requestIdentity,
@@ -227,7 +248,8 @@ class ExternalDanmakuSession extends ChangeNotifier {
     final items = rows.length <= 90
         ? rows
         : [for (var i = 0; i < 90; i++) rows[(i * rows.length / 90).floor()]];
-    status = track.items.isEmpty ? '已匹配，本集暂无弹幕' : '已匹配 ${selected['title']}';
+    _loadedCount = track.items.length;
+    status = track.items.isEmpty ? '已匹配，本集暂无弹幕' : '已载入 $loadedCount 条弹幕';
     _notify();
     return DanmakuPage(
       episodeId: requestIdentity,

@@ -24,9 +24,11 @@ void main() {
     final font = File(r'C:\Windows\Fonts\msyh.ttc');
     if (font.existsSync()) {
       final bytes = await font.readAsBytes();
-      final loader = FontLoader('Roboto')
-        ..addFont(Future.value(ByteData.sublistView(bytes)));
-      await loader.load();
+      for (final family in ['Roboto', 'Hiragino Sans GB']) {
+        final loader = FontLoader(family)
+          ..addFont(Future.value(ByteData.sublistView(bytes)));
+        await loader.load();
+      }
     }
   });
   test(
@@ -429,7 +431,12 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
-              body: ExternalDanmakuControls(session: session, onChanged: () {}),
+              body: SingleChildScrollView(
+                child: ExternalDanmakuControls(
+                  session: session,
+                  onChanged: () {},
+                ),
+              ),
             ),
           ),
         );
