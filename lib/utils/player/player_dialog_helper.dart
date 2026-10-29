@@ -97,6 +97,7 @@ class PlayerDialogHelper {
     required Listenable menuRevision,
     required Future<void> Function(PlaybackPreferences) onPreferences,
     required String Function() currentEngine,
+    bool showFavorite = true,
     VoidCallback? onDanmakuSettings,
   }) async {
     final menuTheme = fullscreen ? AppTheme.dark : Theme.of(context);
@@ -116,6 +117,7 @@ class PlayerDialogHelper {
             local: plan?.offline == true,
             favorite: store.isFavorite(detail.drama.id),
             mobile: mobile,
+            showFavorite: showFavorite,
             onEpisode: (index) => Navigator.pop(menuContext, index),
             onPreferences: onPreferences,
             currentEngine: currentEngine(),

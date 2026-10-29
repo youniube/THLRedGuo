@@ -28,6 +28,7 @@ class PlayerMenu extends StatefulWidget {
     required this.onEpisode,
     required this.onPreferences,
     required this.onFavorite,
+    this.showFavorite = true,
     this.showDanmaku = false,
     this.danmakuStatus = '',
     this.onDanmakuSettings,
@@ -47,6 +48,7 @@ class PlayerMenu extends StatefulWidget {
   final bool local;
   final bool favorite;
   final bool mobile;
+  final bool showFavorite;
   final bool showDanmaku;
   final String danmakuStatus;
   final VoidCallback? onDanmakuSettings;
@@ -376,17 +378,19 @@ class _PlayerMenuState extends State<PlayerMenu> {
                     _run(() => widget.onPreferences(_preferences));
                   },
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('player-favorite'),
-            onPressed: _busy ? null : () => _run(widget.onFavorite),
-            icon: Icon(
-              widget.favorite
-                  ? Icons.bookmark_rounded
-                  : Icons.bookmark_border_rounded,
+          if (widget.showFavorite) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const ValueKey('player-favorite'),
+              onPressed: _busy ? null : () => _run(widget.onFavorite),
+              icon: Icon(
+                widget.favorite
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+              ),
+              label: Text(widget.favorite ? '取消追剧' : '加入追剧'),
             ),
-            label: Text(widget.favorite ? '取消追剧' : '加入追剧'),
-          ),
+          ],
           const SizedBox(height: 12),
           OutlinedButton.icon(
             key: const ValueKey('player-diary-btn'),

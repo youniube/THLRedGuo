@@ -2272,6 +2272,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           enhancementForUi: _enhancementForUi,
           fullscreen: _showFullscreen,
           mobile: _mobile,
+          showFavorite: !widget.feed,
           menuRevision: _menuRevision,
           onPreferences: _setPreferences,
           currentEngine: () => _currentEngineLabel,
