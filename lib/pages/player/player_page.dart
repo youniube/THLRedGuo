@@ -2776,6 +2776,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           position: _feedPosition,
           duration: _feedDuration,
           fullscreen: _showFullscreen,
+          panelOpen: _panelOpen,
           onOpenFull: widget.onOpenFull,
           onFullscreen: _television ? null : () => unawaited(_rotate()),
           onTogglePlayback: _togglePlayback,

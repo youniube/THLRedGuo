@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/widget_previews.dart';
 
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 
-class FeedPlayerOverlay extends StatelessWidget {
+class FeedPlayerOverlay extends StatefulWidget {
   const FeedPlayerOverlay({
     super.key,
     required this.title,
@@ -23,6 +25,7 @@ class FeedPlayerOverlay extends StatelessWidget {
     required this.onDanmaku,
     required this.onSettings,
     this.fullscreen = false,
+    this.panelOpen = false,
     this.onFullscreen,
   });
 
@@ -43,7 +46,62 @@ class FeedPlayerOverlay extends StatelessWidget {
   final VoidCallback onDanmaku;
   final VoidCallback onSettings;
   final bool fullscreen;
+  final bool panelOpen;
   final VoidCallback? onFullscreen;
+
+  @override
+  State<FeedPlayerOverlay> createState() => _FeedPlayerOverlayState();
+}
+
+class _FeedPlayerOverlayState extends State<FeedPlayerOverlay> {
+  Timer? _hideTimer;
+  bool _visible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleHide();
+  }
+
+  @override
+  void didUpdateWidget(covariant FeedPlayerOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.playing != oldWidget.playing ||
+        widget.enabled != oldWidget.enabled ||
+        widget.fullscreen != oldWidget.fullscreen ||
+        widget.panelOpen != oldWidget.panelOpen) {
+      _visible = true;
+      _scheduleHide();
+    }
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    if (!_visible || !widget.enabled || !widget.playing || widget.panelOpen) {
+      return;
+    }
+    _hideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && widget.enabled && widget.playing && !widget.panelOpen) {
+        setState(() => _visible = false);
+      }
+    });
+  }
+
+  void _show() {
+    if (!_visible) setState(() => _visible = true);
+    _scheduleHide();
+  }
+
+  void _tapSurface() {
+    if (_visible) widget.onTogglePlayback();
+    _show();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
 
   Widget _action(
     String id,
@@ -53,7 +111,12 @@ class FeedPlayerOverlay extends StatelessWidget {
   ) => IconButton(
     key: ValueKey('feed-$id'),
     tooltip: label,
-    onPressed: action,
+    onPressed: action == null
+        ? null
+        : () {
+            _show();
+            action();
+          },
     style: IconButton.styleFrom(
       foregroundColor: Colors.white,
       backgroundColor: const Color(0x55000000),
@@ -66,162 +129,222 @@ class FeedPlayerOverlay extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxHeight < 480;
+      final controlsPadding = EdgeInsets.fromLTRB(16, compact ? 8 : 40, 16, 12);
+      final maxActionsHeight =
+          (constraints.maxHeight -
+                  controlsPadding.vertical -
+                  (widget.onFullscreen != null ? 56 : 0))
+              .clamp(0.0, double.infinity)
+              .toDouble();
       final actions = [
         _action(
           'favorite',
-          following ? Icons.bookmark : Icons.bookmark_border,
-          following ? '已追剧' : '加入追剧',
-          onFavorite,
+          widget.following ? Icons.bookmark : Icons.bookmark_border,
+          widget.following ? '已追剧' : '加入追剧',
+          widget.onFavorite,
         ),
-        _action('episodes', Icons.video_library_outlined, '选集', onEpisodes),
+        _action(
+          'episodes',
+          Icons.video_library_outlined,
+          '选集',
+          widget.onEpisodes,
+        ),
         _action(
           'danmaku',
-          danmakuEnabled ? Icons.subtitles : Icons.subtitles_off,
-          danmakuEnabled ? '关闭弹幕' : '开启弹幕',
-          onDanmaku,
+          widget.danmakuEnabled ? Icons.subtitles : Icons.subtitles_off,
+          widget.danmakuEnabled ? '关闭弹幕' : '开启弹幕',
+          widget.onDanmaku,
         ),
-        _action('open-full', Icons.info_outline, '看正片', onOpenFull),
-        _action('settings', Icons.tune, '播放设置', onSettings),
+        _action('open-full', Icons.info_outline, '看正片', widget.onOpenFull),
+        _action('settings', Icons.tune, '播放设置', widget.onSettings),
       ];
-      final progress = duration.inMilliseconds > 0
-          ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
+      final progress = widget.duration.inMilliseconds > 0
+          ? (widget.position.inMilliseconds / widget.duration.inMilliseconds)
+                .clamp(0.0, 1.0)
           : 0.0;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          GestureDetector(
-            key: const ValueKey('feed-play-surface'),
-            behavior: HitTestBehavior.opaque,
-            onTap: enabled ? onTogglePlayback : null,
-            child: Center(
-              child: !playing && enabled
-                  ? const Icon(
-                      Icons.play_arrow_rounded,
-                      size: 76,
-                      color: Colors.white70,
-                    )
-                  : const SizedBox.shrink(),
+      return Listener(
+        onPointerDown: (_) => _hideTimer?.cancel(),
+        onPointerUp: (_) => _scheduleHide(),
+        onPointerCancel: (_) => _scheduleHide(),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            GestureDetector(
+              key: const ValueKey('feed-play-surface'),
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.enabled ? _tapSurface : null,
+              child: Center(
+                child: !widget.playing && widget.enabled
+                    ? const Icon(
+                        Icons.play_arrow_rounded,
+                        size: 76,
+                        color: Colors.white70,
+                      )
+                    : const SizedBox.shrink(),
+              ),
             ),
-          ),
-          // 底部暗色渐变（仅作视觉层次，不拦截任何触控事件）
-          const Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 260,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xD9000000)],
+            Positioned.fill(
+              child: AnimatedOpacity(
+                key: const ValueKey('feed-controls'),
+                opacity: _visible ? 1 : 0,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                child: IgnorePointer(
+                  ignoring: !_visible,
+                  child: ExcludeFocus(
+                    excluding: !_visible,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // 底部暗色渐变（仅作视觉层次，不拦截任何触控事件）
+                        const Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          height: 260,
+                          child: IgnorePointer(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Color(0xD9000000),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Align(
+                          alignment: Alignment.bottomCenter,
+                          child: Padding(
+                            padding: controlsPadding,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (widget.onFullscreen != null) ...[
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: _action(
+                                      'fullscreen',
+                                      widget.fullscreen
+                                          ? Icons.fullscreen_exit
+                                          : Icons.fullscreen,
+                                      widget.fullscreen ? '退出全屏' : '横屏全屏',
+                                      widget.onFullscreen,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                ],
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            widget.title,
+                                            key: const ValueKey('feed-title'),
+                                            maxLines: compact ? 1 : 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          TextButton.icon(
+                                            key: const ValueKey(
+                                              'feed-current-episode',
+                                            ),
+                                            onPressed: () {
+                                              _show();
+                                              widget.onEpisodes();
+                                            },
+                                            style: TextButton.styleFrom(
+                                              foregroundColor: Colors.white,
+                                              padding: EdgeInsets.zero,
+                                              alignment: Alignment.centerLeft,
+                                            ),
+                                            icon: const Icon(
+                                              Icons.play_circle_outline,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              widget.episodeText,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (!compact &&
+                                              widget.description.isNotEmpty)
+                                            Text(
+                                              widget.description,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 13,
+                                                height: 1.45,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxHeight: maxActionsHeight,
+                                      ),
+                                      child: SingleChildScrollView(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            for (final action in actions)
+                                              Padding(
+                                                padding: EdgeInsets.only(
+                                                  bottom: compact ? 0 : 12,
+                                                ),
+                                                child: action,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: _FeedProgress(
+                            key: const ValueKey('feed-progress'),
+                            value: progress,
+                            onSeek:
+                                widget.enabled &&
+                                    widget.duration > Duration.zero
+                                ? widget.onSeek
+                                : null,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(16, compact ? 8 : 40, 16, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (onFullscreen != null) ...[
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: _action(
-                        'fullscreen',
-                        fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                        fullscreen ? '退出全屏' : '横屏全屏',
-                        onFullscreen,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              title,
-                              key: const ValueKey('feed-title'),
-                              maxLines: compact ? 1 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextButton.icon(
-                              key: const ValueKey('feed-current-episode'),
-                              onPressed: onEpisodes,
-                              style: TextButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                padding: EdgeInsets.zero,
-                                alignment: Alignment.centerLeft,
-                              ),
-                              icon: const Icon(
-                                Icons.play_circle_outline,
-                                size: 18,
-                              ),
-                              label: Text(
-                                episodeText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (!compact && description.isNotEmpty)
-                              Text(
-                                description,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                  height: 1.45,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (final action in actions)
-                            Padding(
-                              padding: EdgeInsets.only(
-                                bottom: compact ? 0 : 12,
-                              ),
-                              child: action,
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _FeedProgress(
-              key: const ValueKey('feed-progress'),
-              value: progress,
-              onSeek: enabled && duration > Duration.zero ? onSeek : null,
-            ),
-          ),
-        ],
+          ],
+        ),
       );
     },
   );
