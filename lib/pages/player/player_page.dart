@@ -2386,11 +2386,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _showDanmakuSettings() => PlayerDanmakuSheetView.show(
     context: context,
-    enabled: _danmakuEnabled,
     style: _preferences.danmakuStyle,
-    onEnabledChanged: (val) {
-      unawaited(_setPreferences(_preferences.copyWith(danmaku: val)));
-    },
     onStyleChanged: (newStyle) {
       unawaited(_setPreferences(_preferences.copyWith(danmakuStyle: newStyle)));
     },
