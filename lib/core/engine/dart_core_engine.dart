@@ -477,11 +477,14 @@ class DartCoreEngine {
 
       // 弹幕支持
       case 'danmaku':
+        final source = input['source'] as String? ?? 'hongguo';
         final episodeId = input['episodeId'] as String? ?? '';
-        if (!RegExp(r'^hongguo:\d{10,30}:\d{10,30}$').hasMatch(episodeId)) {
+        if (episodeId.isEmpty ||
+            source == 'hongguo' &&
+                !RegExp(r'^hongguo:\d{10,30}:\d{10,30}$').hasMatch(episodeId)) {
           throw StateError('本集暂不支持弹幕');
         }
-        final runtime = await _getSpiderRuntime('hongguo', scope: 'danmaku');
+        final runtime = await _getSpiderRuntime(source, scope: 'danmaku');
         if (runtime == null) throw StateError('弹幕数据源不可用');
         return runtime.danmaku(
           episodeId,

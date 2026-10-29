@@ -7,10 +7,14 @@ import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 
 class DanmakuController extends ChangeNotifier {
-  DanmakuController(this.repository, {DateTime Function()? now})
-    : _now = now ?? DateTime.now;
+  DanmakuController(
+    this.repository, {
+    required this.source,
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   final AppRepository repository;
+  final String source;
   final DateTime Function() _now;
   final _pages = <int, DanmakuPage>{};
   final _failures = <int, DateTime>{};
@@ -228,6 +232,7 @@ class DanmakuController extends ChangeNotifier {
     try {
       final page = await repository.danmaku(
         plan,
+        source: source,
         startMs: start,
         durationMs: duration,
       );

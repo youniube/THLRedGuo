@@ -119,7 +119,7 @@ class PlayerDialogHelper {
             onEpisode: (index) => Navigator.pop(menuContext, index),
             onPreferences: onPreferences,
             currentEngine: currentEngine(),
-            showDanmaku: detail.drama.source == 'hongguo',
+            showDanmaku: detail.drama.source == 'hongguo' || danmaku.supported,
             danmakuStatus: danmaku.status,
             onDanmakuSettings: onDanmakuSettings,
             onRetryDanmaku: danmaku.canRetry ? danmaku.retry : null,

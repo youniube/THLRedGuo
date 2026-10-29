@@ -159,6 +159,7 @@ class PlayerViewportView extends StatelessWidget {
     final title =
         '${detail.drama.title} · 第 ${detail.episodes[index].number} 集${plan?.offline == true ? ' · 本地' : ''}${isVipEp ? ' · VIP 试看' : ''}${(plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${plan!.routeIndex + 1}' : ''}';
     final hideOverlayForPictureInPicture = pictureInPictureVisible;
+    final showDanmaku = detail.drama.source == 'hongguo' || danmaku.supported;
     final Widget controls = hideOverlayForPictureInPicture
         ? Stack(
             fit: StackFit.expand,
@@ -319,19 +320,15 @@ class PlayerViewportView extends StatelessWidget {
             onSeek: onSeekTo,
             speed: speed,
             qualityLabel: qualityLabel,
-            showDanmaku: detail.drama.source == 'hongguo',
+            showDanmaku: showDanmaku,
             danmakuEnabled: danmakuEnabled,
             danmakuStatus: danmaku.status,
             onEpisodes: () => onOpenPanel(PlayerMenuSection.episodes),
             onSpeed: () => onOpenPanel(PlayerMenuSection.speed),
             onQuality: () => onOpenPanel(PlayerMenuSection.quality),
             onRoutes: onRoutes,
-            onDanmaku: detail.drama.source == 'hongguo'
-                ? onToggleDanmaku
-                : null,
-            onDanmakuSettings: detail.drama.source == 'hongguo'
-                ? onDanmakuSettings
-                : null,
+            onDanmaku: showDanmaku ? onToggleDanmaku : null,
+            onDanmakuSettings: showDanmaku ? onDanmakuSettings : null,
             onRetryDanmaku: danmaku.canRetry ? onRetryDanmaku : null,
             onPush: isMediaIdNull ? onPushToDevice : null,
             onPictureInPicture: canUsePictureInPicture

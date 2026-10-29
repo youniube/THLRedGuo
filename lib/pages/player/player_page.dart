@@ -203,6 +203,8 @@ class _PlayerScreenState extends State<PlayerScreen>
           defaultTargetPlatform == TargetPlatform.iOS);
   VideoEnhancementController? get _enhancementForUi =>
       _enhancement.supported ? _enhancement : null;
+  bool get _supportsDanmaku =>
+      widget.detail.drama.source == 'hongguo' || _danmaku.supported;
   PlaybackPreferences get _preferences => PlaybackPreferences(
     speed: _speed,
     quality: _requestedQuality,
@@ -272,8 +274,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     _preloadEnabled = preferences.preload;
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
-    _danmaku = DanmakuController(widget.repository)
-      ..setEnabled(_danmakuEnabled);
+    _danmaku = DanmakuController(
+      widget.repository,
+      source: widget.detail.drama.source,
+    )..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
     _playbackSurface = widget.playbackSurface ?? PlaybackSurface();
     _player = _playbackSurface.acquire(
@@ -1215,7 +1219,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _openedIndex == _index &&
           widget.store.profileEpoch == _profileEpoch &&
           !widget.store.locked &&
-          widget.store.allowsSource('hongguo'),
+          widget.store.allowsSource(widget.detail.drama.source),
       discontinuity: discontinuity,
     );
   }
@@ -2141,7 +2145,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _toggleDanmaku() async {
-    if (widget.detail.drama.source != 'hongguo') return;
+    if (!_supportsDanmaku) return;
     try {
       await _setPreferences(_preferences.copyWith(danmaku: !_danmakuEnabled));
     } catch (_) {
@@ -2458,7 +2462,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         onFavorite: _toggleFavorite,
         autoAdvance: _autoAdvance,
         danmaku: _danmakuEnabled,
-        showDanmaku: widget.detail.drama.source == 'hongguo',
+        showDanmaku: _supportsDanmaku,
         danmakuStatus: _danmaku.status,
         onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
         preload: _preloadEnabled,
@@ -2792,7 +2796,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
           ),
           onEpisodes: () => unawaited(_openPanel(PlayerMenuSection.episodes)),
-          onDanmaku: () => unawaited(_toggleDanmaku()),
+          onDanmaku: _supportsDanmaku
+              ? () => unawaited(_toggleDanmaku())
+              : null,
           onSettings: () => unawaited(_openPanel(PlayerMenuSection.settings)),
         ),
       ),

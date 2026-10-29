@@ -22,8 +22,8 @@ class FeedPlayerOverlay extends StatefulWidget {
     required this.onFavorite,
     required this.onEpisodes,
     required this.onOpenFull,
-    required this.onDanmaku,
     required this.onSettings,
+    this.onDanmaku,
     this.fullscreen = false,
     this.panelOpen = false,
     this.onFullscreen,
@@ -44,7 +44,7 @@ class FeedPlayerOverlay extends StatefulWidget {
   final VoidCallback onFavorite;
   final VoidCallback onEpisodes;
   final VoidCallback? onOpenFull;
-  final VoidCallback onDanmaku;
+  final VoidCallback? onDanmaku;
   final VoidCallback onSettings;
   final bool fullscreen;
   final bool panelOpen;
@@ -151,12 +151,13 @@ class _FeedPlayerOverlayState extends State<FeedPlayerOverlay> {
           '看正片',
           widget.onOpenFull,
         ),
-        _action(
-          'danmaku',
-          widget.danmakuEnabled ? Icons.subtitles : Icons.subtitles_off,
-          widget.danmakuEnabled ? '关闭弹幕' : '开启弹幕',
-          widget.onDanmaku,
-        ),
+        if (widget.onDanmaku != null)
+          _action(
+            'danmaku',
+            widget.danmakuEnabled ? Icons.subtitles : Icons.subtitles_off,
+            widget.danmakuEnabled ? '关闭弹幕' : '开启弹幕',
+            widget.onDanmaku,
+          ),
         _action('detail', Icons.info_outline, '剧集详情', widget.onDetail),
         _action('settings', Icons.tune, '播放设置', widget.onSettings),
       ];

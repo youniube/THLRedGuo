@@ -73,6 +73,7 @@ abstract class AppRepository {
   Future<void> cancelDanmaku() async {}
   Future<DanmakuPage> danmaku(
     PlaybackPlan plan, {
+    required String source,
     required int startMs,
     required int durationMs,
   }) async => throw AppFailure('当前环境不支持弹幕');
@@ -329,16 +330,18 @@ class NativeRepository extends AppRepository {
   @override
   Future<DanmakuPage> danmaku(
     PlaybackPlan plan, {
+    required String source,
     required int startMs,
     required int durationMs,
   }) async {
-    _authorize('hongguo');
+    _authorize(source);
     if (plan.offline || plan.session.isEmpty || plan.danmakuId.isEmpty) {
       throw AppFailure('本集暂不支持弹幕');
     }
     return DanmakuPage.fromJson(
       await _read('danmaku', {
         'action': 'danmaku',
+        'source': source,
         'playbackSession': plan.session,
         'episodeId': plan.danmakuId,
         'startMs': startMs,
@@ -629,8 +632,7 @@ class NativeRepository extends AppRepository {
       if (action == 'recommendations' ||
           action == 'cachedRecommendations' ||
           action == 'suggestions' ||
-          action == 'feed' ||
-          action == 'danmaku') {
+          action == 'feed') {
         final recSource = input['source'] as String? ?? 'hongguo';
         final target = SourceSite.isAvailable(recSource)
             ? recSource
@@ -647,6 +649,7 @@ class NativeRepository extends AppRepository {
         'sourceStatus',
         'sourceJob',
         'cancelSourceJob',
+        'danmaku',
       }.contains(action)) {
         _authorize(input['source'] as String);
       }
