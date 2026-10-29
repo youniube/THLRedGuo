@@ -2244,6 +2244,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           await _play(chosenIndex);
         }
       } else {
+        var danmakuSettingsRequested = false;
         final index = await PlayerDialogHelper.openMenuPanel(
           context: context,
           section: section,
@@ -2263,12 +2264,16 @@ class _PlayerScreenState extends State<PlayerScreen>
           onPreferences: _setPreferences,
           currentEngine: () => _currentEngineLabel,
           onDanmakuSettings: () {
+            danmakuSettingsRequested = true;
             Navigator.pop(context);
-            _openDanmakuSettings();
           },
         );
-        if (mounted && !_closed && index != null && index != _index) {
-          await _play(index);
+        if (mounted && !_closed) {
+          if (danmakuSettingsRequested) {
+            await _showDanmakuSettings();
+          } else if (index != null && index != _index) {
+            await _play(index);
+          }
         }
       }
     } finally {
@@ -2370,19 +2375,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _interactions.cancel();
     setState(() => _panelOpen = true);
     try {
-      await PlayerDanmakuSheetView.show(
-        context: context,
-        enabled: _danmakuEnabled,
-        style: _preferences.danmakuStyle,
-        onEnabledChanged: (val) {
-          unawaited(_setPreferences(_preferences.copyWith(danmaku: val)));
-        },
-        onStyleChanged: (newStyle) {
-          unawaited(
-            _setPreferences(_preferences.copyWith(danmakuStyle: newStyle)),
-          );
-        },
-      );
+      await _showDanmakuSettings();
     } finally {
       if (mounted && !_closed) {
         setState(() => _panelOpen = false);
@@ -2390,6 +2383,18 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     }
   }
+
+  Future<void> _showDanmakuSettings() => PlayerDanmakuSheetView.show(
+    context: context,
+    enabled: _danmakuEnabled,
+    style: _preferences.danmakuStyle,
+    onEnabledChanged: (val) {
+      unawaited(_setPreferences(_preferences.copyWith(danmaku: val)));
+    },
+    onStyleChanged: (newStyle) {
+      unawaited(_setPreferences(_preferences.copyWith(danmakuStyle: newStyle)));
+    },
+  );
 
   Future<void> _seekTo(Duration target) async {
     if (_closed || _loading || _error != null) return;
