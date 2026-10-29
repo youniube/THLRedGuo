@@ -589,6 +589,8 @@ public actor NativeBridge {
             "heat": vod["vod_heat"] as? String ?? "",
             "views": vod["vod_views"] as? String ?? "",
             "onlineDate": year,
+            "year": Int(year) ?? vod["vod_year"] as? Int ?? 0,
+            "mediaType": vod["vod_type"] as? String ?? "",
             "tags": isHongguo ? cleanTags : rawTags,
             "releaseStatus": vod["vod_release_status"] as? String ?? remark,
             "vip": isHongguo ? false : (vod["vip"] as? Bool ?? false)
@@ -1087,13 +1089,15 @@ public actor NativeBridge {
 
         case "danmaku":
             let id = payload["episodeId"] as? String ?? ""
-            guard id.hasPrefix("hongguo:"), let context = getOrCreateContext(sourceId: "hongguo") else {
+            let source = payload["source"] as? String ?? "hongguo"
+            guard !id.isEmpty, source != "hongguo" || id.range(of: "^hongguo:[0-9]{10,30}:[0-9]{10,30}$", options: .regularExpression) != nil,
+                  let context = getOrCreateContext(sourceId: source) else {
                 throw NSError(domain: "THLRedLook.Danmaku", code: -1, userInfo: [NSLocalizedDescriptionKey: "本集暂不支持弹幕"])
             }
             let expression = try spiderExpression("danmaku", [id, payload["startMs"] as? Int64 ?? 0, payload["durationMs"] as? Int64 ?? 0])
             guard let response = evalAsync(context: context, scriptExpr: expression), response["ok"] as? Bool == true,
                   let result = response["data"] as? [String: Any], result["items"] is [[String: Any]] else {
-                throw NSError(domain: "THLRedLook.Danmaku", code: -2, userInfo: [NSLocalizedDescriptionKey: "官方弹幕暂不可用"])
+                throw NSError(domain: "THLRedLook.Danmaku", code: -2, userInfo: [NSLocalizedDescriptionKey: "原站弹幕暂不可用"])
             }
             return result
 

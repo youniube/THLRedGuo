@@ -203,6 +203,8 @@ class Drama {
     this.onlineDate = '',
     this.tags = const [],
     this.releaseStatus = '',
+    this.year = 0,
+    this.mediaType = '',
   }) : vipStatus = vip;
   final String id;
   final String source;
@@ -223,6 +225,8 @@ class Drama {
   final String onlineDate;
   final List<String> tags;
   final String releaseStatus;
+  final int year;
+  final String mediaType;
   String get releaseLabel => switch (releaseStatus) {
     'finished' || 'completed' => '已完结',
     'ongoing' => '连载中',
@@ -277,6 +281,8 @@ class Drama {
       onlineDate: json['onlineDate'] as String? ?? '',
       tags: tags,
       releaseStatus: json['releaseStatus'] as String? ?? '',
+      year: int.tryParse(json['year']?.toString() ?? '') ?? 0,
+      mediaType: json['mediaType'] as String? ?? '',
     );
   }
   Map<String, dynamic> toJson() => {
@@ -296,6 +302,8 @@ class Drama {
     'onlineDate': onlineDate,
     'tags': tags,
     'releaseStatus': releaseStatus,
+    'year': year,
+    'mediaType': mediaType,
   };
 
   Drama merge(Drama fresh) {
@@ -335,6 +343,8 @@ class Drama {
           fresh.releaseStatus.isEmpty || fresh.releaseStatus == 'unknown'
           ? releaseStatus
           : fresh.releaseStatus,
+      year: fresh.year > 0 ? fresh.year : year,
+      mediaType: fresh.mediaType.isNotEmpty ? fresh.mediaType : mediaType,
     );
   }
 }

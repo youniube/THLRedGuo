@@ -342,6 +342,7 @@ public struct TVDanmakuSettingsDrawer: View {
     @Binding var isPresented: Bool
 
     @FocusState private var focusedButton: String?
+    @State private var showingLibrary = false
 
     public var body: some View {
         ZStack(alignment: .trailing) {
@@ -492,7 +493,7 @@ public struct TVDanmakuSettingsDrawer: View {
                             isSelected: viewModel.danmakuStyle.laneCount == 4,
                             id: "danmaku.area.half",
                             up: "danmaku.opacity.50",
-                            down: "danmaku.close",
+                            down: "danmaku.library",
                             right: "danmaku.area.full"
                         ) {
                             viewModel.setDanmakuLaneCount(4)
@@ -502,12 +503,16 @@ public struct TVDanmakuSettingsDrawer: View {
                             isSelected: viewModel.danmakuStyle.laneCount == 8,
                             id: "danmaku.area.full",
                             up: "danmaku.opacity.100",
-                            down: "danmaku.close",
+                            down: "danmaku.library",
                             left: "danmaku.area.half"
                         ) {
                             viewModel.setDanmakuLaneCount(8)
                         }
                     }
+                }
+
+                settingOptionButton(title: "弹幕来源与匹配", isSelected: false, id: "danmaku.library", up: "danmaku.area.half", down: "danmaku.close") {
+                    showingLibrary = true
                 }
 
                 Spacer()
@@ -531,7 +536,7 @@ public struct TVDanmakuSettingsDrawer: View {
                 .accessibilityIdentifier("danmaku.close")
                 .focusEffectDisabled()
                 .onMoveCommand { dir in
-                    if dir == .up { focusedButton = "danmaku.area.half" }
+                    if dir == .up { focusedButton = "danmaku.library" }
                 }
             }
             .padding(40)
@@ -544,6 +549,9 @@ public struct TVDanmakuSettingsDrawer: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
+        .sheet(isPresented: $showingLibrary) {
+            TVUniversalDanmakuControls(session: viewModel.universalDanmaku, onChanged: viewModel.reloadDanmaku)
+        }
         .onExitCommand {
             isPresented = false
         }

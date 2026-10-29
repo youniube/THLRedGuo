@@ -5,16 +5,24 @@ import 'package:flutter/foundation.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
+import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
 
 class DanmakuController extends ChangeNotifier {
   DanmakuController(
     this.repository, {
     required this.source,
+    this.external,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
   final AppRepository repository;
   final String source;
+  final ExternalDanmakuSession? external;
+  bool get usesExternal =>
+      external?.settings.mode == 'external' ||
+      external?.settings.mode != 'native' &&
+          ((_plan?.danmakuId.isEmpty ?? true) ||
+              external?.binding['manual'] == true);
   final DateTime Function() _now;
   final _pages = <int, DanmakuPage>{};
   final _failures = <int, DateTime>{};
@@ -43,7 +51,9 @@ class DanmakuController extends ChangeNotifier {
       _plan != null &&
       !_plan!.offline &&
       _plan!.session.isNotEmpty &&
-      _plan!.danmakuId.isNotEmpty;
+      (usesExternal
+          ? external?.available == true
+          : _plan!.danmakuId.isNotEmpty);
   bool get visible =>
       !_closed &&
       supported &&
@@ -59,10 +69,14 @@ class DanmakuController extends ChangeNotifier {
   String get status {
     if (!_enabled) return '弹幕已关闭';
     if (_plan?.offline == true) return '本地播放不加载弹幕';
+    if (usesExternal && external?.settings.configured == false) {
+      return '请设置通用弹幕 API';
+    }
     if (_plan != null && !supported) return '本集暂不支持弹幕';
     if (canRetry) return '弹幕暂不可用，可重试';
     if (loading && _pages.isEmpty) return '正在加载弹幕';
     if (_pages.isNotEmpty) {
+      if (usesExternal && external!.status.isNotEmpty) return external!.status;
       return items.isEmpty ? '这段暂无弹幕' : '已载入 ${items.length} 条弹幕';
     }
     return '等待播放';
@@ -176,6 +190,17 @@ class DanmakuController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reload() {
+    if (_closed) return;
+    _cancel();
+    _pages.clear();
+    _failures.clear();
+    _rebuildItems();
+    _resetMotion();
+    notifyListeners();
+    _ensureWindow();
+  }
+
   void _resetMotion() {
     motionRevision++;
     _anchorTime = _now();
@@ -227,17 +252,16 @@ class DanmakuController extends ChangeNotifier {
     final ticket = _generation;
     final plan = _plan!;
     final duration = durationMs;
+    final useExternal = usesExternal;
+    final identity = useExternal ? external!.identity : plan.danmakuId;
     _pendingStart = start;
     notifyListeners();
     try {
-      final page = await repository.danmaku(
-        plan,
-        source: source,
-        startMs: start,
-        durationMs: duration,
-      );
+      final page = useExternal
+          ? await external!.page(start, duration)
+          : await _nativePage(plan, start, duration);
       if (_closed || ticket != _generation) return;
-      if (page.episodeId != plan.danmakuId ||
+      if (page.episodeId != identity ||
           page.startMs != start ||
           page.nextMs <= start ||
           page.nextMs > duration ||
@@ -285,6 +309,45 @@ class DanmakuController extends ChangeNotifier {
       ..sort((a, b) => a.timeMs.compareTo(b.timeMs));
     items = List.unmodifiable(sorted);
     dataRevision++;
+  }
+
+  Future<DanmakuPage> _nativePage(
+    PlaybackPlan plan,
+    int start,
+    int duration,
+  ) async {
+    final offset = external?.offsetMs ?? 0;
+    final end = (start + danmakuWindowMs).clamp(0, duration);
+    if (end <= offset || start - offset >= duration) {
+      return DanmakuPage(
+        episodeId: plan.danmakuId,
+        startMs: start,
+        nextMs: end,
+        items: const [],
+      );
+    }
+    final raw = await repository.danmaku(
+      plan,
+      source: source,
+      startMs: (start - offset).clamp(0, duration - 1),
+      durationMs: duration,
+    );
+    if (raw.episodeId != plan.danmakuId) throw const FormatException('弹幕分集不符');
+    final next = (raw.nextMs + offset).clamp(start + 1, end);
+    return DanmakuPage(
+      episodeId: plan.danmakuId,
+      startMs: start,
+      nextMs: next,
+      items: [
+        for (final item in raw.items)
+          if (item.timeMs + offset >= start && item.timeMs + offset < next)
+            DanmakuItem(
+              id: item.id,
+              text: item.text,
+              timeMs: item.timeMs + offset,
+            ),
+      ],
+    );
   }
 
   @override

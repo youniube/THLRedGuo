@@ -17,6 +17,7 @@ import 'package:THLRedLook/models/lan/lan_sync_models.dart';
 import 'package:THLRedLook/utils/screen/screen_wake_controller.dart';
 import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/sync/icloud_sync_service.dart';
+import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
 
 part 'local_store_sync.dart';
 
@@ -780,6 +781,48 @@ class LocalStore extends ChangeNotifier {
   Future<void> setPlaybackPreferences(PlaybackPreferences value) {
     PlaybackPreferences.fromJson(value.toJson());
     return _setting(_key('playback'), jsonEncode(value.toJson()));
+  }
+
+  ExternalDanmakuSettings get externalDanmakuSettings {
+    final raw = _string(_key('externalDanmaku'));
+    if (raw == null || raw.isEmpty) return const ExternalDanmakuSettings();
+    return ExternalDanmakuSettings.fromJson(
+      Map<String, dynamic>.from(jsonDecode(raw) as Map),
+    );
+  }
+
+  Future<void> setExternalDanmakuSettings(ExternalDanmakuSettings value) =>
+      _setting(
+        _key('externalDanmaku'),
+        jsonEncode(ExternalDanmakuSettings.fromJson(value.toJson()).toJson()),
+      );
+
+  Map<String, dynamic> danmakuBinding(String key) {
+    final raw = _string(_key('danmakuBindings'));
+    if (raw == null || raw.isEmpty) return {};
+    final rows = jsonDecode(raw) as Map;
+    return rows[key] is Map ? Map<String, dynamic>.from(rows[key] as Map) : {};
+  }
+
+  Future<void> setDanmakuBinding(String key, Map<String, dynamic>? binding) {
+    final epoch = _epoch, storageKey = _key('danmakuBindings');
+    return _queue(() async {
+      if (epoch != _epoch || locked) return;
+      final raw = _string(storageKey);
+      final rows = raw == null || raw.isEmpty
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      if (binding == null) {
+        rows.remove(key);
+      } else {
+        rows[key] = binding;
+      }
+      while (rows.length > 2000) {
+        rows.remove(rows.keys.first);
+      }
+      await _commit({storageKey: jsonEncode(rows)});
+      notifyListeners();
+    });
   }
 
   Future<void> setDownloadPreferences(DownloadPreferences value) {

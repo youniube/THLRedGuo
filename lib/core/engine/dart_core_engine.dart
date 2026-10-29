@@ -895,6 +895,8 @@ class DartCoreEngine {
       'id': fullId,
       'source': source,
       'sourceId': sourceVodIdentifier(source, rawId),
+      'year': int.tryParse(vod['vod_year']?.toString() ?? '') ?? 0,
+      'mediaType': vod['vod_type']?.toString() ?? '',
       'title': title,
       'cover': normalizeCoverUrl(vod['vod_pic']?.toString() ?? ''),
       'description': desc,
@@ -1120,6 +1122,10 @@ class DartCoreEngine {
 
     final chapters = <Map<String, dynamic>>[];
     if (spiderVod.isNotEmpty) {
+      final year = int.tryParse(spiderVod['vod_year']?.toString() ?? '') ?? 0;
+      if (year > 0) fullDrama['year'] = year;
+      final mediaType = spiderVod['vod_type']?.toString() ?? '';
+      if (mediaType.isNotEmpty) fullDrama['mediaType'] = mediaType;
       if ((spiderVod['vod_name']?.toString() ?? '').isNotEmpty) {
         fullDrama['title'] = spiderVod['vod_name'].toString();
       }

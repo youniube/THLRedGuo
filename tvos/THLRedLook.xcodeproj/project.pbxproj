@@ -28,6 +28,7 @@
 		ICLOUD002C00000100000001 /* ICloudSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ICLOUD001C00000100000001 /* ICloudSyncService.swift */; };
 		A10000112C00000100000001 /* NativeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000112C00000100000001 /* NativeBridge.swift */; };
 		A10000122C00000100000001 /* NativeRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000122C00000100000001 /* NativeRepository.swift */; };
+		A77000112C00000100000001 /* UniversalDanmaku.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77000112C00000100000001 /* UniversalDanmaku.swift */; };
 		A10000132C00000100000001 /* LanSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000132C00000100000001 /* LanSyncService.swift */; };
 		A10000142C00000100000001 /* DownloadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000142C00000100000001 /* DownloadService.swift */; };
 		A10000152C00000100000001 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000152C00000100000001 /* HomeViewModel.swift */; };
@@ -40,6 +41,7 @@
 		A10000222C00000100000001 /* FilterSortSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000222C00000100000001 /* FilterSortSheet.swift */; };
 		A10000232C00000100000001 /* CatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000232C00000100000001 /* CatalogView.swift */; };
 		A10000242C00000100000001 /* TVDanmakuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000242C00000100000001 /* TVDanmakuView.swift */; };
+		A77000122C00000100000001 /* TVUniversalDanmakuControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77000122C00000100000001 /* TVUniversalDanmakuControls.swift */; };
 		A10000252C00000100000001 /* TVPlayerControlsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000252C00000100000001 /* TVPlayerControlsOverlay.swift */; };
 		A10000262C00000100000001 /* TVPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000262C00000100000001 /* TVPlayerView.swift */; };
 		A10000272C00000100000001 /* DramaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000272C00000100000001 /* DramaDetailView.swift */; };
@@ -130,6 +132,7 @@
 		ICLOUD001C00000100000001 /* ICloudSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSyncService.swift; sourceTree = "<group>"; };
 		B10000112C00000100000001 /* NativeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBridge.swift; sourceTree = "<group>"; };
 		B10000122C00000100000001 /* NativeRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRepository.swift; sourceTree = "<group>"; };
+		B77000112C00000100000001 /* UniversalDanmaku.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniversalDanmaku.swift; sourceTree = "<group>"; };
 		B10000132C00000100000001 /* LanSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanSyncService.swift; sourceTree = "<group>"; };
 		B10000142C00000100000001 /* DownloadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadService.swift; sourceTree = "<group>"; };
 		B10000152C00000100000001 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
@@ -142,6 +145,7 @@
 		B10000222C00000100000001 /* FilterSortSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterSortSheet.swift; sourceTree = "<group>"; };
 		B10000232C00000100000001 /* CatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogView.swift; sourceTree = "<group>"; };
 		B10000242C00000100000001 /* TVDanmakuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDanmakuView.swift; sourceTree = "<group>"; };
+		B77000122C00000100000001 /* TVUniversalDanmakuControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVUniversalDanmakuControls.swift; sourceTree = "<group>"; };
 		B10000252C00000100000001 /* TVPlayerControlsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerControlsOverlay.swift; sourceTree = "<group>"; };
 		B10000262C00000100000001 /* TVPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerView.swift; sourceTree = "<group>"; };
 		B10000272C00000100000001 /* DramaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DramaDetailView.swift; sourceTree = "<group>"; };
@@ -343,6 +347,7 @@
 				ICLOUD001C00000100000001 /* ICloudSyncService.swift */,
 				B10000112C00000100000001 /* NativeBridge.swift */,
 				B10000122C00000100000001 /* NativeRepository.swift */,
+				B77000112C00000100000001 /* UniversalDanmaku.swift */,
 				B10000982C00000100000001 /* CENCMP4Decryptor.swift */,
 				D176E2EF155444349D7D7EAB /* CENCStreamIndex.swift */,
 				EE5AC1048D4D429CBF09340E /* EncryptedMediaStream.swift */,
@@ -424,6 +429,7 @@
 				B10000252C00000100000001 /* TVPlayerControlsOverlay.swift */,
 				A41C80E59CBF4F2096A85A02 /* TVQualitySelectionDrawer.swift */,
 				B10000242C00000100000001 /* TVDanmakuView.swift */,
+				B77000122C00000100000001 /* TVUniversalDanmakuControls.swift */,
 				B10000392C00000100000001 /* AVPlayerView.swift */,
 			);
 			path = Player;
@@ -736,6 +742,7 @@
 				ICLOUD002C00000100000001 /* ICloudSyncService.swift in Sources */,
 				A10000112C00000100000001 /* NativeBridge.swift in Sources */,
 				A10000122C00000100000001 /* NativeRepository.swift in Sources */,
+				A77000112C00000100000001 /* UniversalDanmaku.swift in Sources */,
 				A10000982C00000100000001 /* CENCMP4Decryptor.swift in Sources */,
 				C2CF716976FB47A0AF61ABA3 /* CENCStreamIndex.swift in Sources */,
 				BC32017434634EDB97D9747C /* EncryptedMediaStream.swift in Sources */,
@@ -754,6 +761,7 @@
 				A10000222C00000100000001 /* FilterSortSheet.swift in Sources */,
 				A10000232C00000100000001 /* CatalogView.swift in Sources */,
 				A10000242C00000100000001 /* TVDanmakuView.swift in Sources */,
+				A77000122C00000100000001 /* TVUniversalDanmakuControls.swift in Sources */,
 				A10000252C00000100000001 /* TVPlayerControlsOverlay.swift in Sources */,
 				A41C80E59CBF4F2096A85A01 /* TVQualitySelectionDrawer.swift in Sources */,
 				A10000262C00000100000001 /* TVPlayerView.swift in Sources */,

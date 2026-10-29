@@ -22,6 +22,8 @@ public struct Drama: Identifiable, Hashable, Codable {
     public let onlineDate: String
     public let tags: [String]
     public let releaseStatus: String
+    public let year: Int
+    public let mediaType: String
 
     public init(
         id: String,
@@ -37,7 +39,9 @@ public struct Drama: Identifiable, Hashable, Codable {
         views: String = "",
         onlineDate: String = "",
         tags: [String] = [],
-        releaseStatus: String = ""
+        releaseStatus: String = "",
+        year: Int = 0,
+        mediaType: String = ""
     ) {
         self.id = id
         self.source = source
@@ -57,6 +61,8 @@ public struct Drama: Identifiable, Hashable, Codable {
             return !lower.contains("vip") && !lower.contains("付费")
         } : tags
         self.releaseStatus = releaseStatus
+        self.year = year
+        self.mediaType = mediaType
     }
 
     public var cleanSourceId: String {
@@ -116,12 +122,14 @@ public struct Drama: Identifiable, Hashable, Codable {
             views: fresh.views.isEmpty ? views : fresh.views,
             onlineDate: fresh.onlineDate.isEmpty ? onlineDate : fresh.onlineDate,
             tags: mergedTags,
-            releaseStatus: fresh.releaseStatus.isEmpty ? releaseStatus : fresh.releaseStatus
+            releaseStatus: fresh.releaseStatus.isEmpty ? releaseStatus : fresh.releaseStatus,
+            year: fresh.year > 0 ? fresh.year : year,
+            mediaType: fresh.mediaType.isEmpty ? mediaType : fresh.mediaType
         )
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, sourceId, title, description, cover, episodes, category, vip, heat, views, onlineDate, tags, releaseStatus
+        case id, source, sourceId, title, description, cover, episodes, category, vip, heat, views, onlineDate, tags, releaseStatus, year, mediaType
     }
 
     public init(from decoder: Decoder) throws {
@@ -154,6 +162,8 @@ public struct Drama: Identifiable, Hashable, Codable {
             return !lower.contains("vip") && !lower.contains("付费")
         } : rawTags
         self.releaseStatus = try container.decodeIfPresent(String.self, forKey: .releaseStatus) ?? ""
+        self.year = (try? container.decode(Int.self, forKey: .year)) ?? 0
+        self.mediaType = (try? container.decode(String.self, forKey: .mediaType)) ?? ""
     }
 }
 

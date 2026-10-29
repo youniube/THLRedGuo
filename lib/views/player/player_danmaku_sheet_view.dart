@@ -8,23 +8,29 @@ class PlayerDanmakuSheetView extends StatefulWidget {
     super.key,
     required this.style,
     required this.onStyleChanged,
+    this.sourceControls,
   });
 
   final DanmakuStyle style;
   final ValueChanged<DanmakuStyle> onStyleChanged;
+  final Widget? sourceControls;
 
   static Future<void> show({
     required BuildContext context,
     required DanmakuStyle style,
     required ValueChanged<DanmakuStyle> onStyleChanged,
+    Widget? sourceControls,
   }) {
     return showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       elevation: 0,
       isScrollControlled: true,
-      builder: (_) =>
-          PlayerDanmakuSheetView(style: style, onStyleChanged: onStyleChanged),
+      builder: (_) => PlayerDanmakuSheetView(
+        style: style,
+        onStyleChanged: onStyleChanged,
+        sourceControls: sourceControls,
+      ),
     );
   }
 
@@ -83,7 +89,10 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
         child: SafeArea(
           top: false,
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: isLandscape ? 500 : 560),
+            constraints: BoxConstraints(
+              maxWidth: isLandscape ? 500 : 560,
+              maxHeight: size.height * .92,
+            ),
             child: SingleChildScrollView(
               physics: const ClampingScrollPhysics(),
               child: Padding(
@@ -169,6 +178,21 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
                     ),
                     const SizedBox(height: 14),
 
+                    if (widget.sourceControls != null) ...[
+                      Theme(
+                        data: ThemeData.dark(useMaterial3: true).copyWith(
+                          colorScheme: ColorScheme.fromSeed(
+                            seedColor: AppColors.hongguoRed,
+                            brightness: Brightness.dark,
+                          ),
+                        ),
+                        child: DefaultTextStyle.merge(
+                          style: const TextStyle(color: AppColors.white),
+                          child: widget.sourceControls!,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
                     _buildSectionHeader('字体大小', '${_style.fontSizeScale}x'),
                     const SizedBox(height: 8),
                     Row(

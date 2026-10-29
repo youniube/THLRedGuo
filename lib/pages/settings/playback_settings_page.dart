@@ -5,6 +5,8 @@ import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/core/player/playback_engine.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/views/common/widgets.dart';
+import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
+import 'package:THLRedLook/views/player/external_danmaku_controls.dart';
 
 class PlaybackSettingsPage extends StatelessWidget {
   const PlaybackSettingsPage({super.key, required this.store});
@@ -186,6 +188,26 @@ class PlaybackSettingsPage extends StatelessWidget {
                 ),
                 child: Column(
                   children: [
+                    ListTile(
+                      key: const ValueKey('settings-external-danmaku'),
+                      leading: const Icon(Icons.subtitles_outlined),
+                      title: const Text('通用弹幕 API'),
+                      subtitle: Text(
+                        store.externalDanmakuSettings.configured
+                            ? '已配置自定义弹幕服务'
+                            : '为电影、电视剧、动漫等匹配弹幕',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () async {
+                        final session = ExternalDanmakuSession(store);
+                        try {
+                          await editDanmakuApi(context, session);
+                        } finally {
+                          session.dispose();
+                        }
+                      },
+                    ),
+                    const Divider(height: 1, indent: 56),
                     ListTile(
                       key: const ValueKey('settings-engine-entry'),
                       leading: const Icon(Icons.memory_rounded),

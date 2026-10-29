@@ -1,6 +1,7 @@
 import SwiftUI
 
 // MARK: - 站源管理与导入面板
+@MainActor
 public struct SettingsSourcesPanel: View {
     @EnvironmentObject private var jsService: JSSourceService
     @ObservedObject private var sourceDiagnostics = SourceDiagnostics.shared
@@ -11,6 +12,7 @@ public struct SettingsSourcesPanel: View {
     @State private var showingClearAllAlert = false
     @State private var importURLString = ""
     @State private var isImporting = false
+    @StateObject private var danmaku = TVUniversalDanmaku()
 
     private enum SourcesFocus: Hashable {
         case diagnostics
@@ -46,6 +48,10 @@ public struct SettingsSourcesPanel: View {
                 Text(SourceDiagnostics.sourceBundleStatus + " · " + sourceDiagnostics.sourceRuntimeStatus)
                     .font(.system(size: 25)).foregroundStyle(.secondary)
                     .accessibilityIdentifier("settings.sourceRuntime")
+            }
+
+            NavigationLink("通用弹幕 API") {
+                TVUniversalDanmakuControls(session: danmaku)
             }
 
             // 顶部操作栏

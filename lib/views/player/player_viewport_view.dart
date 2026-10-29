@@ -159,7 +159,7 @@ class PlayerViewportView extends StatelessWidget {
     final title =
         '${detail.drama.title} · 第 ${detail.episodes[index].number} 集${plan?.offline == true ? ' · 本地' : ''}${isVipEp ? ' · VIP 试看' : ''}${(plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${plan!.routeIndex + 1}' : ''}';
     final hideOverlayForPictureInPicture = pictureInPictureVisible;
-    final showDanmaku = detail.drama.source == 'hongguo' || danmaku.supported;
+    final showDanmaku = plan?.offline != true;
     final Widget controls = hideOverlayForPictureInPicture
         ? Stack(
             fit: StackFit.expand,

@@ -243,9 +243,13 @@ public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStream
     }
 
     public func loadDanmaku(plan: PlaybackPlan, startMs: Int64, durationMs: Int64) async throws -> [DanmakuItem] {
+        try await loadDanmaku(plan: plan, source: "hongguo", startMs: startMs, durationMs: durationMs)
+    }
+
+    public func loadDanmaku(plan: PlaybackPlan, source: String, startMs: Int64, durationMs: Int64) async throws -> [DanmakuItem] {
         if plan.local || plan.session.isEmpty || plan.danmakuId.isEmpty { return [] }
         let response = try await danmakuBridge.request(action: "danmaku", payload: [
-            "episodeId": plan.danmakuId, "startMs": startMs, "durationMs": durationMs
+            "source": source, "episodeId": plan.danmakuId, "startMs": startMs, "durationMs": durationMs
         ])
         guard response["episodeId"] as? String == plan.danmakuId,
               response["startMs"] as? Int64 == startMs,
@@ -253,8 +257,15 @@ public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStream
               let rows = response["items"] as? [[String: Any]] else {
             throw NSError(domain: "THLRedLook.Danmaku", code: -3, userInfo: [NSLocalizedDescriptionKey: "弹幕分集或时间范围不符"])
         }
-        let data = try JSONSerialization.data(withJSONObject: rows)
-        return try JSONDecoder().decode([DanmakuItem].self, from: data).filter { $0.timeMs >= startMs && $0.timeMs < next }
+        var seen = Set<String>()
+        return rows.prefix(90).compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty, id.count <= 120,
+                  let text = row["text"] as? String, let time = (row["timeMs"] as? NSNumber)?.int64Value,
+                  time >= startMs, time < next, seen.insert(id).inserted else { return nil }
+            let cleaned = text.replacingOccurrences(of: "[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return nil }
+            return DanmakuItem(id: id, text: String(cleaned.prefix(181)), timeMs: time)
+        }.sorted { $0.timeMs < $1.timeMs }
     }
 
     public func storage() async throws -> [String: Any] {

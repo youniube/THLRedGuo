@@ -18,6 +18,9 @@ import 'package:THLRedLook/core/player/luna_exo_player.dart';
 import 'package:THLRedLook/core/player/encrypted_playback.dart';
 import 'package:THLRedLook/core/player/pip_manager.dart';
 import 'package:THLRedLook/core/danmaku/danmaku_controller.dart';
+import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
+import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
+import 'package:THLRedLook/views/player/external_danmaku_controls.dart';
 import 'package:THLRedLook/views/download/download_picker.dart';
 import 'package:THLRedLook/pages/downloads/downloads_page.dart';
 import 'package:THLRedLook/core/store/follow_state.dart';
@@ -203,8 +206,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           defaultTargetPlatform == TargetPlatform.iOS);
   VideoEnhancementController? get _enhancementForUi =>
       _enhancement.supported ? _enhancement : null;
-  bool get _supportsDanmaku =>
-      widget.detail.drama.source == 'hongguo' || _danmaku.supported;
+  bool get _supportsDanmaku => _plan?.offline != true;
   PlaybackPreferences get _preferences => PlaybackPreferences(
     speed: _speed,
     quality: _requestedQuality,
@@ -277,6 +279,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _danmaku = DanmakuController(
       widget.repository,
       source: widget.detail.drama.source,
+      external: ExternalDanmakuSession(widget.store),
     )..setEnabled(_danmakuEnabled);
     widget.store.addListener(_accessChanged);
     _playbackSurface = widget.playbackSurface ?? PlaybackSurface();
@@ -1205,6 +1208,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _syncDanmaku({bool discontinuity = false}) {
     if (_closed) return;
+    if (_index >= 0 && _index < widget.detail.episodes.length) {
+      _danmaku.external?.setMedia(
+        DanmakuMedia.from(widget.detail.drama, widget.detail.episodes[_index]),
+      );
+    }
     final state = _player.state;
     _danmaku.update(
       position: state.position,
@@ -2391,6 +2399,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _showDanmakuSettings() => PlayerDanmakuSheetView.show(
     context: context,
     style: _preferences.danmakuStyle,
+    sourceControls: ExternalDanmakuControls(
+      session: _danmaku.external!,
+      onChanged: _danmaku.reload,
+    ),
     onStyleChanged: (newStyle) {
       unawaited(_setPreferences(_preferences.copyWith(danmakuStyle: newStyle)));
     },
@@ -2518,6 +2530,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
     _danmaku.dispose();
+    _danmaku.external?.dispose();
     _preloader.dispose();
     _generation++;
     WidgetsBinding.instance.removeObserver(this);

@@ -20,6 +20,7 @@ public final class PlayerViewModel: ObservableObject {
     @Published public private(set) var playbackEngine: PlaybackEngine = .automatic
     @Published public var danmakuEnabled: Bool = true
     @Published public var danmakuStyle: TVDanmakuStyle = TVDanmakuStyle()
+    public let universalDanmaku = TVUniversalDanmaku()
     @Published public var activeDanmakus: [DanmakuItem] = []
     @Published public var isControlsVisible: Bool = true
     @Published public var isEpisodeDrawerVisible: Bool = false
@@ -1137,9 +1138,19 @@ public final class PlayerViewModel: ObservableObject {
         activeDanmakus = []
     }
 
+    public func reloadDanmaku() {
+        resetDanmaku()
+        updateActiveDanmakus()
+    }
+
     private func requestDanmaku(start: Int64, durationMs: Int64) {
-        guard let plan, !plan.danmakuId.isEmpty, danmakuTask == nil, danmakuPages[start] == nil,
+        guard currentEpisodeIndex > 0, currentEpisodeIndex <= allEpisodes.count else { return }
+        universalDanmaku.setMedia(TVDanmakuMedia(drama: drama, episode: allEpisodes[currentEpisodeIndex - 1]))
+        guard let plan, !plan.local, !plan.session.isEmpty, danmakuTask == nil, danmakuPages[start] == nil,
               start < durationMs, danmakuRetryAfter[start, default: .distantPast] <= Date() else { return }
+        let external = universalDanmaku.useExternal(plan)
+        guard external || !plan.danmakuId.isEmpty else { return }
+        let source = drama.source
         let generation = playbackGeneration
         danmakuRequestSequence += 1
         let sequence = danmakuRequestSequence
@@ -1147,9 +1158,26 @@ public final class PlayerViewModel: ObservableObject {
             guard let self else { return }
             defer { if sequence == self.danmakuRequestSequence { self.danmakuTask = nil } }
             do {
-                let rows = try await self.repository.loadDanmaku(plan: plan, startMs: start, durationMs: durationMs)
+                let rows: [DanmakuItem]
+                if external {
+                    rows = try await self.universalDanmaku.page(start: start, duration: durationMs)
+                } else {
+                    let offset = self.universalDanmaku.offsetMs
+                    let end = min(start + 30000, durationMs)
+                    var cursor = max(0, start - offset)
+                    var loaded: [DanmakuItem] = []
+                    if end > offset {
+                        for _ in 0..<2 {
+                            guard cursor < min(durationMs, end - offset) else { break }
+                            let page = try await self.repository.loadDanmaku(plan: plan, source: source, startMs: cursor, durationMs: durationMs)
+                            loaded += page.map { DanmakuItem(id: $0.id, text: $0.text, timeMs: $0.timeMs + offset) }.filter { $0.timeMs >= start && $0.timeMs < end }
+                            cursor = min((cursor / 30000 + 1) * 30000, durationMs)
+                        }
+                    }
+                    rows = Array(loaded.prefix(90))
+                }
                 guard !Task.isCancelled, sequence == self.danmakuRequestSequence, generation == self.playbackGeneration,
-                      self.danmakuEnabled, !self.closed, self.plan?.danmakuId == plan.danmakuId else { return }
+                      self.danmakuEnabled, !self.closed, self.plan?.session == plan.session, self.isSceneActive else { return }
                 self.danmakuPages[start] = rows
                 let position = Int64(self.currentTime * 1000)
                 let nearest = self.danmakuPages.keys.sorted { abs($0 - position) < abs($1 - position) }
@@ -1161,6 +1189,7 @@ public final class PlayerViewModel: ObservableObject {
                 self.updateActiveDanmakus()
             } catch {
                 guard !Task.isCancelled, sequence == self.danmakuRequestSequence, generation == self.playbackGeneration else { return }
+                if external { self.universalDanmaku.reportFailure() }
                 self.danmakuRetryAfter[start] = Date().addingTimeInterval(15)
             }
         }
@@ -1168,7 +1197,7 @@ public final class PlayerViewModel: ObservableObject {
 
     private func updateActiveDanmakus() {
         playbackClockDate = Date()
-        guard danmakuEnabled, !closed, currentTime.isFinite, duration.isFinite, duration > 0, duration <= 86400 else {
+        guard danmakuEnabled, !closed, isSceneActive, !isSeeking, currentTime.isFinite, duration.isFinite, duration > 0, duration <= 86400 else {
             activeDanmakus = []
             return
         }
