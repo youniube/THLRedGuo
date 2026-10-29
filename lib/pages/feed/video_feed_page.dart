@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:THLRedLook/core/feed/video_feed_controller.dart';
@@ -7,9 +8,9 @@ import 'package:THLRedLook/core/player/playback_surface.dart';
 import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_source_selection.dart';
-import 'package:THLRedLook/pages/detail/detail_page.dart';
 import 'package:THLRedLook/pages/player/player_page.dart';
 import 'package:THLRedLook/utils/navigation/app_route_observer.dart';
+import 'package:THLRedLook/utils/screen/app_layout.dart';
 import 'package:THLRedLook/views/common/widgets.dart';
 import 'package:THLRedLook/views/feed/feed_source_sheet.dart';
 
@@ -111,31 +112,6 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     _syncActive();
   }
 
-  Future<void> _openDetail() async {
-    final drama = feed.detail?.drama ?? feed.current?.drama;
-    if (_opening || drama == null) return;
-    _opening = true;
-    _syncActive();
-    await feed.playback.idle;
-    if (!mounted) return;
-    try {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => DetailScreen(
-            drama: drama,
-            repository: feed.repository,
-            store: feed.store,
-          ),
-        ),
-      );
-    } finally {
-      if (mounted) {
-        _opening = false;
-        _syncActive();
-      }
-    }
-  }
-
   Future<void> _openFull(DramaDetail detail) async {
     if (_opening || feed.current?.drama.id != detail.drama.id) return;
     final epoch = feed.store.profileEpoch;
@@ -232,8 +208,18 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     _opening = true;
     _syncActive();
     try {
-      final selection = await showFeedSourceSheet(context, feed);
-      if (!mounted || selection == null) return;
+      var refreshRequested = false;
+      final selection = await showFeedSourceSheet(
+        context,
+        feed,
+        onRefresh: () => refreshRequested = true,
+      );
+      if (!mounted) return;
+      if (refreshRequested) {
+        _refresh();
+        return;
+      }
+      if (selection == null) return;
       await saveUserChange(context, () => feed.store.setFeedSources(selection));
     } finally {
       if (mounted) {
@@ -285,7 +271,6 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
         onPreviewFinished: (stillAllowed) =>
             _move(1, preview: plan, stillAllowed: stillAllowed),
         onFullscreenChanged: _fullscreenChanged,
-        onOpenDetail: () => unawaited(_openDetail()),
         onBackgroundWorkAllowed: (allowed) =>
             feed.setBackgroundWorkAllowed(detail.drama.id, allowed),
         onSeasonChanged: feed.switchSeason,
@@ -417,33 +402,39 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
                               ),
                             ),
                           ),
-                          IconButton(
-                            key: const ValueKey('feed-refresh'),
-                            tooltip: '刷新推荐',
-                            onPressed: feed.loading || !feed.allowed
-                                ? null
-                                : _refresh,
-                            color: Colors.white,
-                            icon: const Icon(Icons.refresh),
-                          ),
-                          IconButton(
-                            key: const ValueKey('feed-previous'),
-                            tooltip: '上一部',
-                            onPressed: feed.index > 0
-                                ? () => unawaited(_move(-1))
-                                : null,
-                            color: Colors.white,
-                            icon: const Icon(Icons.keyboard_arrow_up),
-                          ),
-                          IconButton(
-                            key: const ValueKey('feed-next'),
-                            tooltip: '下一部',
-                            onPressed: feed.items.isEmpty
-                                ? null
-                                : () => unawaited(_move(1)),
-                            color: Colors.white,
-                            icon: const Icon(Icons.keyboard_arrow_down),
-                          ),
+                          if (AppLayout.isTelevision(context) ||
+                              defaultTargetPlatform == TargetPlatform.windows ||
+                              defaultTargetPlatform == TargetPlatform.macOS ||
+                              defaultTargetPlatform ==
+                                  TargetPlatform.linux) ...[
+                            IconButton(
+                              key: const ValueKey('feed-refresh'),
+                              tooltip: '刷新推荐',
+                              onPressed: feed.loading || !feed.allowed
+                                  ? null
+                                  : _refresh,
+                              color: Colors.white,
+                              icon: const Icon(Icons.refresh),
+                            ),
+                            IconButton(
+                              key: const ValueKey('feed-previous'),
+                              tooltip: '上一部',
+                              onPressed: feed.index > 0
+                                  ? () => unawaited(_move(-1))
+                                  : null,
+                              color: Colors.white,
+                              icon: const Icon(Icons.keyboard_arrow_up),
+                            ),
+                            IconButton(
+                              key: const ValueKey('feed-next'),
+                              tooltip: '下一部',
+                              onPressed: feed.items.isEmpty
+                                  ? null
+                                  : () => unawaited(_move(1)),
+                              color: Colors.white,
+                              icon: const Icon(Icons.keyboard_arrow_down),
+                            ),
+                          ],
                         ],
                       ),
                       if (feed.selection.mode != FeedSourceMode.discovery &&

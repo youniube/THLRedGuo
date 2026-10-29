@@ -7,8 +7,9 @@ import 'package:THLRedLook/utils/theme/app_colors.dart';
 
 Future<FeedSourceSelection?> showFeedSourceSheet(
   BuildContext context,
-  VideoFeedController controller,
-) => showModalBottomSheet<FeedSourceSelection>(
+  VideoFeedController controller, {
+  VoidCallback? onRefresh,
+}) => showModalBottomSheet<FeedSourceSelection>(
   context: context,
   useRootNavigator: true,
   useSafeArea: true,
@@ -17,12 +18,14 @@ Future<FeedSourceSelection?> showFeedSourceSheet(
   shape: const RoundedRectangleBorder(
     borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
   ),
-  builder: (_) => _FeedSourceSheet(controller: controller),
+  builder: (_) =>
+      _FeedSourceSheet(controller: controller, onRefresh: onRefresh),
 );
 
 class _FeedSourceSheet extends StatefulWidget {
-  const _FeedSourceSheet({required this.controller});
+  const _FeedSourceSheet({required this.controller, this.onRefresh});
   final VideoFeedController controller;
+  final VoidCallback? onRefresh;
 
   @override
   State<_FeedSourceSheet> createState() => _FeedSourceSheetState();
@@ -71,7 +74,7 @@ class _FeedSourceSheetState extends State<_FeedSourceSheet> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller.store,
+    animation: Listenable.merge([widget.controller, widget.controller.store]),
     builder: (context, _) {
       final feed = widget.controller;
       final sources = feed.selectableSources;
@@ -168,6 +171,23 @@ class _FeedSourceSheetState extends State<_FeedSourceSheet> {
                                     ? '只推荐你勾选的站源'
                                     : '已选择 ${chosen.length} 个站源，点击调整',
                               ),
+                              if (widget.onRefresh != null) ...[
+                                const Divider(height: 1),
+                                ListTile(
+                                  key: const ValueKey('feed-source-refresh'),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 8,
+                                  ),
+                                  leading: const Icon(Icons.refresh),
+                                  title: const Text('刷新推荐'),
+                                  enabled: feed.allowed && !feed.loading,
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    widget.onRefresh!();
+                                  },
+                                ),
+                              ],
                             ],
                           ),
                         ),

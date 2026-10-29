@@ -240,7 +240,8 @@ void main() {
       episodeCount: 3,
       random: Random(4),
     );
-    await open(tester, _movie, plan);
+    var full = 0;
+    await open(tester, _movie, plan, onFull: () => full++);
     expect(player.opens, everyElement(false));
     expect(player.seeks.single, plan.preview!.start);
     expect(player.audibleStarts, isNotEmpty);
@@ -259,6 +260,11 @@ void main() {
     await tester.pump();
     expect(store.watched(_movie.id)?.episode, 2);
     expect(store.watched(_movie.id)?.position, 123);
+    final fullEntry = find.byKey(const ValueKey('feed-open-full'));
+    expect(fullEntry, findsOneWidget);
+    expect(tester.widget<IconButton>(fullEntry).tooltip, '看正片');
+    await tester.tap(fullEntry);
+    expect(full, 1);
     await tester.pumpWidget(const SizedBox.shrink());
     await _pump(tester, 2);
     expect(store.watched(_movie.id)?.position, 123);
@@ -309,10 +315,20 @@ void main() {
     await _pump(tester, 50);
     expect(store.watched(_short.id)?.episode, 2);
     expect(store.watched(_short.id)?.position, greaterThanOrEqualTo(12));
+    expect(shortPlan.mode, FeedPlaybackMode.full);
+    expect(find.byKey(const ValueKey('feed-fullscreen')), findsOneWidget);
     expect(
-      tester.widget<FeedPlayerOverlay>(find.byType(FeedPlayerOverlay)).preview,
-      false,
+      tester
+          .widget<FeedPlayerOverlay>(find.byType(FeedPlayerOverlay))
+          .onFullscreen,
+      isNotNull,
     );
+    expect(repository.resolved, [2]);
+    expect(player.seeks, isEmpty);
+    player.emit(player.mediaDuration);
+    player.stream.completedController.add(true);
+    await _pump(tester);
+    expect(repository.resolved, [2, 3]);
     final moviePlan = FeedPlaybackPlan(
       drama: _movie,
       resumeIndex: 0,
@@ -321,7 +337,7 @@ void main() {
     );
     player.mediaDuration = const Duration(minutes: 45);
     await open(tester, _movie, moviePlan);
-    expect(player.opens, hasLength(2));
+    expect(player.opens, hasLength(3));
     expect(player.closes, 0);
     expect(player.stops, greaterThanOrEqualTo(2));
     await close(tester);
@@ -370,12 +386,14 @@ void main() {
     );
     await open(tester, _short, plan);
     expect(plan.mode, FeedPlaybackMode.full);
-    expect(find.byKey(const ValueKey('feed-full-label')), findsOneWidget);
+    expect(find.textContaining('自动识别'), findsNothing);
+    expect(find.byKey(const ValueKey('feed-fullscreen')), findsOneWidget);
     player.emitMetadata(const Duration(minutes: 45), portrait: false);
     await _pump(tester);
     expect(plan.mode, FeedPlaybackMode.randomPreview);
     expect(player.seeks.last, plan.preview!.start);
     expect(find.byKey(const ValueKey('feed-open-full')), findsOneWidget);
+    expect(find.textContaining('自动识别'), findsNothing);
     expect(store.watched(_short.id), isNull);
     await tester.tap(find.byKey(const ValueKey('feed-settings')));
     await tester.pumpAndSettle();

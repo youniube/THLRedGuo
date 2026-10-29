@@ -70,7 +70,6 @@ class PlayerScreen extends StatefulWidget {
     this.onSeasonChanged,
     this.feed = false,
     this.playbackQueue,
-    this.onOpenDetail,
     this.onBackgroundWorkAllowed,
     this.playbackSurface,
     this.feedPlayback,
@@ -91,7 +90,6 @@ class PlayerScreen extends StatefulWidget {
   final ValueChanged<DramaDetail>? onSeasonChanged;
   final bool feed;
   final PlaybackLeaseQueue? playbackQueue;
-  final VoidCallback? onOpenDetail;
   final ValueChanged<bool>? onBackgroundWorkAllowed;
   final PlaybackSurface? playbackSurface;
   final FeedPlaybackPlan? feedPlayback;
@@ -1419,7 +1417,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       videoDisplaySize(_player.state.videoParams)?.aspectRatio,
     );
     if (mode == FeedPlaybackMode.full) {
-      if (previousMode == null) {
+      if (previousMode != FeedPlaybackMode.full) {
         if (index != playback.resumeIndex) {
           return (
             index: playback.resumeIndex,
@@ -2779,11 +2777,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           danmakuEnabled: _danmakuEnabled,
           position: _feedPosition,
           duration: _feedDuration,
-          preview: _isFeedPreview,
-          previewEnded: _previewEnded,
           fullscreen: _showFullscreen,
           onOpenFull: widget.onOpenFull,
-          onFullscreen: _isFeedPreview ? () => unawaited(_rotate()) : null,
+          onFullscreen: _television ? null : () => unawaited(_rotate()),
           onTogglePlayback: _togglePlayback,
           onSeek: (value) => unawaited(_seekFeed(value)),
           onFavorite: () => unawaited(
@@ -2793,7 +2789,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
           ),
           onEpisodes: () => unawaited(_openPanel(PlayerMenuSection.episodes)),
-          onDetail: widget.onOpenDetail ?? () {},
           onDanmaku: () => unawaited(_toggleDanmaku()),
           onSettings: () => unawaited(_openPanel(PlayerMenuSection.settings)),
         ),

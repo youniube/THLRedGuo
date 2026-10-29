@@ -437,13 +437,11 @@ class VideoFeedController extends ChangeNotifier {
   FeedPlaybackPlan playbackFor(DramaDetail loaded) {
     final drama = loaded.drama;
     final watched = store.watched(drama.id);
-    final resumeIndex = watched == null
-        ? ((current?.episode ?? 1) - 1).clamp(0, loaded.episodes.length - 1)
-        : resumeEpisodeIndex(loaded.episodes, watched);
-    final position = watched == null
-        ? current?.position ?? 0
-        : watched.episode == loaded.episodes[resumeIndex].number &&
-              !watched.finished
+    final resumeIndex = resumeEpisodeIndex(loaded.episodes, watched);
+    final position =
+        watched != null &&
+            watched.episode == loaded.episodes[resumeIndex].number &&
+            !watched.finished
         ? watched.position
         : 0.0;
     final existing = _playbacks[drama.id];

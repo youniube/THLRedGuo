@@ -9,6 +9,7 @@ import 'package:THLRedLook/core/feed/video_feed_controller.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/catalog/vod_metadata.dart';
+import 'package:THLRedLook/models/feed/feed_models.dart';
 
 Drama sample({
   String category = '',
@@ -297,5 +298,88 @@ void main() {
       short.resolve(const Duration(hours: 2), 1.8),
       FeedPlaybackMode.randomPreview,
     );
+  });
+
+  test('短剧忽略站源推荐的高光集数和位置，只按正片历史续播', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = LocalStore(await SharedPreferences.getInstance());
+    final feed = VideoFeedController(_Repository(), store);
+    try {
+      for (final source in ['hongguo', 'synthetic']) {
+        final drama = sample(category: '短剧', source: source);
+        final detail = DramaDetail(drama, [
+          for (var episode = 1; episode <= 8; episode++)
+            Episode({'id': '$source:$episode'}, episode),
+        ]);
+        feed.items = [FeedItem(drama: drama, episode: 7, position: 25)];
+        final plan = feed.playbackFor(detail);
+        expect(plan.mode, FeedPlaybackMode.full);
+        expect(plan.initialIndex, 0);
+        expect(plan.initialPosition, 0);
+        expect(
+          plan.resolve(const Duration(seconds: 90), 16 / 9),
+          FeedPlaybackMode.full,
+        );
+        await store.saveWatch(
+          WatchEntry(
+            drama: drama,
+            episode: 3,
+            position: 12,
+            duration: 90,
+            updatedAt: DateTime(2026),
+          ),
+        );
+        expect(identical(feed.playbackFor(detail), plan), true);
+        expect(plan.initialIndex, 2);
+        expect(plan.initialPosition, 12);
+        await store.saveWatch(
+          WatchEntry(
+            drama: drama,
+            episode: 3,
+            position: 90,
+            duration: 90,
+            updatedAt: DateTime(2026),
+          ),
+        );
+        feed.playbackFor(detail);
+        expect(plan.initialIndex, 3);
+        expect(plan.initialPosition, 0);
+      }
+    } finally {
+      feed.dispose();
+      store.dispose();
+    }
+  });
+
+  test('未知类型先从正片起点探测，确认为长视频后才随机选集', () {
+    final short = FeedPlaybackPlan(
+      drama: sample(),
+      resumeIndex: 2,
+      resumePosition: 12,
+      episodeCount: 8,
+    );
+    expect(short.mode, isNull);
+    expect(short.initialIndex, 2);
+    expect(short.initialPosition, 12);
+    expect(
+      short.resolve(const Duration(seconds: 90), .56),
+      FeedPlaybackMode.full,
+    );
+    expect(short.initialIndex, 2);
+    expect(short.initialPosition, 12);
+    final long = FeedPlaybackPlan(
+      drama: sample(),
+      resumeIndex: 2,
+      resumePosition: 12,
+      episodeCount: 8,
+      random: Random(2),
+    );
+    expect(long.initialIndex, 2);
+    expect(
+      long.resolve(const Duration(minutes: 45), 16 / 9),
+      FeedPlaybackMode.randomPreview,
+    );
+    expect(long.initialIndex, long.previewIndex);
+    expect(long.initialPosition, 0);
   });
 }

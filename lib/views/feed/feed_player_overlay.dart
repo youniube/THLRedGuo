@@ -19,13 +19,10 @@ class FeedPlayerOverlay extends StatelessWidget {
     required this.onSeek,
     required this.onFavorite,
     required this.onEpisodes,
-    required this.onDetail,
+    required this.onOpenFull,
     required this.onDanmaku,
     required this.onSettings,
-    this.preview = false,
-    this.previewEnded = false,
     this.fullscreen = false,
-    this.onOpenFull,
     this.onFullscreen,
   });
 
@@ -42,27 +39,28 @@ class FeedPlayerOverlay extends StatelessWidget {
   final ValueChanged<double> onSeek;
   final VoidCallback onFavorite;
   final VoidCallback onEpisodes;
-  final VoidCallback onDetail;
+  final VoidCallback? onOpenFull;
   final VoidCallback onDanmaku;
   final VoidCallback onSettings;
-  final bool preview;
-  final bool previewEnded;
   final bool fullscreen;
-  final VoidCallback? onOpenFull;
   final VoidCallback? onFullscreen;
 
-  Widget _action(String id, IconData icon, String label, VoidCallback action) =>
-      IconButton(
-        key: ValueKey('feed-$id'),
-        tooltip: label,
-        onPressed: action,
-        style: IconButton.styleFrom(
-          foregroundColor: Colors.white,
-          backgroundColor: const Color(0x55000000),
-          minimumSize: const Size(48, 48),
-        ),
-        icon: Icon(icon, size: 27),
-      );
+  Widget _action(
+    String id,
+    IconData icon,
+    String label,
+    VoidCallback? action,
+  ) => IconButton(
+    key: ValueKey('feed-$id'),
+    tooltip: label,
+    onPressed: action,
+    style: IconButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: const Color(0x55000000),
+      minimumSize: const Size(48, 48),
+    ),
+    icon: Icon(icon, size: 27),
+  );
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -82,7 +80,7 @@ class FeedPlayerOverlay extends StatelessWidget {
           danmakuEnabled ? '关闭弹幕' : '开启弹幕',
           onDanmaku,
         ),
-        _action('detail', Icons.info_outline, '剧集详情', onDetail),
+        _action('open-full', Icons.info_outline, '看正片', onOpenFull),
         _action('settings', Icons.tune, '播放设置', onSettings),
       ];
       final progress = duration.inMilliseconds > 0
@@ -130,53 +128,14 @@ class FeedPlayerOverlay extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (preview) ...[
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            previewEnded ? '试看结束 · 点击画面重播' : '自动识别 · 随机试看',
-                            key: const ValueKey('feed-preview-label'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                        FilledButton.icon(
-                          key: const ValueKey('feed-open-full'),
-                          onPressed: onOpenFull,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.hongguoRed,
-                            foregroundColor: Colors.white,
-                          ),
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text('看正片'),
-                        ),
-                        if (onFullscreen != null) ...[
-                          const SizedBox(width: 8),
-                          _action(
-                            'fullscreen',
-                            fullscreen
-                                ? Icons.fullscreen_exit
-                                : Icons.fullscreen,
-                            fullscreen ? '退出全屏' : '横屏全屏',
-                            onFullscreen!,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                  if (!preview) ...[
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '自动识别 · 完整播放',
-                        key: ValueKey('feed-full-label'),
-                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                  if (onFullscreen != null) ...[
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: _action(
+                        'fullscreen',
+                        fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                        fullscreen ? '退出全屏' : '横屏全屏',
+                        onFullscreen,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -433,7 +392,7 @@ Widget feedPlayerPreview() => MaterialApp(
       onSeek: feedPreviewSeek,
       onFavorite: feedPreviewAction,
       onEpisodes: feedPreviewAction,
-      onDetail: feedPreviewAction,
+      onOpenFull: feedPreviewAction,
       onDanmaku: feedPreviewAction,
       onSettings: feedPreviewAction,
     ),

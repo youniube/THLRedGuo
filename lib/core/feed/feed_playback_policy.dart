@@ -147,11 +147,11 @@ class FeedPlaybackPlan {
   bool finished = false;
   bool _resolved = false;
 
-  int get initialIndex => mode == FeedPlaybackMode.full
-      ? resumeIndex
-      : previewEpisode ?? previewIndex;
+  int get initialIndex => mode == FeedPlaybackMode.randomPreview
+      ? previewEpisode ?? previewIndex
+      : resumeIndex;
   double get initialPosition =>
-      mode == FeedPlaybackMode.full ? resumePosition : 0;
+      mode == FeedPlaybackMode.randomPreview ? 0 : resumePosition;
 
   FeedPlaybackMode resolve(Duration duration, double? aspectRatio) {
     if (_resolved) {
