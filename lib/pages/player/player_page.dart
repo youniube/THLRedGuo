@@ -74,6 +74,7 @@ class PlayerScreen extends StatefulWidget {
     this.playbackSurface,
     this.feedPlayback,
     this.onOpenFull,
+    this.onOpenDetail,
     this.onPreviewFinished,
     this.onFullscreenChanged,
   });
@@ -94,6 +95,7 @@ class PlayerScreen extends StatefulWidget {
   final PlaybackSurface? playbackSurface;
   final FeedPlaybackPlan? feedPlayback;
   final VoidCallback? onOpenFull;
+  final VoidCallback? onOpenDetail;
   final Future<bool> Function(bool Function() stillAllowed)? onPreviewFinished;
   final ValueChanged<bool>? onFullscreenChanged;
   @visibleForTesting
@@ -2778,6 +2780,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           fullscreen: _showFullscreen,
           panelOpen: _panelOpen,
           onOpenFull: widget.onOpenFull,
+          onDetail: widget.onOpenDetail,
           onFullscreen: _television ? null : () => unawaited(_rotate()),
           onTogglePlayback: _togglePlayback,
           onSeek: (value) => unawaited(_seekFeed(value)),

@@ -8,6 +8,7 @@ import 'package:THLRedLook/core/player/playback_surface.dart';
 import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/feed/feed_source_selection.dart';
+import 'package:THLRedLook/pages/detail/detail_page.dart';
 import 'package:THLRedLook/pages/player/player_page.dart';
 import 'package:THLRedLook/utils/navigation/app_route_observer.dart';
 import 'package:THLRedLook/utils/screen/app_layout.dart';
@@ -112,7 +113,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
     _syncActive();
   }
 
-  Future<void> _openFull(DramaDetail detail) async {
+  Future<void> _openDrama(DramaDetail detail, {bool play = false}) async {
     if (_opening || feed.current?.drama.id != detail.drama.id) return;
     final epoch = feed.store.profileEpoch;
     final revision = feed.revision;
@@ -127,25 +128,33 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
           feed.current?.drama.id != detail.drama.id) {
         return;
       }
-      final watched = feed.store.watched(detail.drama.id);
-      final index = resumeEpisodeIndex(detail.episodes, watched);
-      final position =
-          watched != null &&
-              !watched.finished &&
-              watched.episode == detail.episodes[index].number
-          ? watched.position
-          : 0.0;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => PlayerScreen(
-            detail: detail,
-            initialIndex: index,
-            initialPosition: position,
-            repository: feed.repository,
-            store: feed.store,
-          ),
-        ),
-      );
+      final Widget screen;
+      if (play) {
+        final watched = feed.store.watched(detail.drama.id);
+        final index = resumeEpisodeIndex(detail.episodes, watched);
+        final position =
+            watched != null &&
+                !watched.finished &&
+                watched.episode == detail.episodes[index].number
+            ? watched.position
+            : 0.0;
+        screen = PlayerScreen(
+          detail: detail,
+          initialIndex: index,
+          initialPosition: position,
+          repository: feed.repository,
+          store: feed.store,
+        );
+      } else {
+        screen = DetailScreen(
+          drama: detail.drama,
+          repository: feed.repository,
+          store: feed.store,
+        );
+      }
+      await Navigator.of(
+        context,
+      ).push<void>(MaterialPageRoute(builder: (_) => screen));
     } finally {
       if (mounted) {
         _opening = false;
@@ -267,7 +276,8 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
         playbackQueue: feed.playback,
         playbackSurface: _playbackSurface,
         feedPlayback: plan,
-        onOpenFull: () => unawaited(_openFull(detail)),
+        onOpenFull: () => unawaited(_openDrama(detail, play: true)),
+        onOpenDetail: () => unawaited(_openDrama(detail)),
         onPreviewFinished: (stillAllowed) =>
             _move(1, preview: plan, stillAllowed: stillAllowed),
         onFullscreenChanged: _fullscreenChanged,

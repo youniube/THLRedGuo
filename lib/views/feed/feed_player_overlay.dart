@@ -27,6 +27,7 @@ class FeedPlayerOverlay extends StatefulWidget {
     this.fullscreen = false,
     this.panelOpen = false,
     this.onFullscreen,
+    this.onDetail,
   });
 
   final String title;
@@ -48,6 +49,7 @@ class FeedPlayerOverlay extends StatefulWidget {
   final bool fullscreen;
   final bool panelOpen;
   final VoidCallback? onFullscreen;
+  final VoidCallback? onDetail;
 
   @override
   State<FeedPlayerOverlay> createState() => _FeedPlayerOverlayState();
@@ -144,10 +146,10 @@ class _FeedPlayerOverlayState extends State<FeedPlayerOverlay> {
           widget.onFavorite,
         ),
         _action(
-          'episodes',
+          'open-full',
           Icons.video_library_outlined,
-          '选集',
-          widget.onEpisodes,
+          '看正片',
+          widget.onOpenFull,
         ),
         _action(
           'danmaku',
@@ -155,7 +157,7 @@ class _FeedPlayerOverlayState extends State<FeedPlayerOverlay> {
           widget.danmakuEnabled ? '关闭弹幕' : '开启弹幕',
           widget.onDanmaku,
         ),
-        _action('open-full', Icons.info_outline, '看正片', widget.onOpenFull),
+        _action('detail', Icons.info_outline, '剧集详情', widget.onDetail),
         _action('settings', Icons.tune, '播放设置', widget.onSettings),
       ];
       final progress = widget.duration.inMilliseconds > 0
@@ -511,6 +513,7 @@ Widget feedPlayerPreview() => MaterialApp(
       onFavorite: feedPreviewAction,
       onEpisodes: feedPreviewAction,
       onOpenFull: feedPreviewAction,
+      onDetail: feedPreviewAction,
       onDanmaku: feedPreviewAction,
       onSettings: feedPreviewAction,
     ),
