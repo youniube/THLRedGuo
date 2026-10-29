@@ -1204,7 +1204,10 @@ public final class PlayerViewModel: ObservableObject {
         }
         let currentMs = Int64(max(0, min(currentTime, duration)) * 1000)
         let durationMs = Int64(duration * 1000)
-        activeDanmakus = danmakuCache.filter { $0.timeMs > currentMs - 8000 && $0.timeMs <= currentMs }
+        let scrollLifetime = Int64(8000 / max(0.5, min(2, danmakuStyle.speed)))
+        activeDanmakus = danmakuCache.filter {
+            $0.timeMs <= currentMs && currentMs - $0.timeMs < ($0.mode == .scroll ? scrollLifetime : 4000)
+        }
         let start = currentMs / 30000 * 30000
         requestDanmaku(start: start, durationMs: durationMs)
         if danmakuPages[start] != nil && currentMs >= start + 22000 {
