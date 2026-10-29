@@ -487,11 +487,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     final ticket = ++_seasonSwitchTicket;
 
     final anchor = widget.detail.drama;
-    if (widget.store
-            .following(anchor.id)
-            ?.seriesSeasons[seasonDrama.id]
-            ?.read ==
-        false) {
+    if (!widget.feed &&
+        widget.store
+                .following(anchor.id)
+                ?.seriesSeasons[seasonDrama.id]
+                ?.read ==
+            false) {
       await saveUserChange(
         context,
         () => widget.store.markSeriesSeasonRead(anchor.id, seasonDrama.id),
@@ -1574,9 +1575,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _saveProgress({bool flush = false}) async {
-    if (widget.feedPlayback != null && (!_feedPrepared || _isFeedPreview)) {
-      return;
-    }
+    if (widget.feed) return;
     if (_openedIndex < 0 || widget.store.profileEpoch != _profileEpoch) {
       return;
     }
@@ -1604,8 +1603,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     try {
       await Future<void>.value();
-      if (store.profileEpoch != _profileEpoch ||
-          widget.feedPlayback != null && (!_feedPrepared || _isFeedPreview)) {
+      if (store.profileEpoch != _profileEpoch || widget.feed) {
         return;
       }
       if (widget.mediaId == null) {

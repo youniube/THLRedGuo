@@ -11,6 +11,7 @@ import 'package:THLRedLook/core/player/luna_exo_player.dart';
 import 'package:THLRedLook/core/player/playback_lease.dart';
 import 'package:THLRedLook/core/player/playback_preferences.dart';
 import 'package:THLRedLook/core/player/playback_surface.dart';
+import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/pages/player/player_page.dart';
@@ -186,6 +187,8 @@ void main() {
     FeedPlaybackPlan plan, {
     Future<bool> Function()? onFinished,
     VoidCallback? onFull,
+    bool feed = true,
+    bool withPlaybackPlan = true,
   }) async {
     tester.view.physicalSize = const Size(430, 900);
     tester.view.devicePixelRatio = 1;
@@ -193,16 +196,16 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: PlayerScreen(
-            key: ValueKey(drama.id),
+            key: ValueKey((drama.id, feed, withPlaybackPlan)),
             detail: _detail(drama),
             initialIndex: plan.initialIndex,
             initialPosition: plan.initialPosition,
             repository: repository,
             store: store,
-            feed: true,
+            feed: feed,
             playbackSurface: surface,
             playbackQueue: queue,
-            feedPlayback: plan,
+            feedPlayback: feed && withPlaybackPlan ? plan : null,
             playerFactory: () => player,
             videoBuilder: (controls) => controls,
             onPreviewFinished: onFinished == null ? null : (_) => onFinished(),
@@ -303,8 +306,18 @@ void main() {
     await close(tester);
   });
 
-  testWidgets('短剧正常续播并保存进度，切换作品复用同一个播放器', (tester) async {
+  testWidgets('推荐短剧续播、连播和退出不覆盖正片历史或追剧状态，切换作品复用播放器', (tester) async {
     player.mediaDuration = const Duration(seconds: 90);
+    final entry = WatchEntry(
+      drama: _short,
+      episode: 2,
+      position: 12,
+      duration: 90,
+      updatedAt: DateTime(2026),
+    );
+    await store.saveWatch(entry);
+    await store.setFollowStatus(_short, FollowStatus.planned);
+    final following = store.following(_short.id)!.toJson();
     final shortPlan = FeedPlaybackPlan(
       drama: _short,
       resumeIndex: 1,
@@ -313,8 +326,19 @@ void main() {
     );
     await open(tester, _short, shortPlan);
     await _pump(tester, 50);
-    expect(store.watched(_short.id)?.episode, 2);
-    expect(store.watched(_short.id)?.position, greaterThanOrEqualTo(12));
+    expect(store.watched(_short.id)?.toJson(), entry.toJson());
+    expect(store.following(_short.id)?.toJson(), following);
+    await tester.tap(find.byKey(const ValueKey('feed-play-surface')));
+    await _pump(tester, 2);
+    expect(store.watched(_short.id)?.toJson(), entry.toJson());
+    await tester.tap(find.byKey(const ValueKey('feed-play-surface')));
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await _pump(tester, 2);
+    expect(store.watched(_short.id)?.toJson(), entry.toJson());
+    expect(store.following(_short.id)?.toJson(), following);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await _pump(tester, 2);
     expect(shortPlan.mode, FeedPlaybackMode.full);
     expect(find.byKey(const ValueKey('feed-fullscreen')), findsOneWidget);
     expect(
@@ -329,6 +353,8 @@ void main() {
     player.stream.completedController.add(true);
     await _pump(tester);
     expect(repository.resolved, [2, 3]);
+    expect(store.watched(_short.id)?.toJson(), entry.toJson());
+    expect(store.following(_short.id)?.toJson(), following);
     final moviePlan = FeedPlaybackPlan(
       drama: _movie,
       resumeIndex: 0,
@@ -340,8 +366,54 @@ void main() {
     expect(player.opens, hasLength(3));
     expect(player.closes, 0);
     expect(player.stops, greaterThanOrEqualTo(2));
+    expect(store.watched(_short.id)?.toJson(), entry.toJson());
+    expect(store.following(_short.id)?.toJson(), following);
     await close(tester);
     expect(player.closes, 1);
+  });
+
+  testWidgets('无历史的推荐短剧不新增记录，进入普通正片播放器后才保存', (tester) async {
+    player.mediaDuration = const Duration(seconds: 90);
+    final plan = FeedPlaybackPlan(
+      drama: _short,
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 3,
+    );
+    await store.setFollowStatus(_short, FollowStatus.planned);
+    await open(tester, _short, plan);
+    await _pump(tester, 60);
+    expect(store.watched(_short.id), isNull);
+    expect(store.following(_short.id)?.status, FollowStatus.planned);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pump(tester, 2);
+    expect(store.watched(_short.id), isNull);
+    expect(store.following(_short.id)?.status, FollowStatus.planned);
+    await open(tester, _short, plan, feed: false);
+    await _pump(tester, 60);
+    expect(store.watched(_short.id)?.episode, 1);
+    expect(store.watched(_short.id)?.position, greaterThan(0));
+    expect(store.following(_short.id)?.status, FollowStatus.watching);
+    await close(tester);
+  });
+
+  testWidgets('推荐会话即使没有自动播放策略也不写观看记录', (tester) async {
+    player.mediaDuration = const Duration(seconds: 90);
+    final plan = FeedPlaybackPlan(
+      drama: _short,
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 3,
+    );
+    await open(tester, _short, plan, withPlaybackPlan: false);
+    await _pump(tester, 60);
+    await tester.tap(find.byKey(const ValueKey('feed-play-surface')));
+    await _pump(tester, 2);
+    expect(store.watched(_short.id), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pump(tester, 2);
+    expect(store.watched(_short.id), isNull);
+    await close(tester);
   });
 
   testWidgets('定位失败保留正片入口，快速退出的旧任务不会触发换片', (tester) async {
