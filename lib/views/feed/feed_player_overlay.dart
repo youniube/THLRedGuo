@@ -124,7 +124,7 @@ class FeedPlayerOverlay extends StatelessWidget {
           Align(
             alignment: Alignment.bottomCenter,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 40, 16, 12),
+              padding: EdgeInsets.fromLTRB(16, compact ? 8 : 40, 16, 12),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -192,26 +192,21 @@ class FeedPlayerOverlay extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (!compact) ...[
-                        const SizedBox(width: 12),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (final action in actions)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: action,
+                      const SizedBox(width: 12),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final action in actions)
+                            Padding(
+                              padding: EdgeInsets.only(
+                                bottom: compact ? 0 : 12,
                               ),
-                          ],
-                        ),
-                      ],
+                              child: action,
+                            ),
+                        ],
+                      ),
                     ],
                   ),
-                  if (compact)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: actions,
-                    ),
                 ],
               ),
             ),
