@@ -135,7 +135,7 @@ class FeedPlayerOverlay extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            previewEnded ? '试看结束 · 点击画面重播' : '随机试看',
+                            previewEnded ? '试看结束 · 点击画面重播' : '自动识别 · 随机试看',
                             key: const ValueKey('feed-preview-label'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -167,6 +167,17 @@ class FeedPlayerOverlay extends StatelessWidget {
                           ),
                         ],
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!preview) ...[
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '自动识别 · 完整播放',
+                        key: ValueKey('feed-full-label'),
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
                     ),
                     const SizedBox(height: 8),
                   ],

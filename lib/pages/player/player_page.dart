@@ -77,7 +77,6 @@ class PlayerScreen extends StatefulWidget {
     this.onOpenFull,
     this.onPreviewFinished,
     this.onFullscreenChanged,
-    this.onCorrectFeedPlayback,
   });
   final DramaDetail detail;
   final int initialIndex;
@@ -99,8 +98,6 @@ class PlayerScreen extends StatefulWidget {
   final VoidCallback? onOpenFull;
   final Future<bool> Function(bool Function() stillAllowed)? onPreviewFinished;
   final ValueChanged<bool>? onFullscreenChanged;
-  final Future<void> Function(FeedPlaybackMode? mode, bool source)?
-  onCorrectFeedPlayback;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -331,6 +328,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _subscriptions.add(
       _player.stream.completed.listen((completed) {
+        if (completed) _refreshFeedPlaybackMetadata();
         if (completed &&
             widget.feed &&
             _feedPrepared &&
@@ -387,6 +385,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     ]) {
       _subscriptions.add(
         stream.listen((_) {
+          _refreshFeedPlaybackMetadata();
           _syncDanmaku();
           _syncPreload();
           _acknowledgeHandoff();
@@ -1358,6 +1357,40 @@ class _PlayerScreenState extends State<PlayerScreen>
       ticket == _generation &&
       widget.store.profileEpoch == _profileEpoch;
 
+  void _refreshFeedPlaybackMetadata() {
+    final playback = widget.feedPlayback;
+    if (playback == null ||
+        _closed ||
+        _loading ||
+        !_feedPrepared ||
+        _error != null ||
+        _openedIndex != _index) {
+      return;
+    }
+    final previous = playback.mode;
+    final mode = playback.resolve(
+      _player.state.duration,
+      videoDisplaySize(_player.state.videoParams)?.aspectRatio,
+    );
+    if (mode == previous) return;
+    final playWhenReady = _playIntent;
+    setState(() {
+      _feedPrepared = false;
+      _feedObscured = true;
+      _loading = true;
+    });
+    unawaited(_player.pause());
+    unawaited(
+      _play(
+        mode == FeedPlaybackMode.full
+            ? playback.resumeIndex
+            : playback.previewIndex,
+        position: mode == FeedPlaybackMode.full ? playback.resumePosition : 0,
+        playWhenReady: playWhenReady,
+      ),
+    );
+  }
+
   Future<({int index, double position})?> _prepareFeedPlayback(
     int ticket,
     int index,
@@ -1573,7 +1606,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     try {
       await Future<void>.value();
-      if (store.profileEpoch != _profileEpoch) return;
+      if (store.profileEpoch != _profileEpoch ||
+          widget.feedPlayback != null && (!_feedPrepared || _isFeedPreview)) {
+        return;
+      }
       if (widget.mediaId == null) {
         await store.saveWatch(entry);
         if (flush) LanController.current?.flush();
@@ -1871,6 +1907,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           setState(() {
             _loading = false;
           });
+          _refreshFeedPlaybackMetadata();
           _danmaku.setPlan(plan);
           _syncDanmaku();
           _syncPreload();
@@ -1978,6 +2015,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_videoAspectRatio == ratio) return;
     setState(() => _videoAspectRatio = ratio);
     _scheduleSystemUi();
+    _refreshFeedPlaybackMetadata();
   }
 
   bool get _showFullscreen =>
@@ -2163,7 +2201,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_panelOpen || _closed) return;
     _interactions.cancel();
     setState(() => _panelOpen = true);
-    var correctFeed = false;
     try {
       if (_mobile && section == PlayerMenuSection.quality) {
         final chosenQuality = await PlayerDialogHelper.openQualitySheet(
@@ -2231,20 +2268,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             Navigator.pop(context);
             _openDanmakuSettings();
           },
-          feedSettings: widget.onCorrectFeedPlayback == null
-              ? null
-              : ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('推荐播放方式'),
-                  subtitle: Text(
-                    _isFeedPreview ? '随机试看 · 识别有误可修正' : '完整播放 · 识别有误可修正',
-                  ),
-                  trailing: const Icon(Icons.tune),
-                  onTap: () {
-                    correctFeed = true;
-                    Navigator.pop(context);
-                  },
-                ),
         );
         if (mounted && !_closed && index != null && index != _index) {
           await _play(index);
@@ -2254,58 +2277,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed) {
         setState(() => _panelOpen = false);
         _playerFocus.requestFocus();
-        if (!correctFeed) _checkFeedPreview();
-      }
-    }
-    if (correctFeed && mounted && !_closed) await _correctFeedPlayback();
-  }
-
-  Future<void> _correctFeedPlayback() async {
-    if (_closed || _panelOpen || widget.onCorrectFeedPlayback == null) return;
-    setState(() => _panelOpen = true);
-    try {
-      final choice =
-          await showModalBottomSheet<({FeedPlaybackMode? mode, bool source})>(
-            context: context,
-            isScrollControlled: true,
-            builder: (sheetContext) => SafeArea(
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const ListTile(
-                      title: Text('修正推荐播放方式'),
-                      subtitle: Text('作品规则优先于站源默认规则。'),
-                    ),
-                    for (final source in [false, true]) ...[
-                      for (final mode in [...FeedPlaybackMode.values, null])
-                        ListTile(
-                          title: Text(
-                            '${source ? '此站源默认' : '仅此作品'}：${switch (mode) {
-                              FeedPlaybackMode.full => '完整播放',
-                              FeedPlaybackMode.randomPreview => '随机试看',
-                              null => '恢复自动识别',
-                            }}',
-                          ),
-                          onTap: () => Navigator.pop(sheetContext, (
-                            mode: mode,
-                            source: source,
-                          )),
-                        ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          );
-      if (choice != null && mounted && !_closed) {
-        await widget.onCorrectFeedPlayback!(choice.mode, choice.source);
-      }
-    } catch (_) {
-      if (mounted && !_closed) _notice('播放方式未能保存，请重试。');
-    } finally {
-      if (mounted && !_closed) {
-        setState(() => _panelOpen = false);
         _checkFeedPreview();
       }
     }

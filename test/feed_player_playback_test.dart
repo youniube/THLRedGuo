@@ -106,6 +106,22 @@ class _Player extends LunaExoPlayer {
     stream.positionController.add(position);
   }
 
+  void emitMetadata(Duration duration, {required bool portrait}) {
+    mediaDuration = duration;
+    this.portrait = portrait;
+    final parameters = VideoParams(
+      w: portrait ? 720 : 1280,
+      h: portrait ? 1280 : 720,
+    );
+    state = state.copyWith(
+      duration: duration,
+      buffer: duration,
+      videoParams: parameters,
+    );
+    stream.durationController.add(duration);
+    stream.videoParamsController.add(parameters);
+  }
+
   @override
   Future<void> play() async {
     if (state.volume > 0) audibleStarts.add(state.position);
@@ -341,5 +357,32 @@ void main() {
     expect(full, 1);
     await close(tester);
     expect(finished, 0);
+  });
+
+  testWidgets('后到的真实片长自动触发试看，不需要选择任何播放模式', (tester) async {
+    player.mediaDuration = const Duration(seconds: 90);
+    player.portrait = true;
+    final plan = FeedPlaybackPlan(
+      drama: _short,
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 3,
+    );
+    await open(tester, _short, plan);
+    expect(plan.mode, FeedPlaybackMode.full);
+    expect(find.byKey(const ValueKey('feed-full-label')), findsOneWidget);
+    player.emitMetadata(const Duration(minutes: 45), portrait: false);
+    await _pump(tester);
+    expect(plan.mode, FeedPlaybackMode.randomPreview);
+    expect(player.seeks.last, plan.preview!.start);
+    expect(find.byKey(const ValueKey('feed-open-full')), findsOneWidget);
+    expect(store.watched(_short.id), isNull);
+    await tester.tap(find.byKey(const ValueKey('feed-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('推荐播放方式'), findsNothing);
+    expect(find.text('修正推荐播放方式'), findsNothing);
+    expect(find.textContaining('仅此作品'), findsNothing);
+    expect(find.textContaining('此站源默认'), findsNothing);
+    await close(tester);
   });
 }

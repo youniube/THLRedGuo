@@ -436,11 +436,6 @@ class VideoFeedController extends ChangeNotifier {
 
   FeedPlaybackPlan playbackFor(DramaDetail loaded) {
     final drama = loaded.drama;
-    final rules = store.feedPlaybackRules;
-    final rule = rules['drama:${drama.id}'] ?? rules['source:${drama.source}'];
-    final override = FeedPlaybackMode.values
-        .where((mode) => mode.name == rule)
-        .firstOrNull;
     final watched = store.watched(drama.id);
     final resumeIndex = watched == null
         ? ((current?.episode ?? 1) - 1).clamp(0, loaded.episodes.length - 1)
@@ -452,7 +447,7 @@ class VideoFeedController extends ChangeNotifier {
         ? watched.position
         : 0.0;
     final existing = _playbacks[drama.id];
-    if (existing != null && existing.override == override) {
+    if (existing != null) {
       existing.resumeIndex = resumeIndex;
       existing.resumePosition = position;
       return existing;
@@ -462,29 +457,12 @@ class VideoFeedController extends ChangeNotifier {
       resumeIndex: resumeIndex,
       resumePosition: position,
       episodeCount: loaded.episodes.length,
-      override: override,
     );
     _playbacks[drama.id] = plan;
     while (_playbacks.length > 40) {
       _playbacks.remove(_playbacks.keys.first);
     }
     return plan;
-  }
-
-  Future<void> correctPlayback(
-    Drama drama,
-    FeedPlaybackMode? mode, {
-    bool source = false,
-  }) async {
-    await store.setFeedPlaybackRule(
-      source ? 'source:${drama.source}' : 'drama:${drama.id}',
-      mode?.name,
-    );
-    if (_disposed || current?.drama.id != drama.id) return;
-    _playbacks.removeWhere(
-      (id, plan) => source ? plan.drama.source == drama.source : id == drama.id,
-    );
-    notifyListeners();
   }
 
   @override

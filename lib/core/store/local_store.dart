@@ -656,26 +656,6 @@ class LocalStore extends ChangeNotifier {
   Future<void> setFeedSources(FeedSourceSelection selection) =>
       _setting(_key('feedSources'), jsonEncode(selection.toJson()));
 
-  Map<String, String> get feedPlaybackRules {
-    try {
-      return Map<String, String>.from(
-        jsonDecode(_string(_key('feedPlaybackRules')) ?? '{}') as Map,
-      );
-    } catch (_) {
-      return {};
-    }
-  }
-
-  Future<void> setFeedPlaybackRule(String key, String? mode) {
-    final rules = feedPlaybackRules;
-    if (mode == null) {
-      rules.remove(key);
-    } else {
-      rules[key] = mode;
-    }
-    return _setting(_key('feedPlaybackRules'), jsonEncode(rules));
-  }
-
   Future<void> markFeedSeen(String dramaId) {
     if (dramaId.isEmpty) return Future.value();
     final epoch = _epoch;

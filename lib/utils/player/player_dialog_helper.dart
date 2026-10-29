@@ -98,7 +98,6 @@ class PlayerDialogHelper {
     required Future<void> Function(PlaybackPreferences) onPreferences,
     required String Function() currentEngine,
     VoidCallback? onDanmakuSettings,
-    Widget? feedSettings,
   }) async {
     final menuTheme = fullscreen ? AppTheme.dark : Theme.of(context);
     return showDialog<int>(
@@ -120,7 +119,6 @@ class PlayerDialogHelper {
             onEpisode: (index) => Navigator.pop(menuContext, index),
             onPreferences: onPreferences,
             currentEngine: currentEngine(),
-            feedSettings: feedSettings,
             showDanmaku: detail.drama.source == 'hongguo',
             danmakuStatus: danmaku.status,
             onDanmakuSettings: onDanmakuSettings,

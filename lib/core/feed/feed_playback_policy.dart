@@ -33,9 +33,7 @@ class FeedPlaybackPolicy {
     Drama drama, {
     Duration duration = Duration.zero,
     double? aspectRatio,
-    FeedPlaybackMode? override,
   }) {
-    if (override != null) return override;
     final category = (drama.rawCategory ?? drama.category).trim().toLowerCase();
     final categoryKind = _categoryMode(category);
     final tagKinds = drama.tags.map((tag) => _categoryMode(tag.toLowerCase()));
@@ -130,19 +128,17 @@ class FeedPlaybackPlan {
     required this.resumePosition,
     required int episodeCount,
     this.policy = const FeedPlaybackPolicy(),
-    this.override,
     Random? random,
   }) : assert(episodeCount > 0),
        _random = random ?? Random() {
     previewIndex = _random.nextInt(episodeCount);
-    mode = policy.classify(drama, override: override);
+    mode = policy.classify(drama);
   }
 
   final Drama drama;
   int resumeIndex;
   double resumePosition;
   final FeedPlaybackPolicy policy;
-  final FeedPlaybackMode? override;
   final Random _random;
   late final int previewIndex;
   FeedPlaybackMode? mode;
@@ -159,9 +155,7 @@ class FeedPlaybackPlan {
 
   FeedPlaybackMode resolve(Duration duration, double? aspectRatio) {
     if (_resolved) {
-      if (override == null &&
-          mode == FeedPlaybackMode.full &&
-          duration >= policy.longLimit) {
+      if (mode == FeedPlaybackMode.full && duration >= policy.longLimit) {
         mode = FeedPlaybackMode.randomPreview;
       }
       return mode!;
@@ -170,11 +164,13 @@ class FeedPlaybackPlan {
       drama,
       duration: duration,
       aspectRatio: aspectRatio,
-      override: override,
     );
     if (decision != null) {
       mode = decision;
-      _resolved = duration > Duration.zero;
+      final reliableType = policy.classify(drama) != null;
+      final reliableAspect =
+          aspectRatio != null && aspectRatio.isFinite && aspectRatio > 0;
+      _resolved = duration > Duration.zero && (reliableType || reliableAspect);
     }
     return decision ?? FeedPlaybackMode.randomPreview;
   }

@@ -285,8 +285,6 @@ class _VideoFeedScreenState extends State<VideoFeedScreen>
         onPreviewFinished: (stillAllowed) =>
             _move(1, preview: plan, stillAllowed: stillAllowed),
         onFullscreenChanged: _fullscreenChanged,
-        onCorrectFeedPlayback: (mode, source) =>
-            feed.correctPlayback(detail.drama, mode, source: source),
         onOpenDetail: () => unawaited(_openDetail()),
         onBackgroundWorkAllowed: (allowed) =>
             feed.setBackgroundWorkAllowed(detail.drama.id, allowed),

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -132,14 +133,6 @@ void main() {
       ),
       FeedPlaybackMode.randomPreview,
     );
-    expect(
-      policy.classify(
-        sample(category: '电影'),
-        duration: const Duration(hours: 2),
-        override: FeedPlaybackMode.full,
-      ),
-      FeedPlaybackMode.full,
-    );
   });
 
   test('随机区间包含完整片段，并避开约定的开头和结尾', () {
@@ -236,34 +229,73 @@ void main() {
     );
   });
 
-  test('作品修正优先于站源规则，恢复自动后保留站源规则并可重新加载', () async {
-    SharedPreferences.setMockInitialValues({});
+  test('全部站源共用自动策略，旧版作品和站源规则不能覆盖自动判断', () async {
+    SharedPreferences.setMockInitialValues({
+      'feedPlaybackRules': jsonEncode({
+        for (var index = 0; index < 10; index++)
+          'source:synthetic_$index': 'full',
+        'drama:synthetic_0:short': 'randomPreview',
+      }),
+    });
     final preferences = await SharedPreferences.getInstance();
     final store = LocalStore(preferences);
     final feed = VideoFeedController(_Repository(), store);
-    final drama = sample(source: 'hongguo');
-    final detail = DramaDetail(drama, [
-      Episode({'id': 'episode'}, 1),
-    ]);
     try {
-      await store.setFeedPlaybackRule(
-        'source:hongguo',
-        FeedPlaybackMode.randomPreview.name,
+      expect(store.locked, false);
+      for (var index = 0; index < 10; index++) {
+        final drama = sample(category: '电影', source: 'synthetic_$index');
+        final detail = DramaDetail(drama, [
+          Episode({'id': 'episode'}, 1),
+        ]);
+        expect(feed.playbackFor(detail).mode, FeedPlaybackMode.randomPreview);
+      }
+      const short = Drama(
+        id: 'synthetic_0:short',
+        source: 'synthetic_0',
+        title: '合成短剧',
+        category: '短剧',
       );
-      expect(feed.playbackFor(detail).mode, FeedPlaybackMode.randomPreview);
-      await store.setFeedPlaybackRule(
-        'drama:${drama.id}',
-        FeedPlaybackMode.full.name,
+      expect(
+        feed
+            .playbackFor(
+              DramaDetail(short, [
+                Episode({'id': 'short-1'}, 1),
+              ]),
+            )
+            .mode,
+        FeedPlaybackMode.full,
       );
-      expect(feed.playbackFor(detail).mode, FeedPlaybackMode.full);
-      await store.setFeedPlaybackRule('drama:${drama.id}', null);
-      expect(feed.playbackFor(detail).mode, FeedPlaybackMode.randomPreview);
-      final reloaded = LocalStore(preferences);
-      expect(reloaded.feedPlaybackRules, {'source:hongguo': 'randomPreview'});
-      reloaded.dispose();
     } finally {
       feed.dispose();
       store.dispose();
     }
+  });
+
+  test('画幅后到时补全未知内容的判断，片长后到时自动纠正长视频', () {
+    final unknown = FeedPlaybackPlan(
+      drama: sample(),
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 1,
+    );
+    expect(
+      unknown.resolve(const Duration(seconds: 90), null),
+      FeedPlaybackMode.randomPreview,
+    );
+    expect(
+      unknown.resolve(const Duration(seconds: 90), .56),
+      FeedPlaybackMode.full,
+    );
+    final short = FeedPlaybackPlan(
+      drama: sample(category: '短剧'),
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 1,
+    );
+    expect(short.resolve(Duration.zero, .56), FeedPlaybackMode.full);
+    expect(
+      short.resolve(const Duration(hours: 2), 1.8),
+      FeedPlaybackMode.randomPreview,
+    );
   });
 }
