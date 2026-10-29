@@ -11,6 +11,15 @@ on:
       - 'tvos/**'
       - '.github/workflows/check-playback.yml'
   workflow_dispatch:
+    inputs:
+      apple_runner:
+        description: 'Apple 构建机（arm64 排队时可选择 Intel）'
+        required: true
+        default: macos-latest
+        type: choice
+        options:
+          - macos-latest
+          - macos-15-intel
 
 permissions:
   contents: read
@@ -22,7 +31,7 @@ concurrency:
 jobs:
   tvos:
     name: Compile tvOS Playback
-    runs-on: macos-latest
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
