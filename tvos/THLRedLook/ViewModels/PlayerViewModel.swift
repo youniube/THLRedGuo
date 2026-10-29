@@ -1068,6 +1068,7 @@ public final class PlayerViewModel: ObservableObject {
     public func setDanmakuLaneCount(_ lanes: Int) {
         var next = danmakuStyle
         next.laneCount = lanes
+        next.displayArea = lanes <= 4 ? 0.5 : 1
         updateDanmakuStyle(next)
     }
 
@@ -1170,7 +1171,7 @@ public final class PlayerViewModel: ObservableObject {
                         for _ in 0..<2 {
                             guard cursor < min(durationMs, end - offset) else { break }
                             let page = try await self.repository.loadDanmaku(plan: plan, source: source, startMs: cursor, durationMs: durationMs)
-                            loaded += page.map { DanmakuItem(id: $0.id, text: $0.text, timeMs: $0.timeMs + offset) }.filter { $0.timeMs >= start && $0.timeMs < end }
+                            loaded += page.map { DanmakuItem(id: $0.id, text: $0.text, timeMs: $0.timeMs + offset, color: $0.color, mode: $0.mode) }.filter { $0.timeMs >= start && $0.timeMs < end }
                             cursor = min((cursor / 30000 + 1) * 30000, durationMs)
                         }
                     }

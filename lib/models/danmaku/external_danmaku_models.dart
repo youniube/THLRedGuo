@@ -2,34 +2,103 @@ import 'dart:convert';
 
 import 'package:THLRedLook/models/catalog/models.dart';
 
+String normalizeDanmakuBase(String value) {
+  var base = value.trim().replaceAll(RegExp(r'/+$'), '');
+  if (base.endsWith('/api/v2')) base = base.substring(0, base.length - 7);
+  if (base.isNotEmpty) {
+    final uri = Uri.tryParse(base);
+    if (uri == null ||
+        !{'http', 'https'}.contains(uri.scheme) ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        base.length > 2048) {
+      throw const FormatException('请输入完整的 HTTP(S) 弹幕 API 基础地址，可包含服务路径和访问令牌');
+    }
+  }
+  return base;
+}
+
+class DanmakuApiSource {
+  const DanmakuApiSource({required this.name, required this.baseUrl});
+  final String name, baseUrl;
+  Map<String, dynamic> toJson() => {'name': name, 'baseUrl': baseUrl};
+  factory DanmakuApiSource.fromJson(Map<String, dynamic> value) {
+    final name = (value['name'] as String? ?? '').trim();
+    final base = normalizeDanmakuBase(value['baseUrl'] as String? ?? '');
+    if (name.isEmpty || name.length > 80 || base.isEmpty) {
+      throw const FormatException('请填写 API 名称和有效地址');
+    }
+    return DanmakuApiSource(name: name, baseUrl: base);
+  }
+}
+
 class ExternalDanmakuSettings {
-  const ExternalDanmakuSettings({this.baseUrl = '', this.mode = 'automatic'});
+  const ExternalDanmakuSettings({
+    this.baseUrl = '',
+    this.mode = 'automatic',
+    this.autoMatch = true,
+    this.sources = const [],
+  });
   final String baseUrl;
   final String mode;
+  final bool autoMatch;
+  final List<DanmakuApiSource> sources;
+  List<DanmakuApiSource> get endpoints => sources.isNotEmpty
+      ? sources
+      : configured
+      ? [DanmakuApiSource(name: '默认 API', baseUrl: baseUrl)]
+      : const [];
   bool get configured => baseUrl.isNotEmpty;
-  Map<String, dynamic> toJson() => {'baseUrl': baseUrl, 'mode': mode};
+  ExternalDanmakuSettings copyWith({
+    String? baseUrl,
+    String? mode,
+    bool? autoMatch,
+    List<DanmakuApiSource>? sources,
+  }) => ExternalDanmakuSettings(
+    baseUrl: baseUrl ?? this.baseUrl,
+    mode: mode ?? this.mode,
+    autoMatch: autoMatch ?? this.autoMatch,
+    sources: List.unmodifiable(sources ?? endpoints),
+  );
+  Map<String, dynamic> toJson() => {
+    'baseUrl': baseUrl,
+    'mode': mode,
+    'autoMatch': autoMatch,
+    'sources': endpoints.map((value) => value.toJson()).toList(),
+  };
   factory ExternalDanmakuSettings.fromJson(Map<String, dynamic> value) {
-    var base = (value['baseUrl'] as String? ?? '').trim().replaceAll(
-      RegExp(r'/+$'),
-      '',
-    );
-    if (base.endsWith('/api/v2')) base = base.substring(0, base.length - 7);
-    if (base.isNotEmpty) {
-      final uri = Uri.tryParse(base);
-      if (uri == null ||
-          !{'http', 'https'}.contains(uri.scheme) ||
-          uri.host.isEmpty ||
-          uri.userInfo.isNotEmpty ||
-          uri.hasQuery ||
-          uri.hasFragment) {
-        throw const FormatException('请输入完整的 HTTP(S) 弹幕 API 基础地址，可包含服务路径和访问令牌');
-      }
-    }
+    var base = normalizeDanmakuBase(value['baseUrl'] as String? ?? '');
     final mode = value['mode'] as String? ?? 'automatic';
     if (!{'automatic', 'native', 'external'}.contains(mode)) {
       throw const FormatException('弹幕来源无效');
     }
-    return ExternalDanmakuSettings(baseUrl: base, mode: mode);
+    final sources = <DanmakuApiSource>[];
+    for (final row
+        in (value['sources'] is List ? value['sources'] as List : const [])
+            .take(16)) {
+      try {
+        final source = DanmakuApiSource.fromJson(
+          Map<String, dynamic>.from(row as Map),
+        );
+        if (!sources.any((value) => value.baseUrl == source.baseUrl)) {
+          sources.add(source);
+        }
+      } catch (_) {}
+    }
+    if (sources.isEmpty && base.isNotEmpty) {
+      sources.add(DanmakuApiSource(name: '默认 API', baseUrl: base));
+    }
+    if (sources.isNotEmpty && !sources.any((value) => value.baseUrl == base)) {
+      base = sources.first.baseUrl;
+    }
+    return ExternalDanmakuSettings(
+      baseUrl: base,
+      mode: mode,
+      autoMatch: value['autoMatch'] is bool ? value['autoMatch'] as bool : true,
+      sources: List.unmodifiable(sources),
+    );
   }
 }
 

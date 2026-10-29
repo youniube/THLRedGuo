@@ -345,6 +345,8 @@ class DanmakuController extends ChangeNotifier {
               id: item.id,
               text: item.text,
               timeMs: item.timeMs + offset,
+              color: item.color,
+              mode: item.mode,
             ),
       ],
     );

@@ -6,6 +6,9 @@ public struct TVUniversalDanmakuControls: View {
     var onChanged: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var address = ""
+    @State private var apiName = ""
+    @State private var editingURL: String?
+    @State private var notice = ""
     @State private var keyword = ""
     @State private var offset = "0"
     @State private var mode = "automatic"
@@ -20,7 +23,32 @@ public struct TVUniversalDanmakuControls: View {
     public var body: some View {
         NavigationStack {
             Form {
+                if !session.sources.isEmpty {
+                    Section("已保存 API") {
+                        ForEach(session.sources) { source in
+                            HStack {
+                                Button((session.baseURL == source.baseURL ? "✓ " : "") + source.name) {
+                                    session.selectAPI(source.baseURL); edit(source); clearSearch(); onChanged()
+                                }
+                                Menu("管理") {
+                                    Button("编辑") { edit(source) }
+                                    Button("检测连接") { Task {
+                                        do { try await session.probe(source); notice = source.name + "：连接与搜索格式正常" }
+                                        catch { notice = source.name + "：检测失败，请检查服务地址" }
+                                    } }
+                                    Button("删除", role: .destructive) {
+                                        session.deleteAPI(source.baseURL); address = session.baseURL
+                                        apiName = session.sources.first(where: { $0.baseURL == address })?.name ?? ""
+                                        editingURL = address.isEmpty ? nil : address
+                                        clearSearch(); onChanged()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Section("通用弹幕 API") {
+                    TextField("API 名称", text: $apiName)
                     TextField("HTTP(S) 服务基础地址，可包含路径或令牌", text: $address)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -29,11 +57,20 @@ public struct TVUniversalDanmakuControls: View {
                         Text("仅使用原站弹幕").tag("native")
                         Text("使用通用弹幕 API").tag("external")
                     }
-                    Button("保存 API 与来源设置") {
-                        do { try session.configure(address, mode: mode); error = ""; onChanged() }
+                    Button("保存 API") {
+                        do { try session.saveAPI(name: apiName, address: address, replacing: editingURL)
+                            try session.configure(address, mode: mode); editingURL = session.baseURL
+                            error = ""; clearSearch(); onChanged() }
                         catch { self.error = error.localizedDescription }
                     }
+                    Button("添加其他 API") { apiName = ""; address = ""; editingURL = nil }.disabled(session.sources.count >= 16)
+                    Button("保存弹幕来源设置") {
+                        do { try session.configure(session.baseURL, mode: mode); error = ""; onChanged() }
+                        catch { self.error = error.localizedDescription }
+                    }
+                    Toggle("自动匹配", isOn: Binding(get: { session.autoMatch }, set: { session.setAutoMatch($0); onChanged() }))
                     Text(session.status.isEmpty ? "兼容 danmu_api，不设置固定的公共服务器。" : session.status)
+                    if !notice.isEmpty { Text(notice) }
                 }
                 if session.media != nil {
                     Section("手动匹配弹幕") {
@@ -71,6 +108,8 @@ public struct TVUniversalDanmakuControls: View {
         }
         .onAppear {
             address = session.baseURL
+            apiName = session.sources.first(where: { $0.baseURL == session.baseURL })?.name ?? ""
+            editingURL = address.isEmpty ? nil : address
             mode = session.mode
             keyword = session.media?.title ?? ""
             offset = String(Double(session.offsetMs) / 1000)
@@ -79,6 +118,11 @@ public struct TVUniversalDanmakuControls: View {
         .onDisappear { requestID = UUID() }
         .onExitCommand { dismiss() }
     }
+
+    private func edit(_ source: TVDanmakuAPISource) {
+        apiName = source.name; address = source.baseURL; editingURL = source.baseURL
+    }
+    private func clearSearch() { requestID = UUID(); loading = false; candidates = []; episodes = []; selected = nil }
 
     private func search() {
         loading = true

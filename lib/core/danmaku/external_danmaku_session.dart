@@ -7,19 +7,22 @@ import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
 
 class ExternalDanmakuSession extends ChangeNotifier {
   ExternalDanmakuSession(this.store, {ExternalDanmakuApi? api})
-    : api = api ?? ExternalDanmakuApi();
+    : api = api ?? ExternalDanmakuApi(),
+      _profileEpoch = store.profileEpoch;
   final LocalStore store;
   final ExternalDanmakuApi api;
   DanmakuMedia? media;
   String status = '';
   bool _disposed = false;
+  final int _profileEpoch;
+  bool get active => !_disposed && store.profileEpoch == _profileEpoch;
   ExternalDanmakuSettings get settings => store.externalDanmakuSettings;
   String get identity => 'external:${media?.key ?? ''}';
   String get _bindingKey => '${settings.baseUrl}|${media?.key}';
   String get _seriesKey => '${settings.baseUrl}|series:${media?.seriesKey}';
   Map<String, dynamic> get binding => store.danmakuBinding(_bindingKey);
   int get offsetMs => (binding['offsetMs'] as num?)?.toInt() ?? 0;
-  bool get available => settings.configured && media != null;
+  bool get available => active && settings.configured && media != null;
 
   void setMedia(DanmakuMedia value) {
     if (media?.key == value.key) return;
@@ -39,6 +42,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
       settings.baseUrl == base;
 
   Future<void> configure(ExternalDanmakuSettings value) async {
+    if (!active) throw StateError('当前用户已变更，请重新打开设置');
     await store.setExternalDanmakuSettings(value);
     status = '';
     _notify();
@@ -55,7 +59,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
   ) async {
     final selectedMedia = media, base = settings.baseUrl;
     final epoch = store.profileEpoch;
-    if (selectedMedia == null) return;
+    if (selectedMedia == null || !active) return;
     final record = {
       'animeId': candidate.id,
       'animeTitle': candidate.title,
@@ -76,6 +80,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
   }
 
   Future<void> reset() async {
+    if (!active) return;
     api.clearMatchingCache();
     await store.setDanmakuBinding(
       _bindingKey,
@@ -87,6 +92,7 @@ class ExternalDanmakuSession extends ChangeNotifier {
   }
 
   Future<void> setOffset(int value) async {
+    if (!active) return;
     await store.setDanmakuBinding(_bindingKey, {
       ...binding,
       'offsetMs': value.clamp(-1800000, 1800000),
@@ -110,6 +116,10 @@ class ExternalDanmakuSession extends ChangeNotifier {
         throw const FormatException('弹幕库分集标识已变化，请重新匹配');
       }
       return saved;
+    }
+    if (!settings.autoMatch) {
+      status = '自动匹配已关闭，请手动搜索并选择弹幕';
+      return null;
     }
     final series = store.danmakuBinding('$base|series:${query.seriesKey}');
     DanmakuCandidate? candidate;
@@ -229,6 +239,8 @@ class ExternalDanmakuSession extends ChangeNotifier {
             id: item.id,
             text: item.text,
             timeMs: item.timeMs + offset,
+            color: item.color,
+            mode: item.mode,
           ),
       ],
     );

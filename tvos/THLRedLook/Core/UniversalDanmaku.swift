@@ -160,11 +160,16 @@ public actor TVExternalDanmakuAPI {
             var seen = Set<String>(), items: [DanmakuItem] = []
             for row in rows {
                 guard let p = row["p"] as? String, let first = p.split(separator: ",").first, let time = Double(first), time.isFinite, time >= 0, time <= 86400, let content = row["m"] as? String else { continue }
+                let parts = p.components(separatedBy: ",")
+                if parts.count > 1 && !["1", "4", "5"].contains(parts[1]) { continue }
                 let text = content.replacingOccurrences(of: "[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
                 if text.isEmpty { continue }
                 let ms = Int64((time * 1000).rounded())
-                let identity = SHA256.hash(data: Data("\(id):\(ms):\(text)".utf8)).map { String(format: "%02x", $0) }.joined()
-                if seen.insert(identity).inserted { items.append(DanmakuItem(id: "external:" + identity, text: String(text.prefix(181)), timeMs: ms)) }
+                let color = parts.count > 2 ? DanmakuItem.colorString(parts[2]) : "#FFFFFF"
+                let mode: DanmakuMode = parts.count > 1 ? DanmakuMode.parse(parts[1]) : .scroll
+                let identity = SHA256.hash(data: Data("\(id):\(ms):\(mode.rawValue):\(color):\(text)".utf8)).map { String(format: "%02x", $0) }.joined()
+                if seen.insert(identity).inserted { items.append(DanmakuItem(id: "external:" + identity, text: String(text.prefix(181)), timeMs: ms,
+                    color: color, mode: mode)) }
             }
             let seconds = (response["videoDuration"] as? NSNumber)?.doubleValue ?? 0
             return TVExternalDanmakuTrack(items: items.sorted { $0.timeMs < $1.timeMs }, durationMs: seconds.isFinite && seconds > 0 && seconds <= 86400 ? Int64((seconds * 1000).rounded()) : 0)
@@ -178,11 +183,19 @@ public actor TVExternalDanmakuAPI {
     public func clearMatchingCache() { details.removeAll(); detailTitles.removeAll(); searches.removeAll() }
 }
 
+public struct TVDanmakuAPISource: Identifiable, Equatable {
+    public let name: String
+    public let baseURL: String
+    public var id: String { baseURL }
+}
+
 @MainActor
 public final class TVUniversalDanmaku: ObservableObject {
     @Published public private(set) var status = ""
     @Published public var baseURL: String
     @Published public var mode: String
+    @Published public private(set) var sources: [TVDanmakuAPISource]
+    @Published public private(set) var autoMatch: Bool
     @Published public private(set) var media: TVDanmakuMedia?
     private let defaults: UserDefaults
     private let api: TVExternalDanmakuAPI
@@ -192,8 +205,18 @@ public final class TVUniversalDanmaku: ObservableObject {
         self.defaults = defaults
         self.api = api
         let settings = defaults.dictionary(forKey: Self.settingsKey) ?? [:]
-        baseURL = settings["baseUrl"] as? String ?? ""
+        let initialBase = settings["baseUrl"] as? String ?? ""
+        baseURL = initialBase
         mode = settings["mode"] as? String ?? "automatic"
+        autoMatch = settings["autoMatch"] as? Bool ?? true
+        var saved: [TVDanmakuAPISource] = []
+        for row in (settings["sources"] as? [[String: String]] ?? []).prefix(16) {
+            guard let name = row["name"], !name.isEmpty, let address = row["baseUrl"], let base = try? Self.normalize(address), !base.isEmpty, !saved.contains(where: { $0.baseURL == base }) else { continue }
+            saved.append(TVDanmakuAPISource(name: String(name.prefix(80)), baseURL: base))
+        }
+        if saved.isEmpty, !initialBase.isEmpty { saved = [TVDanmakuAPISource(name: "默认 API", baseURL: initialBase)] }
+        sources = saved
+        if !saved.isEmpty, !saved.contains(where: { $0.baseURL == baseURL }) { baseURL = saved[0].baseURL }
     }
     private var bindingKey: String { baseURL + "|" + (media?.key ?? "") }
     private var seriesKey: String { baseURL + "|series:" + (media?.seriesKey ?? "") }
@@ -207,19 +230,46 @@ public final class TVUniversalDanmaku: ObservableObject {
     public var offsetMs: Int64 { (binding(bindingKey)["offsetMs"] as? NSNumber)?.int64Value ?? 0 }
     public func useExternal(_ plan: PlaybackPlan) -> Bool { mode == "external" || mode != "native" && (plan.danmakuId.isEmpty || binding(bindingKey)["manual"] as? Bool == true) }
     public func setMedia(_ value: TVDanmakuMedia) { if media != value { media = value; status = "" } }
-    public func configure(_ address: String, mode: String) throws {
+    private static func normalize(_ address: String) throws -> String {
         var base = address.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
         if base.hasSuffix("/api/v2") { base = String(base.dropLast(7)) }
         if !base.isEmpty {
             guard let url = URLComponents(string: base), ["http", "https"].contains(url.scheme ?? ""), !(url.host ?? "").isEmpty, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw NSError(domain: "THLRedLook.Danmaku.API", code: -1, userInfo: [NSLocalizedDescriptionKey: "请输入有效的 HTTP(S) 弹幕 API 基础地址"]) }
         }
-        guard ["automatic", "native", "external"].contains(mode) else { return }
-        baseURL = base
-        self.mode = mode
-        defaults.set(["baseUrl": base, "mode": mode], forKey: Self.settingsKey)
+        return base
+    }
+    private func saveConfiguration() {
+        defaults.set(["baseUrl": baseURL, "mode": mode, "autoMatch": autoMatch,
+            "sources": sources.map { ["name": $0.name, "baseUrl": $0.baseURL] }] as [String: Any], forKey: Self.settingsKey)
         status = ""
     }
+    public func configure(_ address: String, mode: String) throws {
+        let base = try Self.normalize(address)
+        guard ["automatic", "native", "external"].contains(mode) else { return }
+        if !base.isEmpty, !sources.contains(where: { $0.baseURL == base }) {
+            guard sources.count < 16 else { throw apiError("最多保存 16 个 API") }
+            sources.append(TVDanmakuAPISource(name: "默认 API", baseURL: base))
+        }
+        baseURL = base
+        self.mode = mode
+        saveConfiguration()
+    }
+    private func apiError(_ text: String) -> NSError { NSError(domain: "THLRedLook.Danmaku.API", code: -1, userInfo: [NSLocalizedDescriptionKey: text]) }
+    public func saveAPI(name: String, address: String, replacing old: String?) throws {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines), base = try Self.normalize(address)
+        guard !name.isEmpty, name.count <= 80, !base.isEmpty else { throw apiError("请填写 API 名称和地址") }
+        guard !sources.contains(where: { $0.baseURL == base && $0.baseURL != old }) else { throw apiError("该 API 已存在") }
+        let value = TVDanmakuAPISource(name: name, baseURL: base)
+        if let index = sources.firstIndex(where: { $0.baseURL == old }) { sources[index] = value }
+        else { guard sources.count < 16 else { throw apiError("最多保存 16 个 API") }; sources.append(value) }
+        if baseURL.isEmpty || baseURL == old { baseURL = base }
+        saveConfiguration()
+    }
+    public func selectAPI(_ base: String) { guard sources.contains(where: { $0.baseURL == base }) else { return }; baseURL = base; saveConfiguration() }
+    public func deleteAPI(_ base: String) { sources.removeAll { $0.baseURL == base }; if baseURL == base { baseURL = sources.first?.baseURL ?? "" }; saveConfiguration() }
+    public func setAutoMatch(_ value: Bool) { autoMatch = value; saveConfiguration() }
+    public func probe(_ source: TVDanmakuAPISource) async throws { _ = try await api.search(base: source.baseURL, keyword: "连接检测") }
     public func search(_ keyword: String) async throws -> [TVDanmakuCandidate] { try await api.search(base: baseURL, keyword: keyword) }
     public func episodes(_ candidate: TVDanmakuCandidate) async throws -> [TVLibraryEpisode] { try await api.episodes(base: baseURL, id: candidate.id) }
     public func choose(_ candidate: TVDanmakuCandidate, _ episode: TVLibraryEpisode) {
@@ -235,6 +285,7 @@ public final class TVUniversalDanmaku: ObservableObject {
         let base = baseURL, key = bindingKey
         var record = binding(key)
         if record["episodeId"] == nil {
+            guard autoMatch else { status = "自动匹配已关闭，请手动搜索并选择弹幕"; return [] }
             let series = binding(seriesKey)
             let candidate: TVDanmakuCandidate
             if let id = series["animeId"] as? String { candidate = TVDanmakuCandidate(id: id, title: series["title"] as? String ?? query.title, year: query.year, kind: query.kind, season: query.season) }
@@ -262,6 +313,6 @@ public final class TVUniversalDanmaku: ObservableObject {
         let rows = track.items.filter { $0.timeMs + offset >= start && $0.timeMs + offset < end }
         let sampled = rows.count <= 90 ? rows : (0..<90).map { rows[$0 * rows.count / 90] }
         status = track.items.isEmpty ? "已匹配，本集暂无弹幕" : "已匹配 " + (record["title"] as? String ?? "")
-        return sampled.map { DanmakuItem(id: $0.id, text: $0.text, timeMs: $0.timeMs + offset) }
+        return sampled.map { DanmakuItem(id: $0.id, text: $0.text, timeMs: $0.timeMs + offset, color: $0.color, mode: $0.mode) }
     }
 }

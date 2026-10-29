@@ -2403,6 +2403,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     sourceControls: ExternalDanmakuControls(
       session: _danmaku.external!,
       onChanged: _danmaku.reload,
+      showOffset: false,
+    ),
+    timingControls: ExternalDanmakuTimingControls(
+      session: _danmaku.external!,
+      onChanged: _danmaku.reload,
     ),
     onStyleChanged: (newStyle) {
       unawaited(_setPreferences(_preferences.copyWith(danmakuStyle: newStyle)));

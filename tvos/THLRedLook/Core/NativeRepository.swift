@@ -264,7 +264,8 @@ public final class NativeRepository: DramaSourceProviderProtocol, PlaybackStream
                   time >= startMs, time < next, seen.insert(id).inserted else { return nil }
             let cleaned = text.replacingOccurrences(of: "[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else { return nil }
-            return DanmakuItem(id: id, text: String(cleaned.prefix(181)), timeMs: time)
+            return DanmakuItem(id: id, text: String(cleaned.prefix(181)), timeMs: time,
+                color: DanmakuItem.colorString(row["color"]), mode: DanmakuMode.parse(row["mode"]))
         }.sorted { $0.timeMs < $1.timeMs }
     }
 

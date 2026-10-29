@@ -33,9 +33,34 @@ List<DanmakuFlight> planDanmaku(
   required double width,
   required int rows,
   required double Function(String) measure,
+  int? totalRows,
+  DanmakuStyle style = const DanmakuStyle(),
 }) {
-  if (!width.isFinite || width <= 0 || rows < 1) return const [];
-  final laneCount = rows.clamp(1, 8);
+  if (!width.isFinite || width <= 0 || (totalRows ?? rows) < 1) return const [];
+  final laneCount = (totalRows ?? rows).clamp(1, 16);
+  final bottomRows =
+      style.bottom &&
+          (totalRows != null ||
+              items.any(
+                (item) =>
+                    item.mode == DanmakuMode.bottom && style.accepts(item),
+              ))
+      ? math.min(2, laneCount)
+      : 0;
+  final regularRows = math.min(
+    rows.clamp(0, laneCount),
+    laneCount - bottomRows,
+  );
+  final gapSize = switch (style.density) {
+    DanmakuDensity.low => 64.0,
+    DanmakuDensity.medium => 28.0,
+    DanmakuDensity.high => 16.0,
+  };
+  final capacity = switch (style.density) {
+    DanmakuDensity.low => 12,
+    DanmakuDensity.medium => 40,
+    DanmakuDensity.high => 60,
+  };
   final lanes = List<DanmakuFlight?>.filled(laneCount, null);
   final sorted = items.toList()..sort((a, b) => a.timeMs.compareTo(b.timeMs));
   final seen = <String>{};
@@ -45,27 +70,35 @@ List<DanmakuFlight> planDanmaku(
     if (item.id.isEmpty ||
         item.text.trim().isEmpty ||
         item.timeMs < 0 ||
+        !style.accepts(item) ||
         !seen.add(item.id)) {
       continue;
     }
-    if (flights.reversed
-            .takeWhile(
-              (flight) => item.timeMs - flight.item.timeMs < flight.durationMs,
+    if (flights
+            .where(
+              (flight) => item.timeMs < flight.item.timeMs + flight.durationMs,
             )
             .length >=
-        40) {
+        capacity) {
       continue;
     }
     final runes = item.text.runes;
     final text =
         String.fromCharCodes(runes.take(100)) + (runes.length > 100 ? '…' : '');
-    final size = measure(text).ceilToDouble() + 8;
-    final durationMs = calculateDanmakuLifetimeMs(item);
+    final measured = measure(text);
+    if (!measured.isFinite || measured <= 0) continue;
+    final size = measured.ceilToDouble() + 8;
+    final durationMs = item.mode == DanmakuMode.scroll
+        ? (calculateDanmakuLifetimeMs(item) / style.speed.clamp(.5, 2)).round()
+        : 4000;
 
     int bestLane = -1;
     double maxSafetyMargin = -1;
 
-    for (int l = 0; l < laneCount; l++) {
+    final candidates = item.mode == DanmakuMode.bottom
+        ? List.generate(bottomRows, (index) => laneCount - index - 1)
+        : List.generate(regularRows, (index) => index);
+    for (final l in candidates) {
       final prev = lanes[l];
       if (prev == null) {
         bestLane = l;
@@ -76,21 +109,22 @@ List<DanmakuFlight> planDanmaku(
         bestLane = l;
         break;
       }
-
-      // 条件 1: 入场碰撞检查（后弹幕入场时，前弹幕尾部已完全进入且拉开至少 28px）
+      if (item.mode != DanmakuMode.scroll ||
+          prev.item.mode != DanmakuMode.scroll) {
+        continue;
+      }
       final prevSpeed = (width + prev.width) / prev.durationMs;
       final prevMovedAtEntry = prevSpeed * gap;
       final entryClearance = prevMovedAtEntry - prev.width;
-      if (entryClearance < 28) {
+      if (entryClearance < gapSize) {
         continue;
       }
 
-      // 条件 2: 出场追尾检查（在前弹幕出屏幕前，后弹幕不能追上前弹幕尾部）
       final currSpeed = (width + size) / durationMs;
       final remainingTime = prev.durationMs - gap;
       final currMovedAtPrevExit = currSpeed * remainingTime;
       final exitClearance = width - currMovedAtPrevExit;
-      if (exitClearance < 28) {
+      if (exitClearance < gapSize) {
         continue;
       }
 
@@ -108,6 +142,41 @@ List<DanmakuFlight> planDanmaku(
     flights.add(flight);
   }
   return flights;
+}
+
+TextStyle danmakuTextStyle(
+  DanmakuStyle settings,
+  double fontSize, {
+  int itemColor = 0xffffff,
+}) {
+  final opacity = settings.opacity.clamp(.1, 1.0);
+  return TextStyle(
+    fontSize: fontSize,
+    fontWeight: FontWeight.w600,
+    height: 1.2,
+    color: Color(
+      0xff000000 | (settings.useOriginalColor ? itemColor : settings.color),
+    ).withValues(alpha: opacity),
+    shadows: [
+      if (settings.outline)
+        for (final offset in const [
+          Offset(1, 0),
+          Offset(-1, 0),
+          Offset(0, 1),
+          Offset(0, -1),
+        ])
+          Shadow(
+            color: AppColors.black.withValues(alpha: opacity),
+            offset: offset,
+          ),
+      if (settings.shadow)
+        Shadow(
+          color: AppColors.black.withValues(alpha: opacity * .85),
+          blurRadius: 3,
+          offset: const Offset(1, 1),
+        ),
+    ],
+  );
 }
 
 class DanmakuOverlay extends StatefulWidget {
@@ -155,21 +224,18 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
           final fontSize = baseFontSize * widget.style.fontSizeScale;
           final scaler = MediaQuery.textScalerOf(context);
           final rowHeight = scaler.scale(fontSize) * 1.5;
-          final rows = ((height * widget.style.displayArea - 8) / rowHeight).floor().clamp(0, 10);
-          final opacity = widget.style.opacity.clamp(0.1, 1.0);
-          final style = TextStyle(
-            fontSize: fontSize,
-            fontWeight: FontWeight.w600,
-            color: AppColors.white.withValues(alpha: opacity),
-            height: 1.2,
-            shadows: [
-              Shadow(
-                color: AppColors.black.withValues(alpha: opacity * 0.85),
-                blurRadius: 3,
-                offset: const Offset(1, 1),
-              ),
-            ],
+          final bottomInset = widget.style.subtitleSafe ? height * .12 : 8.0;
+          final totalRows = ((height - bottomInset - 8) / rowHeight)
+              .floor()
+              .clamp(0, 16);
+          final rows = math.min(
+            totalRows,
+            ((height * widget.style.displayArea - 8) / rowHeight).floor().clamp(
+              0,
+              16,
+            ),
           );
+          final style = danmakuTextStyle(widget.style, fontSize);
           return Center(
             child: SizedBox(
               width: width,
@@ -179,7 +245,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                   animation: widget.controller,
                   builder: (context, _) {
                     final controller = widget.controller;
-                    if (!controller.visible || rows == 0) {
+                    if (!controller.visible || totalRows == 0) {
                       return const SizedBox.shrink();
                     }
                     final layout = (
@@ -187,11 +253,10 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                       controller.dataRevision,
                       width,
                       rows,
+                      totalRows,
                       fontSize,
                       scaler,
-                      widget.style.fontSizeScale,
-                      widget.style.opacity,
-                      widget.style.displayArea,
+                      widget.style,
                     );
                     if (_layout != layout) {
                       _layout = layout;
@@ -199,6 +264,8 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                         controller.items,
                         width: width,
                         rows: rows,
+                        totalRows: totalRows,
+                        style: widget.style,
                         measure: (text) {
                           final painter = TextPainter(
                             text: TextSpan(text: text, style: style),
@@ -232,7 +299,11 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                                 moving: controller.moving,
                                 rate: controller.rate,
                                 revision: controller.motionRevision,
-                                style: style,
+                                style: danmakuTextStyle(
+                                  widget.style,
+                                  fontSize,
+                                  itemColor: flight.item.color,
+                                ),
                                 scaler: scaler,
                               ),
                             ),
@@ -343,7 +414,10 @@ class _DanmakuMotionState extends State<_DanmakuMotion>
     builder: (context, child) => Transform.translate(
       key: ValueKey('danmaku-motion-${widget.flight.item.id}'),
       offset: Offset(
-        widget.width - (widget.width + widget.flight.width) * _motion.value,
+        widget.flight.item.mode == DanmakuMode.scroll
+            ? widget.width -
+                  (widget.width + widget.flight.width) * _motion.value
+            : (widget.width - widget.flight.width) / 2,
         0,
       ),
       child: child,

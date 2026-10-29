@@ -84,7 +84,15 @@ void main() {
           episodeId: plan.danmakuId,
           startMs: start,
           nextMs: 30000,
-          items: const [DanmakuItem(id: 'native:1', text: '原站', timeMs: 1000)],
+          items: const [
+            DanmakuItem(
+              id: 'native:1',
+              text: '原站',
+              timeMs: 1000,
+              color: 0xff0000,
+              mode: DanmakuMode.bottom,
+            ),
+          ],
         ),
       );
       final controller =
@@ -100,6 +108,8 @@ void main() {
       _update(controller);
       await _flush();
       expect(controller.items.single.timeMs, 2000);
+      expect(controller.items.single.color, 0xff0000);
+      expect(controller.items.single.mode, DanmakuMode.bottom);
       expect(externalCalls, 0);
       controller.setEnabled(false);
       expect(controller.visible, isFalse);
@@ -331,9 +341,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('数据源'));
+    await tester.pumpAndSettle();
     expect(find.text('弹幕来源'), findsOneWidget);
+    await tester.tap(find.text('显示'));
+    await tester.pumpAndSettle();
     expect(find.text('不透明度'), findsOneWidget);
-    expect(find.byType(Switch), findsNothing);
+    expect(find.text('显示弹幕'), findsNothing);
     expect(tester.takeException(), isNull);
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(const ValueKey('sheet-review')),

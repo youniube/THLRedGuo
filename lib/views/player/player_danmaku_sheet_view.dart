@@ -1,7 +1,10 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-
 import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
+import 'package:THLRedLook/views/danmaku/danmaku_overlay.dart';
+
+enum DanmakuSettingsTab { sources, display, advanced }
 
 class PlayerDanmakuSheetView extends StatefulWidget {
   const PlayerDanmakuSheetView({
@@ -9,291 +12,131 @@ class PlayerDanmakuSheetView extends StatefulWidget {
     required this.style,
     required this.onStyleChanged,
     this.sourceControls,
+    this.timingControls,
+    this.initialTab = DanmakuSettingsTab.display,
   });
-
   final DanmakuStyle style;
   final ValueChanged<DanmakuStyle> onStyleChanged;
-  final Widget? sourceControls;
-
+  final Widget? sourceControls, timingControls;
+  final DanmakuSettingsTab initialTab;
   static Future<void> show({
     required BuildContext context,
     required DanmakuStyle style,
     required ValueChanged<DanmakuStyle> onStyleChanged,
     Widget? sourceControls,
-  }) {
-    return showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      isScrollControlled: true,
-      builder: (_) => PlayerDanmakuSheetView(
-        style: style,
-        onStyleChanged: onStyleChanged,
-        sourceControls: sourceControls,
-      ),
-    );
-  }
-
+    Widget? timingControls,
+  }) => showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    isScrollControlled: true,
+    builder: (_) => PlayerDanmakuSheetView(
+      style: style,
+      onStyleChanged: onStyleChanged,
+      sourceControls: sourceControls,
+      timingControls: timingControls,
+    ),
+  );
   @override
   State<PlayerDanmakuSheetView> createState() => _PlayerDanmakuSheetViewState();
 }
 
 class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
-  late DanmakuStyle _style;
-
-  @override
-  void initState() {
-    super.initState();
-    _style = widget.style;
-  }
-
-  void _updateStyle(DanmakuStyle next) {
+  late DanmakuStyle _style = widget.style;
+  void _update(DanmakuStyle next) {
     setState(() => _style = next);
     widget.onStyleChanged(next);
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final size = MediaQuery.sizeOf(context);
-    final isLandscape = size.width > size.height;
-
-    final fontSizeOptions = [
-      {'label': '小 (0.8x)', 'val': 0.8},
-      {'label': '标准 (1.0x)', 'val': 1.0},
-      {'label': '大 (1.25x)', 'val': 1.25},
-      {'label': '特大 (1.5x)', 'val': 1.5},
-    ];
-
-    final opacityOptions = [
-      {'label': '40%', 'val': 0.4},
-      {'label': '60%', 'val': 0.6},
-      {'label': '80%', 'val': 0.8},
-      {'label': '100%', 'val': 1.0},
-    ];
-
-    final areaOptions = [
-      {'label': '1/4 屏', 'val': 0.25},
-      {'label': '半屏', 'val': 0.5},
-      {'label': '3/4 屏', 'val': 0.75},
-      {'label': '全屏', 'val': 1.0},
-    ];
-
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.darkSurface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return Theme(
+      data: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.hongguoRed,
+          brightness: Brightness.dark,
         ),
-        child: SafeArea(
-          top: false,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: isLandscape ? 500 : 560,
-              maxHeight: size.height * .92,
-            ),
-            child: SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
+      ),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 620),
+          decoration: const BoxDecoration(
+            color: AppColors.darkSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: math.min(
+                760,
+                (size.height - MediaQuery.paddingOf(context).vertical) * .92,
+              ),
+              child: DefaultTabController(
+                length: 3,
+                initialIndex: widget.initialTab.index,
+                child: FocusTraversalGroup(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 10),
+                      Container(
                         width: 36,
                         height: 4,
-                        margin: const EdgeInsets.only(bottom: 12),
                         decoration: BoxDecoration(
-                          color: AppColors.whiteWithAlpha(0.24),
+                          color: Colors.white24,
                           borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                    ),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.subtitles_rounded,
-                          size: 20,
-                          color: AppColors.hongguoRed,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '弹幕设置',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.white,
-                          ),
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.close_rounded,
-                            size: 20,
-                            color: AppColors.white,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                          tooltip: '关闭',
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.blackWithAlpha(0.50),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: AppColors.whiteWithAlpha(0.08),
-                        ),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '这是一条弹幕效果预览 🚀',
-                        style: TextStyle(
-                          fontSize: 15.0 * _style.fontSizeScale,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.white.withValues(
-                            alpha: _style.opacity,
-                          ),
-                          shadows: [
-                            Shadow(
-                              color: AppColors.black.withValues(
-                                alpha: _style.opacity * 0.85,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 6, 8, 0),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.subtitles_rounded,
+                              color: AppColors.hongguoRed,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                '弹幕设置',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                              blurRadius: 3,
-                              offset: const Offset(1, 1),
+                            ),
+                            IconButton(
+                              tooltip: '关闭',
+                              onPressed: () => Navigator.maybePop(context),
+                              icon: const Icon(Icons.close_rounded),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-
-                    if (widget.sourceControls != null) ...[
-                      Theme(
-                        data: ThemeData.dark(useMaterial3: true).copyWith(
-                          colorScheme: ColorScheme.fromSeed(
-                            seedColor: AppColors.hongguoRed,
-                            brightness: Brightness.dark,
-                          ),
-                        ),
-                        child: DefaultTextStyle.merge(
-                          style: const TextStyle(color: AppColors.white),
-                          child: widget.sourceControls!,
+                      const TabBar(
+                        tabs: [
+                          Tab(text: '数据源'),
+                          Tab(text: '显示'),
+                          Tab(text: '高级'),
+                        ],
+                      ),
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            _list([
+                              widget.sourceControls ??
+                                  const Text('播放视频时可配置弹幕来源与匹配。'),
+                            ]),
+                            _display(),
+                            _advanced(),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 14),
                     ],
-                    _buildSectionHeader('字体大小', '${_style.fontSizeScale}x'),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        for (final opt in fontSizeOptions)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 3,
-                              ),
-                              child: _buildChip(
-                                key: ValueKey('danmaku-size-${opt['val']}'),
-                                label: opt['label'] as String,
-                                selected:
-                                    (_style.fontSizeScale -
-                                            (opt['val'] as double))
-                                        .abs() <
-                                    0.05,
-                                onSelected: () {
-                                  _updateStyle(
-                                    _style.copyWith(
-                                      fontSizeScale: opt['val'] as double,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-
-                    _buildSectionHeader(
-                      '不透明度',
-                      '${(_style.opacity * 100).toInt()}%',
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        for (final opt in opacityOptions)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 3,
-                              ),
-                              child: _buildChip(
-                                key: ValueKey('danmaku-opacity-${opt['val']}'),
-                                label: opt['label'] as String,
-                                selected:
-                                    (_style.opacity - (opt['val'] as double))
-                                        .abs() <
-                                    0.05,
-                                onSelected: () {
-                                  _updateStyle(
-                                    _style.copyWith(
-                                      opacity: opt['val'] as double,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-
-                    _buildSectionHeader(
-                      '显示区域',
-                      optAreaLabel(_style.displayArea),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        for (final opt in areaOptions)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 3,
-                              ),
-                              child: _buildChip(
-                                key: ValueKey('danmaku-area-${opt['val']}'),
-                                label: opt['label'] as String,
-                                selected:
-                                    (_style.displayArea -
-                                            (opt['val'] as double))
-                                        .abs() <
-                                    0.05,
-                                onSelected: () {
-                                  _updateStyle(
-                                    _style.copyWith(
-                                      displayArea: opt['val'] as double,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -303,80 +146,346 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView> {
     );
   }
 
-  String optAreaLabel(double area) {
-    if (area <= 0.3) return '1/4 屏';
-    if (area <= 0.6) return '半屏';
-    if (area <= 0.8) return '3/4 屏';
-    return '全屏';
-  }
-
-  Widget _buildSectionHeader(String title, String current) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: AppColors.whiteWithAlpha(0.65),
-          ),
+  Widget _list(List<Widget> children) => Material(
+    type: MaterialType.transparency,
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: children,
+    ),
+  );
+  Widget _caption(String text) => Padding(
+    padding: const EdgeInsets.only(top: 16, bottom: 10),
+    child: Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white70,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
+  Widget _choices<T>(
+    List<T> values,
+    T selected,
+    String Function(T) label,
+    void Function(T) change, {
+    String? keyPrefix,
+  }) => Wrap(
+    spacing: 8,
+    runSpacing: 6,
+    children: [
+      for (final value in values)
+        ChoiceChip(
+          key: keyPrefix == null ? null : ValueKey('$keyPrefix-$value'),
+          label: Text(label(value)),
+          selected: value == selected,
+          onSelected: (_) => change(value),
         ),
-        Text(
-          current,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: AppColors.hongguoRed,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChip({
-    required Key key,
-    required String label,
-    required bool selected,
-    required VoidCallback onSelected,
-  }) {
-    return GestureDetector(
-      key: key,
-      behavior: HitTestBehavior.opaque,
-      onTap: onSelected,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        height: 34,
+    ],
+  );
+  Widget _slider(
+    String label,
+    String valueLabel,
+    double value,
+    double min,
+    double max,
+    int divisions,
+    ValueChanged<double> change,
+    String key,
+  ) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(valueLabel, style: const TextStyle(color: AppColors.hongguoRed)),
+        ],
+      ),
+      Slider(
+        key: ValueKey(key),
+        value: value.clamp(min, max),
+        min: min,
+        max: max,
+        divisions: divisions,
+        label: valueLabel,
+        onChanged: change,
+      ),
+    ],
+  );
+  Widget _display() => KeyedSubtree(
+    key: const ValueKey('danmaku-display-list'),
+    child: _list([
+      Container(
+        height: 64,
         alignment: Alignment.center,
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? AppColors.hongguoRed : AppColors.darkCard,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected
-                ? AppColors.hongguoRed
-                : AppColors.whiteWithAlpha(0.12),
-            width: 1,
-          ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: AppColors.hongguoRed.withValues(alpha: 0.35),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : null,
+          color: Colors.black45,
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.bold : FontWeight.w500,
-            color: selected ? AppColors.white : AppColors.whiteWithAlpha(0.85),
+          '这是一条弹幕效果预览 🚀',
+          key: const ValueKey('danmaku-preview'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: danmakuTextStyle(
+            _style,
+            16 * _style.fontSizeScale,
+            itemColor: 0xa5e8ff,
           ),
         ),
       ),
+      const SizedBox(height: 16),
+      _slider(
+        '字体大小',
+        '${_style.fontSizeScale.toStringAsFixed(2)}x',
+        _style.fontSizeScale,
+        .6,
+        2,
+        28,
+        (value) => _update(_style.copyWith(fontSizeScale: value)),
+        'danmaku-font-slider',
+      ),
+      _choices(
+        [.8, 1.0, 1.25, 1.5],
+        _style.fontSizeScale,
+        (value) => switch (value) {
+          .8 => '小',
+          1.0 => '标准',
+          1.25 => '大',
+          _ => '特大',
+        },
+        (value) => _update(_style.copyWith(fontSizeScale: value)),
+        keyPrefix: 'danmaku-size',
+      ),
+      const SizedBox(height: 16),
+      _slider(
+        '不透明度',
+        '${(_style.opacity * 100).round()}%',
+        _style.opacity,
+        .1,
+        1,
+        18,
+        (value) => _update(_style.copyWith(opacity: value)),
+        'danmaku-opacity-slider',
+      ),
+      _choices(
+        [.4, .6, .8, 1.0],
+        _style.opacity,
+        (value) => '${(value * 100).round()}%',
+        (value) => _update(_style.copyWith(opacity: value)),
+        keyPrefix: 'danmaku-opacity',
+      ),
+      _caption('文字颜色'),
+      _choices(
+        [true, false],
+        _style.useOriginalColor,
+        (value) => value ? 'API 原色' : '统一颜色',
+        (value) => _update(_style.copyWith(useOriginalColor: value)),
+      ),
+      if (!_style.useOriginalColor) ...[
+        const SizedBox(height: 8),
+        _choices(
+          [0xffffff, 0xffe6a7, 0xa5e8ff, 0xc7f4c2, 0xffc8dd],
+          _style.color,
+          (value) => switch (value) {
+            0xffe6a7 => '柔黄',
+            0xa5e8ff => '浅蓝',
+            0xc7f4c2 => '薄荷',
+            0xffc8dd => '浅粉',
+            _ => '白色',
+          },
+          (value) => _update(_style.copyWith(color: value)),
+        ),
+      ],
+      SwitchListTile.adaptive(
+        key: const ValueKey('danmaku-outline'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('细描边'),
+        value: _style.outline,
+        onChanged: (value) => _update(_style.copyWith(outline: value)),
+      ),
+      SwitchListTile.adaptive(
+        key: const ValueKey('danmaku-shadow'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('柔和阴影'),
+        value: _style.shadow,
+        onChanged: (value) => _update(_style.copyWith(shadow: value)),
+      ),
+      _caption('滚动与顶部弹幕区域'),
+      _choices(
+        [.25, .4, .5, .75, 1.0],
+        _style.displayArea,
+        (value) => value == 1 ? '全屏' : '${(value * 100).round()}%',
+        (value) => _update(_style.copyWith(displayArea: value)),
+        keyPrefix: 'danmaku-area',
+      ),
+      _caption('弹幕密度'),
+      _choices(
+        DanmakuDensity.values,
+        _style.density,
+        (value) => switch (value) {
+          DanmakuDensity.low => '低 · 舒适',
+          DanmakuDensity.medium => '中 · 均衡',
+          DanmakuDensity.high => '高 · 热闹',
+        },
+        (value) => _update(_style.copyWith(density: value)),
+      ),
+      const SizedBox(height: 20),
+      _slider(
+        '滚动速度',
+        '${_style.speed.toStringAsFixed(1)}x',
+        _style.speed,
+        .5,
+        2,
+        15,
+        (value) => _update(_style.copyWith(speed: value)),
+        'danmaku-speed-slider',
+      ),
+      _caption('显示类型'),
+      Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          FilterChip(
+            key: const ValueKey('danmaku-mode-scroll'),
+            label: const Text('滚动'),
+            selected: _style.scroll,
+            onSelected: (value) => _update(_style.copyWith(scroll: value)),
+          ),
+          FilterChip(
+            key: const ValueKey('danmaku-mode-top'),
+            label: const Text('顶部固定'),
+            selected: _style.top,
+            onSelected: (value) => _update(_style.copyWith(top: value)),
+          ),
+          FilterChip(
+            key: const ValueKey('danmaku-mode-bottom'),
+            label: const Text('底部固定'),
+            selected: _style.bottom,
+            onSelected: (value) => _update(_style.copyWith(bottom: value)),
+          ),
+        ],
+      ),
+      SwitchListTile.adaptive(
+        key: const ValueKey('danmaku-subtitle-safe'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('字幕避让'),
+        subtitle: const Text('为底部字幕预留画面空间'),
+        value: _style.subtitleSafe,
+        onChanged: (value) => _update(_style.copyWith(subtitleSafe: value)),
+      ),
+    ]),
+  );
+  Widget _advanced() => KeyedSubtree(
+    key: const ValueKey('danmaku-advanced-list'),
+    child: _list([
+      if (widget.timingControls != null) ...[
+        widget.timingControls!,
+        const SizedBox(height: 16),
+      ],
+      _caption('内容过滤'),
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        key: const ValueKey('danmaku-keywords'),
+        title: const Text('屏蔽关键词'),
+        subtitle: Text('${_style.keywords.length} 个关键词'),
+        trailing: const Icon(Icons.edit_outlined),
+        onTap: _editKeywords,
+      ),
+      if (_style.keywords.isNotEmpty)
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final word in _style.keywords)
+              InputChip(
+                label: Text(word),
+                onDeleted: () => _update(
+                  _style.copyWith(
+                    keywords: _style.keywords
+                        .where((value) => value != word)
+                        .toList(),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      SwitchListTile.adaptive(
+        key: const ValueKey('danmaku-block-colored'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('屏蔽彩色弹幕'),
+        subtitle: const Text('过滤来源中带颜色的弹幕'),
+        value: _style.blockColored,
+        onChanged: (value) => _update(_style.copyWith(blockColored: value)),
+      ),
+      const SizedBox(height: 20),
+      OutlinedButton.icon(
+        key: const ValueKey('danmaku-reset-style'),
+        onPressed: () => _update(const DanmakuStyle()),
+        icon: const Icon(Icons.restart_alt_rounded),
+        label: const Text('恢复默认样式与过滤'),
+      ),
+      const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Text(
+          '保留数据源、匹配记录和分集时间偏移。',
+          style: TextStyle(fontSize: 12, color: Colors.white60),
+        ),
+      ),
+    ]),
+  );
+  Future<void> _editKeywords() async {
+    final words = await showDialog<List<String>>(
+      context: context,
+      builder: (_) => _KeywordsDialog(words: _style.keywords),
     );
+    if (words != null && mounted) _update(_style.copyWith(keywords: words));
+  }
+}
+
+class _KeywordsDialog extends StatefulWidget {
+  const _KeywordsDialog({required this.words});
+  final List<String> words;
+  @override
+  State<_KeywordsDialog> createState() => _KeywordsDialogState();
+}
+
+class _KeywordsDialogState extends State<_KeywordsDialog> {
+  late final _input = TextEditingController(text: widget.words.join('\n'));
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    scrollable: true,
+    title: const Text('屏蔽关键词'),
+    content: SizedBox(
+      width: 400,
+      child: TextField(
+        key: const ValueKey('danmaku-keywords-input'),
+        controller: _input,
+        minLines: 3,
+        maxLines: 7,
+        maxLength: 6000,
+        decoration: const InputDecoration(hintText: '每行一个，最多 100 个关键词'),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(
+          context,
+          DanmakuStyle.fromJson({
+            'keywords': _input.text.split(RegExp(r'[\r\n]+')),
+          }).keywords,
+        ),
+        child: const Text('保存'),
+      ),
+    ],
+  );
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
   }
 }

@@ -217,15 +217,15 @@ ExternalDanmakuTrack _parseExternalTrack(Map<String, Object> payload) {
   }
   final items = <DanmakuItem>[], seen = <String>{};
   for (final row in rows.whereType<Map>()) {
-    final seconds = double.tryParse(
-      (row['p']?.toString() ?? '').split(',').first,
-    );
+    final parts = (row['p']?.toString() ?? '').split(',');
+    final seconds = double.tryParse(parts.first);
     final content = row['m'];
     if (seconds == null ||
         !seconds.isFinite ||
         seconds < 0 ||
         seconds > 86400 ||
-        content is! String) {
+        content is! String ||
+        parts.length > 1 && !{'1', '4', '5'}.contains(parts[1])) {
       continue;
     }
     final cleaned = content
@@ -233,8 +233,12 @@ ExternalDanmakuTrack _parseExternalTrack(Map<String, Object> payload) {
         .trim();
     if (cleaned.isEmpty) continue;
     final time = (seconds * 1000).round();
+    final color = parts.length > 2 ? parseDanmakuColor(parts[2]) : 0xffffff;
+    final mode = parts.length > 1
+        ? parseDanmakuMode(parts[1])
+        : DanmakuMode.scroll;
     final identity = sha256
-        .convert(utf8.encode('$id:$time:$cleaned'))
+        .convert(utf8.encode('$id:$time:${mode.name}:$color:$cleaned'))
         .toString();
     if (seen.add(identity)) {
       items.add(
@@ -242,6 +246,8 @@ ExternalDanmakuTrack _parseExternalTrack(Map<String, Object> payload) {
           id: 'external:$identity',
           text: String.fromCharCodes(cleaned.runes.take(181)),
           timeMs: time,
+          color: color,
+          mode: mode,
         ),
       );
     }

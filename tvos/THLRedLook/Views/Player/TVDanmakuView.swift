@@ -8,128 +8,62 @@ public struct TVPlannedDanmaku: Identifiable, Equatable {
     public let duration: Double
     public let lane: Int
     public let width: CGFloat
-
-    public init(id: String, text: String, time: Double, duration: Double, lane: Int, width: CGFloat) {
-        self.id = id
-        self.text = text
-        self.time = time
-        self.duration = duration
-        self.lane = lane
-        self.width = width
+    public let color: Int
+    public let mode: DanmakuMode
+    public init(id: String, text: String, time: Double, duration: Double, lane: Int, width: CGFloat, color: Int = 0xffffff, mode: DanmakuMode = .scroll) {
+        self.id = id; self.text = text; self.time = time; self.duration = duration; self.lane = lane; self.width = width; self.color = color; self.mode = mode
     }
 }
 
-/// 弹幕轨道生命周期管理器：
-/// 1. 严格锁定分配轨道：弹幕一旦被分配轨道，在飞行生命周期内 Y 轴坐标与 lane 绝不改变，彻底消灭上下跳行乱窜；
-/// 2. 统一飞行航速：全屏弹幕采用恒定 8.0 秒匀速跨屏，同一车道内车距固定，消除同轨追尾碰撞穿模；
-/// 3. 基于安全车距的平滑排队与轮询：空闲车道优先、繁忙车道按安全尾随间距分配；
-/// 4. 支持进度条 Seek / 快进快退检测，清空陈旧轨道分配。
 public final class TVDanmakuTrackCoordinator {
     private var flightsById: [String: TVPlannedDanmaku] = [:]
-    private var laneTailInTimes: [Int: Double] = [:]
     private var lastObservedTime: Double = 0
-
+    private var lastStyle: TVDanmakuStyle?
+    private var lastWidth: CGFloat = 0
+    private var lastRows = 0
     public init() {}
-
-    public func updateAndGetFlights(
-        danmakus: [DanmakuItem],
-        currentTime: Double,
-        screenWidth: CGFloat,
-        laneCount: Int,
-        fontSize: CGFloat
-    ) -> [TVPlannedDanmaku] {
-        guard screenWidth > 0 else { return [] }
-        let lanesTotal = max(1, min(10, laneCount))
-        let width = screenWidth > 0 ? screenWidth : 1920
-        let standardDuration: Double = 8.0 // 恒定 8.0 秒匀速跨屏
-
-        // 1. 若发生快进/快退/大幅跳转（跳变超过 2.5 秒，或时间倒退），清空历史缓存
-        if abs(currentTime - lastObservedTime) > 2.5 || currentTime < lastObservedTime - 0.5 {
+    public func updateAndGetFlights(danmakus: [DanmakuItem], currentTime: Double, screenWidth: CGFloat,
+        laneCount: Int, fontSize: CGFloat, style: TVDanmakuStyle? = nil, totalRows: Int? = nil) -> [TVPlannedDanmaku] {
+        guard screenWidth > 0, (totalRows ?? laneCount) > 0 else { return [] }
+        let settings = style ?? TVDanmakuStyle(fontSize: fontSize, laneCount: laneCount)
+        let count = max(1, min(16, totalRows ?? laneCount))
+        if settings != lastStyle || screenWidth != lastWidth || count != lastRows || abs(currentTime - lastObservedTime) > 2.5 || currentTime < lastObservedTime - 0.5 {
             flightsById.removeAll(keepingCapacity: true)
-            laneTailInTimes.removeAll(keepingCapacity: true)
         }
-        lastObservedTime = currentTime
-
-        // 2. 清除已完全离开屏幕左侧的过期弹幕
-        flightsById = flightsById.filter { _, flight in
-            let age = currentTime - flight.time
-            return age >= 0 && age < flight.duration + 0.3
-        }
-
-        // 3. 处理当前有效时间窗口 [0, standardDuration) 的弹幕
-        let font = UIFont.boldSystemFont(ofSize: fontSize)
-        let sorted = danmakus.sorted { $0.timeMs < $1.timeMs }
-
-        for item in sorted {
-            let cleanText = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleanText.isEmpty, item.timeMs >= 0 else { continue }
-
-            let itemTime = Double(item.timeMs) / 1000.0
-            let age = currentTime - itemTime
-
-            // 仅纳入正在屏幕上或即将入场的弹幕
-            guard age >= 0 && age < standardDuration else { continue }
-
-            // 关键：若已分配过轨道，严格锁定原轨道不变！
-            if flightsById[item.id] != nil {
-                continue
-            }
-
-            let textWidth = (cleanText as NSString).size(withAttributes: [.font: font]).width + 36
-
-            // 为新入场弹幕挑选最佳轨道
-            var bestLane = -1
-            var minTailTime = Double.greatestFiniteMagnitude
-
-            // 优先轮询完全空闲轨道（上一条弹幕尾部已入场且已拉开 1.2 秒车距）
-            for l in 0..<lanesTotal {
-                let tailTime = laneTailInTimes[l] ?? 0
-                if itemTime >= tailTime + 1.2 {
-                    bestLane = l
-                    break
-                }
-            }
-
-            // 若所有轨道都有弹幕在飞，寻找最早入场的轨道
-            if bestLane < 0 {
-                for l in 0..<lanesTotal {
-                    let tailTime = laneTailInTimes[l] ?? 0
-                    if tailTime < minTailTime {
-                        minTailTime = tailTime
-                        bestLane = l
+        lastStyle = settings; lastWidth = screenWidth; lastRows = count; lastObservedTime = currentTime
+        flightsById = flightsById.filter { currentTime >= $0.value.time && currentTime < $0.value.time + $0.value.duration }
+        let allowed = danmakus.filter { settings.accepts($0) }.sorted { $0.timeMs < $1.timeMs }
+        let bottomRows = settings.bottom && (totalRows != nil || allowed.contains(where: { $0.mode == .bottom })) ? min(2, count) : 0
+        let regularRows = max(0, min(laneCount, count - bottomRows))
+        let gap: CGFloat = settings.density == "low" ? 64 : settings.density == "high" ? 16 : 28
+        let capacity = settings.density == "low" ? 12 : settings.density == "high" ? 60 : 40
+        for item in allowed {
+            let time = Double(item.timeMs) / 1000
+            let duration = item.mode == .scroll ? 8 / max(0.5, min(2, settings.speed)) : 4
+            guard !item.id.isEmpty, item.timeMs >= 0, time <= currentTime, currentTime < time + duration,
+                flightsById[item.id] == nil, flightsById.count < capacity else { continue }
+            let text = String(item.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+            guard !text.isEmpty else { continue }
+            let width = (text as NSString).size(withAttributes: [.font: UIFont.boldSystemFont(ofSize: fontSize)]).width + 36
+            let lanes = item.mode == .bottom ? Array((count - bottomRows)..<count).reversed().map { $0 } : Array(0..<regularRows)
+            for lane in lanes {
+                if let previous = flightsById.values.filter({ $0.lane == lane }).max(by: { $0.time < $1.time }) {
+                    let elapsed = time - previous.time
+                    if elapsed < 0 { continue }
+                    if elapsed < previous.duration {
+                        guard item.mode == .scroll, previous.mode == .scroll else { continue }
+                        let clearance = (screenWidth + previous.width) * CGFloat(elapsed / previous.duration) - previous.width
+                        let exit = screenWidth - (screenWidth + width) * CGFloat((previous.duration - elapsed) / duration)
+                        if clearance < gap || exit < gap { continue }
                     }
                 }
-                // 碰撞保护：若前车尾部甚至还未进入屏幕右侧（车距为负且风险大），放弃该条以防叠字穿模
-                if itemTime < (laneTailInTimes[bestLane] ?? 0) - 0.4 {
-                    continue
-                }
+                flightsById[item.id] = TVPlannedDanmaku(id: item.id, text: text, time: time, duration: duration, lane: lane, width: width, color: item.rgb, mode: item.mode)
+                break
             }
-
-            guard bestLane >= 0 && bestLane < lanesTotal else { continue }
-
-            // 计算尾部完全进入屏幕所需时间：标准时长 * 弹幕宽度 / (屏幕宽 + 弹幕宽)
-            let tailEntryDuration = standardDuration * Double(textWidth / (width + textWidth))
-            laneTailInTimes[bestLane] = itemTime + tailEntryDuration
-
-            let flight = TVPlannedDanmaku(
-                id: item.id,
-                text: cleanText,
-                time: itemTime,
-                duration: standardDuration,
-                lane: bestLane,
-                width: textWidth
-            )
-            flightsById[item.id] = flight
         }
-
-        return Array(flightsById.values)
+        return flightsById.values.sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
     }
-
-    public func reset() {
-        flightsById.removeAll()
-        laneTailInTimes.removeAll()
-        lastObservedTime = 0
-    }
+    public func reset() { flightsById.removeAll(); lastStyle = nil; lastObservedTime = 0 }
 }
 
 public enum TVDanmakuPlanner {
@@ -164,8 +98,10 @@ public struct TVDanmakuView: View {
                     danmakus: danmakus,
                     currentTime: time,
                     screenWidth: w,
-                    laneCount: style.laneCount,
-                    fontSize: style.fontSize
+                    laneCount: min(style.laneCount, max(0, Int((proxy.size.height * CGFloat(style.displayArea) - 54) / (style.fontSize * 1.85 + 10)))),
+                    fontSize: style.fontSize,
+                    style: style,
+                    totalRows: max(0, Int((proxy.size.height - (style.subtitleSafe ? proxy.size.height * 0.12 : 12) - 54) / (style.fontSize * 1.85 + 10)))
                 )
 
                 ZStack(alignment: .topLeading) {
@@ -178,7 +114,7 @@ public struct TVDanmakuView: View {
 
                             danmakuItemView(item: item)
                                 .position(
-                                    x: w + item.width / 2 - (w + item.width) * progress,
+                                    x: item.mode == .scroll ? w + item.width / 2 - (w + item.width) * progress : w / 2,
                                     y: yPosition
                                 )
                         }
@@ -193,20 +129,23 @@ public struct TVDanmakuView: View {
 
     @ViewBuilder
     private func danmakuItemView(item: TVPlannedDanmaku) -> some View {
+        let rgb = style.useOriginalColor ? item.color : style.color
+        let color = Color(red: Double((rgb >> 16) & 255) / 255, green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)
         Text(item.text)
+            .lineLimit(1)
             .font(.system(size: style.fontSize, weight: .heavy, design: .rounded))
-            .foregroundColor(.white.opacity(style.opacity))
+            .foregroundColor(color.opacity(style.opacity))
             // 8 方向 1.5pt 高对比度深黑描边（强光、白底、复杂背景下字体轮廓极其锐利清爽）
-            .shadow(color: .black.opacity(style.opacity), radius: 0, x: 1.5, y: 0)
-            .shadow(color: .black.opacity(style.opacity), radius: 0, x: -1.5, y: 0)
-            .shadow(color: .black.opacity(style.opacity), radius: 0, x: 0, y: 1.5)
-            .shadow(color: .black.opacity(style.opacity), radius: 0, x: 0, y: -1.5)
-            .shadow(color: .black.opacity(style.opacity * 0.95), radius: 0, x: 1.2, y: 1.2)
-            .shadow(color: .black.opacity(style.opacity * 0.95), radius: 0, x: -1.2, y: -1.2)
-            .shadow(color: .black.opacity(style.opacity * 0.95), radius: 0, x: 1.2, y: -1.2)
-            .shadow(color: .black.opacity(style.opacity * 0.95), radius: 0, x: -1.2, y: 1.2)
+            .shadow(color: .black.opacity(style.outline ? style.opacity : 0), radius: 0, x: 1.5, y: 0)
+            .shadow(color: .black.opacity(style.outline ? style.opacity : 0), radius: 0, x: -1.5, y: 0)
+            .shadow(color: .black.opacity(style.outline ? style.opacity : 0), radius: 0, x: 0, y: 1.5)
+            .shadow(color: .black.opacity(style.outline ? style.opacity : 0), radius: 0, x: 0, y: -1.5)
+            .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: 1.2, y: 1.2)
+            .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: -1.2, y: -1.2)
+            .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: 1.2, y: -1.2)
+            .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: -1.2, y: 1.2)
             // 外部柔和深影增强大屏立体感
-            .shadow(color: .black.opacity(style.opacity * 0.8), radius: 4, x: 0, y: 2)
+            .shadow(color: .black.opacity(style.shadow ? style.opacity * 0.8 : 0), radius: 4, x: 0, y: 2)
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
             .background(
@@ -343,6 +282,7 @@ public struct TVDanmakuSettingsDrawer: View {
 
     @FocusState private var focusedButton: String?
     @State private var showingLibrary = false
+    @State private var showingDisplay = false
 
     public var body: some View {
         ZStack(alignment: .trailing) {
@@ -511,8 +451,9 @@ public struct TVDanmakuSettingsDrawer: View {
                     }
                 }
 
-                settingOptionButton(title: "弹幕来源与匹配", isSelected: false, id: "danmaku.library", up: "danmaku.area.half", down: "danmaku.close") {
-                    showingLibrary = true
+                HStack(spacing: 16) {
+                    settingOptionButton(title: "显示与高级设置", isSelected: false, id: "danmaku.display", up: "danmaku.area.half", down: "danmaku.close", right: "danmaku.library") { showingDisplay = true }
+                    settingOptionButton(title: "弹幕来源与匹配", isSelected: false, id: "danmaku.library", up: "danmaku.area.full", down: "danmaku.close", left: "danmaku.display") { showingLibrary = true }
                 }
 
                 Spacer()
@@ -552,6 +493,7 @@ public struct TVDanmakuSettingsDrawer: View {
         .sheet(isPresented: $showingLibrary) {
             TVUniversalDanmakuControls(session: viewModel.universalDanmaku, onChanged: viewModel.reloadDanmaku)
         }
+        .sheet(isPresented: $showingDisplay) { TVDanmakuDisplayControls(viewModel: viewModel) }
         .onExitCommand {
             isPresented = false
         }
@@ -725,6 +667,83 @@ public struct TVSpeedSelectionDrawer: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 focusedSpeed = matched
             }
+        }
+    }
+}
+
+@MainActor
+public struct TVDanmakuDisplayControls: View {
+    @ObservedObject var viewModel: PlayerViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var words = ""
+    private func field<T>(_ key: WritableKeyPath<TVDanmakuStyle, T>) -> Binding<T> {
+        Binding(get: { viewModel.danmakuStyle[keyPath: key] }, set: { value in
+            var next = viewModel.danmakuStyle; next[keyPath: key] = value; viewModel.updateDanmakuStyle(next)
+        })
+    }
+    public var body: some View {
+        NavigationStack {
+            Form {
+                display
+                layout
+                filtering
+                Button("恢复默认样式与过滤") { viewModel.updateDanmakuStyle(TVDanmakuStyle()); words = "" }
+                Text("保留数据源、匹配记录和分集时间偏移。")
+                Button("完成") { dismiss() }
+            }.navigationTitle("弹幕显示与高级设置")
+        }
+        .onAppear { words = viewModel.danmakuStyle.keywords.joined(separator: "，") }
+        .onExitCommand { dismiss() }
+    }
+    private var display: some View {
+        Section("文字显示") {
+            Text("这是一条弹幕效果预览")
+                .font(.system(size: viewModel.danmakuStyle.fontSize, weight: .bold))
+                .opacity(viewModel.danmakuStyle.opacity)
+            Picker("字体大小", selection: field(\.fontSize)) {
+                Text("小").tag(CGFloat(20)); Text("标准").tag(CGFloat(26)); Text("大").tag(CGFloat(34)); Text("特大").tag(CGFloat(40))
+            }
+            Picker("不透明度", selection: field(\.opacity)) {
+                ForEach([0.1, 0.25, 0.4, 0.6, 0.8, 1.0], id: \.self) { value in Text("\(Int(value * 100))%").tag(value) }
+            }
+            Toggle("使用 API 原色", isOn: field(\.useOriginalColor))
+            if !viewModel.danmakuStyle.useOriginalColor {
+                Picker("统一颜色", selection: field(\.color)) {
+                    Text("白色").tag(0xffffff); Text("柔黄").tag(0xffe6a7); Text("浅蓝").tag(0xa5e8ff); Text("薄荷").tag(0xc7f4c2); Text("浅粉").tag(0xffc8dd)
+                }
+            }
+            Toggle("细描边", isOn: field(\.outline))
+            Toggle("柔和阴影", isOn: field(\.shadow))
+        }
+    }
+    private var layout: some View {
+        Section("画面布局") {
+            Picker("滚动与顶部弹幕区域", selection: field(\.displayArea)) {
+                ForEach([0.25, 0.4, 0.5, 0.75, 1.0], id: \.self) { value in Text(value == 1 ? "全屏" : "\(Int(value * 100))%").tag(value) }
+            }
+            Picker("最多显示行数", selection: field(\.laneCount)) { ForEach([4, 8, 12, 16], id: \.self) { Text("\($0) 行").tag($0) } }
+            Picker("弹幕密度", selection: field(\.density)) { Text("低 · 舒适").tag("low"); Text("中 · 均衡").tag("medium"); Text("高 · 热闹").tag("high") }
+            Picker("滚动速度", selection: field(\.speed)) { ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { Text(String(format: "%.2fx", $0)).tag($0) } }
+            Toggle("滚动弹幕", isOn: field(\.scroll))
+            Toggle("顶部固定", isOn: field(\.top))
+            Toggle("底部固定", isOn: field(\.bottom))
+            Toggle("字幕避让", isOn: field(\.subtitleSafe))
+        }
+    }
+    private var filtering: some View {
+        Section("内容过滤") {
+            TextField("屏蔽关键词，以逗号分隔", text: $words)
+            Button("保存关键词") {
+                var next = viewModel.danmakuStyle
+                var seen = Set<String>()
+                next.keywords = words.split(whereSeparator: { $0 == "," || $0 == "，" || $0 == "\n" })
+                    .map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60)) }
+                    .filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(100).map { $0 }
+                viewModel.updateDanmakuStyle(next)
+                words = next.keywords.joined(separator: "，")
+            }
+            Toggle("屏蔽彩色弹幕", isOn: field(\.blockColored))
+            Text("过滤来源中带颜色的弹幕。")
         }
     }
 }
