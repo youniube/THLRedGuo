@@ -3,6 +3,16 @@ import AVFoundation
 import Combine
 import SwiftUI
 
+enum PlaybackRetryPolicy {
+    static func delay(code: String, attempt: Int) -> UInt64? {
+        let delays: [UInt64] = ["EMPTY_RESPONSE", "RESPONSE_NOT_UTF8"].contains(code)
+            ? [1_000_000_000, 3_000_000_000]
+            : [500_000_000, 1_000_000_000, 2_000_000_000, 4_000_000_000, 6_000_000_000]
+        guard attempt > 0, attempt <= delays.count else { return nil }
+        return delays[attempt - 1]
+    }
+}
+
 @MainActor
 public final class PlayerViewModel: ObservableObject {
     @Published public var player: AVPlayer?
@@ -47,6 +57,7 @@ public final class PlayerViewModel: ObservableObject {
     private let repository: NativeRepository
     private let preloadingRepository: NativeRepository
     private let store: LocalStore
+    private let diagnostics: SourceDiagnostics
     private var timeObserverToken: Any?
     private var statusObserver: NSKeyValueObservation?
     private var timeControlObserver: NSKeyValueObservation?
@@ -95,6 +106,7 @@ public final class PlayerViewModel: ObservableObject {
         set { wantsPlayback = newValue }
     }
     private var recoveryAttempts = 0
+    private var stableRecoverySeconds = 0.0
     private var failedURL = ""
     private var decryptedURL: URL?
     private var itemNotifications: [NSObjectProtocol] = []
@@ -117,7 +129,8 @@ public final class PlayerViewModel: ObservableObject {
         preloadedPlan: PlaybackPlan? = nil,
         repository: NativeRepository = .shared,
         preloadingRepository: NativeRepository? = nil,
-        store: LocalStore = .shared
+        store: LocalStore = .shared,
+        diagnostics: SourceDiagnostics = .shared
     ) {
         self.drama = drama
         self.allEpisodes = allEpisodes
@@ -132,6 +145,7 @@ public final class PlayerViewModel: ObservableObject {
         self.preloadingRepository = preloadingRepository ?? .preloading
         self.store = store
         self.playbackEngine = store.playbackEngine
+        self.diagnostics = diagnostics
         self.danmakuEnabled = store.danmakuEnabled
         self.danmakuStyle = store.danmakuStyle
 
@@ -379,6 +393,7 @@ public final class PlayerViewModel: ObservableObject {
             }
         }
         reachedEnd = false
+        stableRecoverySeconds = 0
 
         if !recovering, playbackEngine != .mpv, let preloaded = preloadedEpisode, preloaded.episodeIndex == episodeIndex, preloaded.plan.isReusable() {
             preloadedEpisode = nil
@@ -510,15 +525,16 @@ public final class PlayerViewModel: ObservableObject {
             updateActiveDanmakus()
         } catch {
             guard current(), !(error is CancellationError) else { return }
-            requestRecovery(reason: error.localizedDescription, code: (error as NSError).userInfo["diagnosticCode"] as? String ?? "")
+            requestRecovery(reason: error.localizedDescription, error: error)
         }
     }
 
-    func requestRecovery(reason: String, code: String = "", allowCompatibility: Bool = false) {
+    func requestRecovery(reason: String, code: String = "", error: Error? = nil, allowCompatibility: Bool = false) {
         guard !closed, !reachedEnd, recoveryTask == nil else { return }
+        let code = recoveryCode(code, error: error)
+        stableRecoverySeconds = 0
         if allowCompatibility && mpvPlayer == nil && tryCompatibilityPlayback(seekTo: currentTime) { return }
-        let invalidBody = ["EMPTY_RESPONSE", "RESPONSE_NOT_UTF8"].contains(code)
-        guard recoveryAttempts < (invalidBody ? 2 : 5) else {
+        guard let delay = PlaybackRetryPolicy.delay(code: code, attempt: recoveryAttempts + 1) else {
             initializationTimer?.invalidate()
             healthTimer?.invalidate()
             player?.pause()
@@ -527,6 +543,7 @@ public final class PlayerViewModel: ObservableObject {
             isBuffering = false
             isLoading = false
             errorMessage = "当前分集重试后仍无法播放，请稍后重试。\n" + reason
+            recordRecovery(reason: reason, code: code, delay: nil)
             return
         }
         recoveryAttempts += 1
@@ -536,7 +553,7 @@ public final class PlayerViewModel: ObservableObject {
         let position = max(currentTime, playerTime.isFinite ? playerTime : 0)
         isLoading = true
         errorMessage = nil
-        let delay: UInt64 = invalidBody ? (recoveryAttempts == 1 ? 1_000_000_000 : 3_000_000_000) : 300_000_000
+        recordRecovery(reason: reason, code: code, delay: delay)
         NSLog("[PlayerVM] recovering episode=%d attempt=%d delayMs=%llu code=%@", episode, recoveryAttempts, delay / 1_000_000, SourceDiagnostics.safeCode(code))
         recoveryTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: delay) } catch { return }
@@ -576,6 +593,7 @@ public final class PlayerViewModel: ObservableObject {
         compatible.onUpdate = { [weak self, weak compatible] snapshot in
             guard let self, let compatible, self.mpvPlayer === compatible,
                   generation == self.playbackGeneration, !self.closed else { return }
+            self.observeRecoveryProgress(position: snapshot.position, previousPosition: self.currentTime, playing: snapshot.playing && !snapshot.buffering)
             self.currentTime = snapshot.position
             if snapshot.duration > 0 { self.duration = snapshot.duration }
             self.isPlaying = snapshot.playing && self.playIntent && self.isSceneActive
@@ -601,6 +619,46 @@ public final class PlayerViewModel: ObservableObject {
             self.requestRecovery(reason: message)
         }
         NSLog("[PlayerVM] compatibility playback episode=%d", currentEpisodeIndex)
+    }
+
+    private func recoveryCode(_ code: String, error: Error?) -> String {
+        if !code.isEmpty { return SourceDiagnostics.safeCode(code) }
+        guard let error = error as NSError? else { return "PLAYBACK_INTERRUPTED" }
+        if let code = error.userInfo["diagnosticCode"] as? String { return SourceDiagnostics.safeCode(code) }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error { return recoveryCode("", error: underlying) }
+        return error.domain == NSURLErrorDomain ? "MEDIA_NETWORK_\(abs(error.code))" : "PLAYER_\(abs(error.code))"
+    }
+
+    private func recordRecovery(reason: String, code: String, delay: UInt64?) {
+        let phase = plan == nil ? "取流" : (currentTime > 0 ? "媒体读取" : "媒体准备")
+        let waiting = delay.map { String($0 / 1_000_000) + "ms" } ?? "停止"
+        diagnostics.add(SourceDiagnosticEntry(
+            context: "播放器",
+            stage: "播放恢复 第\(currentEpisodeIndex)集",
+            host: URL(string: plan?.url ?? failedURL)?.host ?? "",
+            url: SourceDiagnostics.desensitizeUrl(plan?.url ?? failedURL),
+            errorCode: code,
+            errorDetail: SourceDiagnostics.redact(reason),
+            suggestion: delay == nil ? "自动恢复已达到上限，请扫码导出诊断报告。" : "正在保留进度自动恢复。",
+            sessionStatus: "剧=\(drama.sourceId)，进度=\(Int(currentTime))秒，恢复=\(recoveryAttempts)，延迟=\(waiting)，阶段=\(phase)"
+        ))
+    }
+
+    private func observeRecoveryProgress(position: Double, previousPosition: Double, playing: Bool) {
+        guard recoveryAttempts > 0 else { return }
+        let advance = position - previousPosition
+        guard advance > 0, advance < 2, playing, playIntent, isSceneActive else {
+            stableRecoverySeconds = 0
+            return
+        }
+        stableRecoverySeconds += advance
+        if stableRecoverySeconds >= 10 {
+            diagnostics.add(SourceDiagnosticEntry(context: "播放器", stage: "播放恢复成功 第\(currentEpisodeIndex)集", host: URL(string: plan?.url ?? "")?.host ?? "", sessionStatus: "剧=\(drama.sourceId)，进度=\(Int(position))秒，已稳定播放10秒"))
+            recoveryAttempts = 0
+            stableRecoverySeconds = 0
+            failedURL = ""
+            NSLog("[PlayerVM] recovery stable episode=%d position=%.2f", currentEpisodeIndex, position)
+        }
     }
 
     func startPlaybackWithItem(item: AVPlayerItem, seekTo: Double) {
@@ -700,7 +758,7 @@ public final class PlayerViewModel: ObservableObject {
                     NSLog("[PlayerVM] ready episode=%d duration=%.2f tracks=%d", self.currentEpisodeIndex, self.duration, observed.tracks.count)
                 case .failed:
                     self.isSeamlessTransitioning = false
-                    self.requestRecovery(reason: observed.error?.localizedDescription ?? "视频流加载失败", allowCompatibility: true)
+                    self.requestRecovery(reason: observed.error?.localizedDescription ?? "视频流加载失败", error: observed.error, allowCompatibility: true)
                 default:
                     break
                 }
@@ -743,6 +801,7 @@ public final class PlayerViewModel: ObservableObject {
                 guard let self, let av, self.player === av, generation == self.playbackGeneration, !self.closed, !self.isSeeking else { return }
                 let seconds = av.currentTime().seconds
                 guard seconds.isFinite else { return }
+                self.observeRecoveryProgress(position: seconds, previousPosition: self.lastObservedPosition, playing: av.timeControlStatus == .playing)
                 self.currentTime = seconds
                 if abs(seconds - self.lastObservedPosition) > 0.05 {
                     self.lastObservedPosition = seconds
@@ -765,11 +824,19 @@ public final class PlayerViewModel: ObservableObject {
                 await self.handlePlayEnded()
             }
         })
+        itemNotifications.append(center.addObserver(forName: .encryptedPlaybackFailed, object: item.asset, queue: .main) { [weak self] notification in
+            let error = notification.userInfo?[NSUnderlyingErrorKey] as? Error
+            Task { @MainActor in
+                guard let self, self.player === av, generation == self.playbackGeneration, !self.closed, self.playIntent else { return }
+                self.requestRecovery(reason: error?.localizedDescription ?? "视频分段读取失败", error: error)
+            }
+        })
         for name in [NSNotification.Name.AVPlayerItemFailedToPlayToEndTime, .AVPlayerItemPlaybackStalled] {
-            itemNotifications.append(center.addObserver(forName: name, object: item, queue: .main) { [weak self] _ in
+            itemNotifications.append(center.addObserver(forName: name, object: item, queue: .main) { [weak self] notification in
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
                 Task { @MainActor in
                     guard let self, self.player === av, generation == self.playbackGeneration, !self.closed, self.playIntent else { return }
-                    if name == .AVPlayerItemFailedToPlayToEndTime { self.requestRecovery(reason: "视频读取中断", allowCompatibility: true) }
+                    if name == .AVPlayerItemFailedToPlayToEndTime { self.requestRecovery(reason: "视频读取中断", error: error, allowCompatibility: true) }
                 }
             })
         }

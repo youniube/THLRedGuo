@@ -169,7 +169,7 @@ public final class SourceDiagnostics: ObservableObject {
     }
 
     public static var sourceRevision: String {
-        "JS " + String(sourceHash.prefix(12)) + " · 源提交 " + (sourceManifest["sourceCommit"] ?? "未记录")
+        "应用提交 " + String((sourceManifest["appCommit"] ?? "未记录").prefix(7)) + " · JS " + String(sourceHash.prefix(12)) + " · 源提交 " + (sourceManifest["sourceCommit"] ?? "未记录")
     }
 
     public static var sourceBundleStatus: String {
@@ -370,11 +370,10 @@ public final class SourceDiagnostics: ObservableObject {
                let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 let code = Self.safeCode(parsed["code"] ?? parsed["Code"] ?? parsed["status_code"])
                 if !code.isEmpty && code != "0" {
-                    let msg = parsed["message"] as? String ?? parsed["msg"] as? String ?? "平台业务拒绝"
                     return (
                         .businessRejected,
-                        "业务拦截 (代码 \(code)): \(msg)",
-                        "接口返回业务受限代码，当前游客凭据可能已过期，系统已自动重置会话。"
+                        "业务拦截 (代码 \(code))",
+                        "接口返回业务受限代码，请稍后重试并导出诊断；仅凭业务码不能确认游客会话过期。"
                     )
                 }
             }
@@ -461,9 +460,8 @@ public final class SourceDiagnostics: ObservableObject {
                 if !entry.businessCode.isEmpty && entry.businessCode != "0" {
                     entry.category = .businessRejected
                     entry.errorCode = "BUSINESS_REJECTED"
-                    let msg = parsed["message"] as? String ?? parsed["msg"] as? String ?? "业务错误"
-                    entry.errorDetail = "平台业务拦截 (代码 \(entry.businessCode)): \(msg)"
-                    entry.suggestion = "当前游客会话受限，请稍后重试或重新检测。"
+                    entry.errorDetail = "平台业务拦截 (代码 \(entry.businessCode))"
+                    entry.suggestion = "接口返回业务受限代码，请稍后重试或重新检测；仅凭业务码不能确认游客会话过期。"
                 } else if stage == "游客注册" {
                     let valid = [parsed["device_id_str"], parsed["install_id_str"]].allSatisfy { value in
                         guard let string = value as? String else { return false }
@@ -753,13 +751,13 @@ public final class SourceDiagnosticRunner: ObservableObject {
     public func run() async {
         guard !running else { return }
         running = true
-        result = "正在检查：网络与DNS、JS脚本引擎、游客注册、短剧搜索、选集详情…"
+        result = "正在检查：网络与DNS、JS脚本引擎、游客会话、短剧搜索、选集详情…"
         let recorder = SourceDiagnostics.shared
         let context = "主动检测 " + ISO8601DateFormatter().string(from: Date())
         async let network: Void = recorder.refreshNetworkEgress(force: true)
         defer { running = false }
 
-        let bridge = NativeBridge(diagnostics: recorder, diagnosticContext: context, persistentDeviceSession: false)
+        let bridge = NativeBridge(diagnostics: recorder, diagnosticContext: context)
         var stage = "搜索第一页"
         do {
             let first = try await bridge.request(
@@ -802,14 +800,16 @@ public final class SourceDiagnosticRunner: ObservableObject {
                     throw err
                 }
                 stage = "播放流解析"
-                let plan = try await bridge.request(action: "resolve", payload: ["source": "hongguo", "drama": detail["drama"] as? [String: Any] ?? drama, "chapter": chapter, "index": 1])
+                recorder.add(SourceDiagnosticEntry(context: context, stage: "检测分集", sessionStatus: "剧=\(drama["sourceId"] as? String ?? "")，集=1"))
+                result = "搜索与详情已通过，正在检查所选分集的播放解析…"
+                let plan = try await Self.resolvePlayback(bridge: bridge, payload: ["source": "hongguo", "drama": detail["drama"] as? [String: Any] ?? drama, "chapter": chapter, "index": 1])
                 guard let url = plan["url"] as? String, !url.isEmpty else {
                     throw NSError(domain: "SourceDiagnostic", code: 4, userInfo: [NSLocalizedDescriptionKey: "播放接口未返回可用地址", "diagnosticCode": "NO_STREAM_URL"])
                 }
                 recorder.add(SourceDiagnosticEntry(context: context, stage: stage, count: 1))
             }
 
-            result = "检测完成：JS引擎、游客注册、搜索\(more ? "、分页" : "")、详情与播放解析通过"
+            result = "检测完成：JS引擎、游客会话、搜索\(more ? "、分页" : "")、详情与播放解析通过"
         } catch {
             let nsErr = error as NSError
             let errorMsg = error.localizedDescription
@@ -848,8 +848,25 @@ public final class SourceDiagnosticRunner: ObservableObject {
                 searchTabsSummary: tabs,
                 sessionStatus: session
             ))
-            result = "检测失败：【\(cat.tag)】\(stage) - \(reason)"
+            let passed = stage == "播放流解析" ? "搜索与详情已通过；所选分集" : ""
+            result = "检测失败：" + passed + "【\(cat.tag)】\(stage) - \(reason)"
         }
         await network
     }
+
+    static func resolvePlayback(bridge: NativeBridge, payload: [String: Any]) async throws -> [String: Any] {
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            do { return try await bridge.request(action: "resolve", payload: payload) }
+            catch {
+                if error is CancellationError { throw error }
+                attempt += 1
+                let code = (error as NSError).userInfo["diagnosticCode"] as? String ?? ""
+                guard let delay = PlaybackRetryPolicy.delay(code: code, attempt: attempt) else { throw error }
+                try await Task.sleep(nanoseconds: delay)
+            }
+        }
+    }
+
 }

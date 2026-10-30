@@ -1235,6 +1235,14 @@ class DartCoreEngine {
     );
     if (cancelled()) throw CatPawSourceFailure.playback('cancelled');
     if (rt != null) {
+      const recoverableEpisodeCodes = {
+        '',
+        'NO_STREAM',
+        'NO_STREAM_URL',
+        'MISSING_EPISODE',
+        'MISSING_MODEL',
+        'INVALID_SELECTION',
+      };
       final flags = <Map<String, dynamic>>[
         {
           'quality': requestedQuality,
@@ -1282,7 +1290,9 @@ class DartCoreEngine {
           if (playRes.url.isEmpty &&
               playRes.streams.isEmpty &&
               sourceId.isNotEmpty &&
-              routes.length == 1) {
+              routes.length == 1 &&
+              (source != 'hongguo' ||
+                  recoverableEpisodeCodes.contains(playRes.errorCode))) {
             final fallbackTarget = '${sourceId}_$episodeIndex';
             if (!attempted.contains('$flag\u0000$fallbackTarget') &&
                 remaining() > Duration.zero) {
@@ -1294,13 +1304,21 @@ class DartCoreEngine {
             resultNames.add(flag);
           } else {
             sourceFailure = CatPawSourceFailure.playback(playRes.errorCode);
-            retryFromDetail = true;
+            retryFromDetail =
+                source != 'hongguo' ||
+                recoverableEpisodeCodes.contains(playRes.errorCode);
+            if (!retryFromDetail) break;
           }
         } catch (error) {
           if (error is CatPawSourceFailure && error.code == 'cancelled') {
             rethrow;
           }
           sourceFailure = error;
+          if (source == 'hongguo' &&
+              error is CatPawSourceFailure &&
+              !recoverableEpisodeCodes.contains(error.code)) {
+            break;
+          }
           retryFromDetail =
               error is CatPawSourceFailure &&
               {'MISSING_EPISODE', 'INVALID_SELECTION'}.contains(error.code);

@@ -1195,7 +1195,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       _preloader.clear();
       return;
     }
-    if (!headroom || remaining > (30000 * _speed).round()) {
+    if (!headroom ||
+        !PlaybackPreloader.shouldPrepare(
+          duration: state.duration,
+          position: state.position,
+          rate: _speed,
+        )) {
       _preloader.pause();
       return;
     }

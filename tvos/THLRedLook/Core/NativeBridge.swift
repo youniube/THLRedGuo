@@ -1,6 +1,18 @@
 import Foundation
 import JavaScriptCore
 
+private enum SavedGuestSession {
+    static func valid(_ json: String) -> Bool {
+        guard let data = json.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return ["iid", "device_id"].allSatisfy { key in
+            guard let id = value[key] as? String else { return false }
+            return id.range(of: "^[1-9][0-9]{9,23}$", options: .regularExpression) != nil
+        }
+    }
+
+}
+
 final class HttpTraceHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var _url = ""
@@ -9,6 +21,8 @@ final class HttpTraceHolder: @unchecked Sendable {
     private var _logId = ""
     private var _snippet = ""
     private var _tabsSummary = ""
+    private var _guestCreatedAt: TimeInterval = 0
+    private var _guestJSON = ""
 
     func record(url: String, method: String, status: Int, logId: String, snippet: String, tabsSummary: String) {
         lock.lock()
@@ -19,6 +33,17 @@ final class HttpTraceHolder: @unchecked Sendable {
         _logId = logId
         _snippet = snippet
         _tabsSummary = tabsSummary
+    }
+
+    func recordGuest(json: String, createdAt: TimeInterval) {
+        lock.withLock {
+            _guestJSON = json
+            _guestCreatedAt = createdAt
+        }
+    }
+
+    var guestSnapshot: (json: String, createdAt: TimeInterval) {
+        lock.withLock { (_guestJSON, _guestCreatedAt) }
     }
 
     var snapshot: (url: String, method: String, status: Int, logId: String, snippet: String, tabsSummary: String) {
@@ -38,7 +63,11 @@ public actor NativeBridge {
     private let diagnostics: SourceDiagnostics
     private let diagnosticContext: String
     private let persistentDeviceSession: Bool
+    private let deviceDefaults: UserDefaults
     private let httpTrace = HttpTraceHolder()
+    private var successfulPlaybackResolves = 0
+    private var lastSuccessfulPlaybackAt: TimeInterval?
+    private let timeProvider: @Sendable () -> TimeInterval
 
     // 沙盒路径
     private var baseDirURL: URL
@@ -52,7 +81,7 @@ public actor NativeBridge {
     // JS 运行时上下文缓存
     private var jsContexts: [String: JSContext] = [:]
 
-    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用", persistentDeviceSession: Bool = true) {
+    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用", persistentDeviceSession: Bool = true, deviceDefaults: UserDefaults = .standard, timeProvider: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         if let httpSession {
             self.httpSession = httpSession
         } else {
@@ -62,12 +91,17 @@ public actor NativeBridge {
             config.timeoutIntervalForResource = 15.0
             config.requestCachePolicy = .useProtocolCachePolicy
             config.httpShouldUsePipelining = true
+            config.httpCookieAcceptPolicy = .never
+            config.httpShouldSetCookies = false
+            config.httpCookieStorage = nil
             config.urlCache = URLCache(memoryCapacity: 20 * 1024 * 1024, diskCapacity: 100 * 1024 * 1024)
             self.httpSession = URLSession(configuration: config)
         }
         self.diagnostics = diagnostics
         self.diagnosticContext = diagnosticContext
         self.persistentDeviceSession = persistentDeviceSession
+        self.deviceDefaults = deviceDefaults
+        self.timeProvider = timeProvider
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.baseDirURL = baseDirectory ?? cachesDir.appendingPathComponent("THLRedLook_Data")
@@ -202,6 +236,7 @@ public actor NativeBridge {
     /// 获取或构建指定数据源的 CatPawOpen JS 运行时上下文
     private func getOrCreateContext(sourceId: String) -> JSContext? {
         if let existing = jsContexts[sourceId] {
+            synchronizeGuestSession(existing, sourceId: sourceId)
             return existing
         }
 
@@ -209,6 +244,10 @@ public actor NativeBridge {
             return nil
         }
 
+        if sourceId == "hongguo" {
+            successfulPlaybackResolves = 0
+            lastSuccessfulPlaybackAt = nil
+        }
         guard let context = JSContext() else {
             return nil
         }
@@ -223,14 +262,22 @@ public actor NativeBridge {
         context.setObject(logBlock, forKeyedSubscript: "__console_log" as NSString)
 
         // 1.5 注入官方设备认证持久化桥接，避免每次冷启动/重新初始化产生额外的设备注册网络延迟
+        let trace = httpTrace
+        trace.recordGuest(json: "", createdAt: 0)
+        let currentTime = timeProvider
         let persistentSession = persistentDeviceSession
+        let deviceDefaults = deviceDefaults
         let saveDeviceBlock: @convention(block) (String) -> Void = { json in
             guard persistentSession, !json.isEmpty else { return }
-            UserDefaults.standard.set(json, forKey: "thl_tv_hongguo_device_session")
+            deviceDefaults.set(json, forKey: "thl_tv_hongguo_device_session")
+            let created = currentTime()
+            deviceDefaults.set(created, forKey: "thl_tv_hongguo_guest_created_at")
+            trace.recordGuest(json: json, createdAt: created)
         }
         context.setObject(saveDeviceBlock, forKeyedSubscript: "__native_save_device" as NSString)
 
-        if persistentDeviceSession, let cachedDevice = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session"), !cachedDevice.isEmpty {
+        if persistentDeviceSession, let cachedDevice = deviceDefaults.string(forKey: "thl_tv_hongguo_device_session"), SavedGuestSession.valid(cachedDevice) {
+            trace.recordGuest(json: cachedDevice, createdAt: deviceDefaults.double(forKey: "thl_tv_hongguo_guest_created_at"))
             context.evaluateScript("""
             try {
                 var raw = \(cachedDevice.debugDescription);
@@ -243,7 +290,6 @@ public actor NativeBridge {
         let session = httpSession
         let recorder = diagnostics
         let diagnosticContext = diagnosticContext
-        let trace = httpTrace
         let fetchBlock: @convention(block) (String, [String: Any]?) -> [String: Any] = { urlStr, opts in
             guard let url = URL(string: urlStr) else {
                 return [
@@ -263,6 +309,7 @@ public actor NativeBridge {
             req.timeoutInterval = timeout
             let method = (opts?["method"] as? String ?? "GET").uppercased()
             req.httpMethod = method
+            req.httpShouldHandleCookies = false
             if let headers = opts?["headers"] as? [String: Any] {
                 for (k, v) in headers {
                     req.setValue(String(describing: v), forHTTPHeaderField: k)
@@ -476,6 +523,33 @@ public actor NativeBridge {
         return context
     }
 
+    private func synchronizeGuestSession(_ context: JSContext, sourceId: String) {
+        guard persistentDeviceSession, sourceId == "hongguo",
+              let latest = deviceDefaults.string(forKey: "thl_tv_hongguo_device_session"),
+              SavedGuestSession.valid(latest) else { return }
+        let created = deviceDefaults.double(forKey: "thl_tv_hongguo_guest_created_at")
+        let current = httpTrace.guestSnapshot
+        let currentCreated = current.createdAt
+        if latest == current.json {
+            if created > currentCreated { httpTrace.recordGuest(json: latest, createdAt: created) }
+            return
+        }
+        guard created <= 0 || currentCreated <= 0 || created >= currentCreated else { return }
+        let applied = context.evaluateScript("""
+        (function() {
+            if (typeof HongguoApp === 'undefined' || typeof HongguoApp.resetGuestSession !== 'function') return false;
+            HongguoApp.resetGuestSession();
+            globalThis.__hongguoCachedDevice = JSON.parse(\(latest.debugDescription));
+            return true;
+        })()
+        """)?.toBool() == true
+        guard applied else { return }
+        httpTrace.recordGuest(json: latest, createdAt: created)
+        successfulPlaybackResolves = 0
+        lastSuccessfulPlaybackAt = nil
+        diagnostics.add(SourceDiagnosticEntry(context: diagnosticContext, stage: "游客会话同步", sessionStatus: "请求前载入其他运行环境更新的游客会话，保留搜索和详情缓存"))
+    }
+
     private func spiderExpression(_ method: String, _ arguments: [Any]) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: arguments, options: [.fragmentsAllowed])
         return "spider.\(method).apply(spider, \(String(decoding: data, as: UTF8.self)))"
@@ -532,9 +606,18 @@ public actor NativeBridge {
         } : nil
         let category: DiagnosticCategory
         let description: String
-        if code.hasPrefix("MEDIA_HTTP_") || code.hasPrefix("HTTP_") {
+        if code == "MEDIA_URL_EXPIRED" {
+            category = .invalidResponse
+            description = "本集媒体地址已经过期，请重新获取"
+        } else if code.hasPrefix("MEDIA_HTTP_") {
             category = .httpError
-            description = "官方播放或媒体节点请求失败"
+            description = "本集媒体节点拒绝当前地址或暂不可用"
+        } else if code == "HTTP_429" {
+            category = .httpError
+            description = "官方播放接口请求过于频繁，请稍后再试"
+        } else if code.hasPrefix("HTTP_") {
+            category = .httpError
+            description = "官方播放接口请求失败"
         } else if code.hasPrefix("DNS") { category = .dnsError; description = "播放接口域名解析失败" }
         else if code.hasPrefix("TIMEOUT") || code == "ETIMEDOUT" { category = .networkTimeout; description = "播放接口请求超时" }
         else if ["BUSINESS_REJECTED", "SECURITY_BLOCKED"].contains(code) { category = .businessRejected; description = "官方播放接口暂时拒绝当前请求" }
@@ -542,9 +625,13 @@ public actor NativeBridge {
         else if code == "RESPONSE_NOT_UTF8" { category = .invalidResponse; description = "官方播放接口返回了无法解码的数据" }
         else { category = .invalidResponse; description = "官方暂未返回可用的当前分集播放流" }
         let detail = SourceDiagnostics.redact(message.isEmpty ? description : message)
+        let created = httpTrace.guestSnapshot.createdAt
+        let age = created > 0 ? String(max(0, Int(timeProvider() - created))) + "秒" : "未记录"
+        let lastSuccess = lastSuccessfulPlaybackAt.map { String(max(0, Int(timeProvider() - $0))) + "秒前" } ?? "本次运行尚未成功"
+        let sessionStatus = "游客会话创建距今：\(age)；本桥接成功取流：\(successfulPlaybackResolves)次；最近成功：\(lastSuccess)"
         let advice = upstream?.suggestion ?? "请保留当前剧集与集数，并在设置的数据源诊断中扫码导出报告。"
-        diagnostics.add(SourceDiagnosticEntry(context: diagnosticContext, stage: "播放取流 第\(episode)集", host: upstream?.host ?? URL(string: trace.url)?.host ?? "", url: upstream?.url ?? trace.url, method: upstream?.method ?? trace.method, logId: upstream?.logId ?? trace.logId, status: upstream?.status ?? trace.status, errorCode: code, category: category, errorDetail: detail, suggestion: advice, responseSnippet: upstream?.responseSnippet ?? trace.snippet, bodyBytes: upstream?.bodyBytes, contentType: upstream?.contentType ?? "", contentEncoding: upstream?.contentEncoding ?? "", declaredBodyBytes: upstream?.declaredBodyBytes))
-        return NSError(domain: "CatPawOpen.Playback", code: -2, userInfo: [NSLocalizedDescriptionKey: detail + "（" + code + "）", "diagnosticCode": code, "diagnosticCategory": category.rawValue, "diagnosticAdvice": advice])
+        diagnostics.add(SourceDiagnosticEntry(context: diagnosticContext, stage: "播放取流 第\(episode)集", host: upstream?.host ?? URL(string: trace.url)?.host ?? "", url: upstream?.url ?? trace.url, method: upstream?.method ?? trace.method, logId: upstream?.logId ?? trace.logId, status: upstream?.status ?? trace.status, errorCode: code, category: category, errorDetail: detail, suggestion: advice, responseSnippet: upstream?.responseSnippet ?? trace.snippet, sessionStatus: sessionStatus, bodyBytes: upstream?.bodyBytes, contentType: upstream?.contentType ?? "", contentEncoding: upstream?.contentEncoding ?? "", declaredBodyBytes: upstream?.declaredBodyBytes))
+        return NSError(domain: "CatPawOpen.Playback", code: -2, userInfo: [NSLocalizedDescriptionKey: detail + "（" + code + "）", "diagnosticCode": code, "diagnosticCategory": category.rawValue, "diagnosticAdvice": advice, "diagnosticSession": sessionStatus])
     }
 
     /// 将 vod_* 数据结构转换为应用统一的 Drama 字典
@@ -742,7 +829,10 @@ public actor NativeBridge {
             guard !script.isEmpty else { return ["ok": false, "active": activeSourceId] }
             try script.write(to: hongguoFile, atomically: true, encoding: .utf8)
 
-            if persistentDeviceSession { UserDefaults.standard.removeObject(forKey: "thl_tv_hongguo_device_session") }
+            if persistentDeviceSession {
+                deviceDefaults.set("", forKey: "thl_tv_hongguo_device_session")
+                deviceDefaults.removeObject(forKey: "thl_tv_hongguo_guest_created_at")
+            }
             httpSession.configuration.urlCache?.removeAllCachedResponses()
             jsContexts.removeValue(forKey: "hongguo")
             scanSourcesDirectory()
@@ -804,13 +894,16 @@ public actor NativeBridge {
                         errCat = .jsError
                     }
                     if targetSrc == "hongguo" && errCat == .businessRejected {
-                        if persistentDeviceSession { UserDefaults.standard.removeObject(forKey: "thl_tv_hongguo_device_session") }
+                        if persistentDeviceSession {
+                            deviceDefaults.set("", forKey: "thl_tv_hongguo_device_session")
+                            deviceDefaults.removeObject(forKey: "thl_tv_hongguo_guest_created_at")
+                        }
                         jsContexts.removeValue(forKey: targetSrc)
                     }
                     let errDetail = "搜索执行失败: \(errMsg)"
                     let advice = SourceDiagnostics.advice(SourceDiagnosticEntry(context: diagnosticContext, stage: "搜索执行", errorCode: rawCode, category: errCat, errorDetail: errDetail))
                     let trace = httpTrace.snapshot
-                    let hasCached = persistentDeviceSession && UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session") != nil
+                    let hasCached = persistentDeviceSession && !(deviceDefaults.string(forKey: "thl_tv_hongguo_device_session") ?? "").isEmpty
                     let sessionStatus = hasCached ? "使用本地缓存设备凭据" : "全新游客会话"
                     diagnostics.add(SourceDiagnosticEntry(
                         context: diagnosticContext,
@@ -1032,6 +1125,7 @@ public actor NativeBridge {
                     "avoidUrl": payload["avoidUrl"] as? String ?? ""
                 ]]
                 let scriptExpr = try spiderExpression("play", ["", rawUrl, flags])
+                let started = Date()
                 let res = evalAsync(context: ctx, scriptExpr: scriptExpr)
                 try Task.checkCancellation()
                 let data = res?["data"] as? [String: Any]
@@ -1040,8 +1134,28 @@ public actor NativeBridge {
                       !url.isEmpty, !url.contains("example.com") else {
                     let code = SourceDiagnostics.safeCode(res?["code"] ?? data?["error"])
                     if code == "CANCELLED" { throw CancellationError() }
+                    let guest = httpTrace.guestSnapshot
+                    if targetSrc == "hongguo", persistentDeviceSession, code == "EMPTY_RESPONSE", payload["guestSynchronizationAttempted"] as? Bool != true, !guest.json.isEmpty {
+                        let failures = diagnostics.entries.filter { $0.context == diagnosticContext && $0.stage == "播放解析" && $0.at >= started }
+                        if failures.count == 4, failures.allSatisfy({ $0.status == 200 && $0.bodyBytes == 0 && $0.errorCode == "EMPTY_RESPONSE" }) {
+                            let latest = deviceDefaults.string(forKey: "thl_tv_hongguo_device_session")
+                            let latestCreated = deviceDefaults.double(forKey: "thl_tv_hongguo_guest_created_at")
+                            let updated = latest.map {
+                                SavedGuestSession.valid($0) && $0 != guest.json &&
+                                    (latestCreated <= 0 || guest.createdAt <= 0 || latestCreated >= guest.createdAt)
+                            } ?? false
+                            if updated {
+                                diagnostics.add(SourceDiagnosticEntry(context: diagnosticContext, stage: "游客会话同步", sessionStatus: "已载入其他请求更新的游客会话"))
+                                var retry = payload
+                                retry["guestSynchronizationAttempted"] = true
+                                return try await request(action: "resolve", payload: retry)
+                            }
+                        }
+                    }
                     throw playbackFailure(code: code.isEmpty ? "NO_STREAM_URL" : code, message: res?["error"] as? String ?? "", episode: epIndex)
                 }
+                successfulPlaybackResolves += 1
+                lastSuccessfulPlaybackAt = timeProvider()
                 targetUrl = url
                 danmakuId = data["danmakuId"] as? String ?? ""
                 contentKey = data["decryptionKey"] as? String ?? ""
