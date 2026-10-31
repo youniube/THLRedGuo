@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_js/flutter_js.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'hongguo_guest_session.dart';
 
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
@@ -136,6 +137,7 @@ class CatPawJsRuntime {
   String? _injectedDeviceSession;
   DateTime? _injectedDeviceCreatedAt;
   bool _officialSource = false;
+  String _storageSourceId = '';
   int _successfulPlaybackResolves = 0;
   DateTime? _lastSuccessfulPlayback;
   int _evaluationSequence = 0;
@@ -207,13 +209,12 @@ typeof spider === 'object' && spider !== null &&
     if (result.isError) {
       throw Exception('JS 脚本加载失败: ${result.rawResult}');
     }
-    _officialSource =
-        _rt
-            .evaluate(
-              'typeof spider !== "undefined" && spider.meta ? String(spider.meta.id) : ""',
-            )
-            .stringResult ==
-        'hongguo';
+    _storageSourceId = _rt
+        .evaluate(
+          'typeof spider !== "undefined" && spider.meta ? String(spider.meta.id) : ""',
+        )
+        .stringResult;
+    _officialSource = _storageSourceId == 'hongguo';
     _ready = true;
   }
 
@@ -337,11 +338,58 @@ globalThis.__native_save_device = function(json) {
 ''');
   }
 
+  Future<Map<String, dynamic>> _executeStorage(
+    Map<String, dynamic> operation,
+  ) async {
+    final key = operation['key'];
+    final action = operation['action'];
+    if (_storageSourceId.isEmpty ||
+        _storageSourceId.length > 256 ||
+        key is! String ||
+        key.isEmpty ||
+        key.length > 512 ||
+        !{'get', 'set', 'remove'}.contains(action)) {
+      throw const FormatException('源存储参数无效');
+    }
+    final cancellation = _cancellation;
+    final preferences = await SharedPreferences.getInstance();
+    if (_isDisposed || cancellation != _cancellation) {
+      throw StateError('源存储请求已取消');
+    }
+    final storageKey =
+        'js_source_data:${base64Url.encode(utf8.encode(_storageSourceId))}:${base64Url.encode(utf8.encode(key))}';
+    Object? value;
+    if (action == 'get') {
+      final saved = preferences.getString(storageKey);
+      value = saved == null ? null : jsonDecode(saved);
+    } else if (action == 'set') {
+      final encoded = jsonEncode(operation['value']);
+      if (utf8.encode(encoded).length > 1024 * 1024) {
+        throw const FormatException('源存储内容超过限制');
+      }
+      if (!await preferences.setString(storageKey, encoded)) {
+        throw StateError('源存储写入失败');
+      }
+    } else if (!await preferences.remove(storageKey)) {
+      throw StateError('源存储删除失败');
+    }
+    return {
+      'status': 200,
+      'headers': <String, String>{},
+      'body': jsonEncode(value),
+    };
+  }
+
   Future<Map<String, dynamic>> _executeFetch(
     Map<String, dynamic> params,
   ) async {
     if (_isDisposed) {
       return {'status': 0, 'headers': <String, String>{}, 'body': ''};
+    }
+    if (params['storage'] is Map) {
+      return _executeStorage(
+        Map<String, dynamic>.from(params['storage'] as Map),
+      );
     }
     _activeRequests++;
     String url = '';
@@ -358,6 +406,8 @@ globalThis.__native_save_device = function(json) {
         });
       }
       final body = params['body']?.toString();
+      final bodyBase64 = params['bodyBase64']?.toString();
+      final binaryResponse = params['responseEncoding'] == 'base64';
 
       final uri = Uri.parse(url);
       final officialMetadata =
@@ -370,7 +420,8 @@ globalThis.__native_save_device = function(json) {
             '/reading/bookapi/bookmall/tab/v',
             '/reading/bookapi/bookmall/cell/change/v',
           }.contains(uri.path);
-      final responseLimit = (officialMetadata ? 12 : 2) * 1024 * 1024;
+      final responseLimit =
+          (officialMetadata ? 12 : (binaryResponse ? 4 : 2)) * 1024 * 1024;
       final abort = Completer<void>();
       _requestAborts.add(abort);
       final timeoutMs = ((params['timeoutMs'] as num?)?.toInt() ?? 20000).clamp(
@@ -387,8 +438,16 @@ globalThis.__native_save_device = function(json) {
             http.AbortableRequest(method, uri, abortTrigger: abort.future)
               ..headers.addAll(headers)
               ..followRedirects = params['redirect'] != 'manual';
-        if (body != null && method != 'HEAD' && method != 'GET') {
-          request.body = body;
+        if (method != 'HEAD' && method != 'GET') {
+          if (bodyBase64 != null) {
+            final decoded = base64Decode(bodyBase64);
+            if (decoded.length > 2 * 1024 * 1024) {
+              throw const FormatException('请求正文超过限制');
+            }
+            request.bodyBytes = decoded;
+          } else if (body != null) {
+            request.body = body;
+          }
         }
         final response = await _httpClient
             .send(request)
@@ -421,7 +480,7 @@ globalThis.__native_save_device = function(json) {
         context: diagnosticContext,
         elapsedMs: clock.elapsedMilliseconds,
         status: resp.statusCode,
-        body: resp.body,
+        body: binaryResponse ? '' : resp.body,
         headers: resp.headers,
         method: method,
         sessionStatus: _guestStatus,
@@ -434,7 +493,8 @@ globalThis.__native_save_device = function(json) {
       return {
         'status': resp.statusCode,
         'headers': resp.headers,
-        'body': resp.body,
+        'body': binaryResponse ? base64Encode(resp.bodyBytes) : resp.body,
+        'encoding': binaryResponse ? 'base64' : 'text',
       };
     } catch (e) {
       final entry = diagnostics.record(
@@ -1245,6 +1305,20 @@ globalThis.__pollEval = function(id) {
 globalThis.__fetchReqId = 0;
 globalThis.__fetchPendingQueue = [];
 globalThis.__fetchWaiters = {};
+globalThis.__sourceCapabilities = { binaryFetch: true, storage: true };
+
+globalThis.__sourceStorage = {};
+['get', 'set', 'remove'].forEach(function(action) {
+  globalThis.__sourceStorage[action] = function(key, value) {
+    var id = ++globalThis.__fetchReqId;
+    return new Promise(function(resolve, reject) {
+      globalThis.__fetchWaiters[id] = { resolve: resolve, reject: reject };
+      globalThis.__fetchPendingQueue.push({
+        id: id, storage: { action: action, key: key, value: value }
+      });
+    }).then(function(response) { return JSON.parse(response.body); });
+  };
+});
 
 globalThis.fetch = function(url, opts) {
   opts = opts || {};
@@ -1263,6 +1337,8 @@ globalThis.fetch = function(url, opts) {
       method: method,
       headers: headers,
       body: String(body),
+      bodyBase64: opts.bodyBase64,
+      responseEncoding: opts.responseEncoding,
       timeoutMs: opts.timeoutMs || 12000,
       redirect: opts.redirect || 'follow'
     });
@@ -1295,6 +1371,7 @@ globalThis.__resolveFetch = function(id, respObj) {
       ok: status >= 200 && status < 300,
       headers: respHeaders,
       body: respBody,
+      encoding: respObj.encoding || 'text',
       text: async function() { return respBody; },
       json: async function() {
         try {

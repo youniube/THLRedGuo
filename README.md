@@ -201,6 +201,10 @@ return {
 
 未知 MP4 画质需要源站提供元数据；自动模式不会为比较线路而完整下载或预解码视频。tvOS 使用独立 Swift 播放链路，扩展字段的支持以该实现为准。
 
+Flutter JS 网络桥支持可选的 `bodyBase64` 请求正文和 `responseEncoding: "base64"` 二进制响应。请求正文在设备端还原为字节发送；二进制响应的 `body`、`text()` 返回 Base64 字符串，`encoding` 为 `"base64"`。脚本可通过 `globalThis.__sourceCapabilities.binaryFetch` 核对支持情况。二进制请求上限为 2 MiB，二进制响应上限为 4 MiB，普通文本请求保持原有行为。
+
+需要跨运行时保存游客身份或分页状态时，可使用 `globalThis.__sourceStorage.get(key)`、`set(key, value)` 和 `remove(key)`，均返回 Promise。数据按脚本 `meta.id` 隔离并保存在设备上，详情、播放和预加载可复用；键最多 512 个字符，单个 JSON 值最多 1 MiB。脚本应保存稳定身份并在失败时重试，不能依赖某次详情调用的内存变量。网络请求、数据计算和支持的内容解密均可在设备端执行。
+
 ## 目录结构概览
 
 ```
