@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -147,7 +148,9 @@ class Fixture {
     );
     runtimes.add(runtime);
     await runtime.init(
-      await rootBundle.loadString('assets/sources/hongguo.js'),
+      prepareHongguoFixtureSource(
+        await rootBundle.loadString('assets/sources/hongguo.js'),
+      ),
     );
     return runtime;
   }

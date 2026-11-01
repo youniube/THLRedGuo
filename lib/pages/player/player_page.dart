@@ -1738,7 +1738,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         PlaybackRecoveryAction.cache => '正在尝试本集缓存解密',
         PlaybackRecoveryAction.alternative => '正在切换备用线路',
         PlaybackRecoveryAction.refresh =>
-          '正在重新获取播放地址（${_recovery.attempts}/${PlaybackRecovery.maxAttempts}）',
+          '正在重新获取播放地址（${_recovery.attempts}/${_recovery.attemptLimit}）',
         _ => '正在准备播放',
       };
     });
@@ -1942,7 +1942,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     } catch (error) {
       DiaryService.add(
-        '[Play] 播放失败: 剧=${widget.detail.drama.cleanSourceId}, 集=${widget.detail.episodes[index].number}, 阶段=$failureStage, 恢复=${_recovery.attempts}/${PlaybackRecovery.maxAttempts}, ${playbackFailureSummary(error)}',
+        '[Play] 播放失败: 剧=${widget.detail.drama.cleanSourceId}, 集=${widget.detail.episodes[index].number}, 阶段=$failureStage, 恢复=${_recovery.attempts}/${PlaybackRecovery.attemptLimitFor(error is AppFailure ? error.code : '')}, ${playbackFailureSummary(error)}',
       );
       if (!_closed && mounted && ticket == _generation) {
         if (error is AppFailure && error.code == 'FEED_PREVIEW_UNAVAILABLE') {
@@ -1961,7 +1961,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             final failed = prepared ?? failedPlan ?? retained ?? recoveryPlan;
             final noAlternative =
                 error is AppFailure && error.code == 'NO_ALTERNATIVE';
-            final action = _recovery.next(noAlternative ? null : failed);
+            final action = _recovery.next(
+              noAlternative ? null : failed,
+              errorCode: error is AppFailure ? error.code : '',
+            );
             if (action != PlaybackRecoveryAction.stop) {
               if (failed != null) _plan = failed;
               unawaited(

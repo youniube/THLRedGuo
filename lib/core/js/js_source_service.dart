@@ -118,6 +118,15 @@ class JsSourceService extends ChangeNotifier {
           continue;
         }
         final script = await preset.loadScript();
+        final installed = _sources.where((source) => source.id == preset.id);
+        if (installed.any(
+          (source) => JsSourceMeta.isVersionNewer(
+            source.version,
+            JsSourceMeta.scriptVersion(script),
+          ),
+        )) {
+          continue;
+        }
         await _repository.jsSourceSaveAndLoad(script, preset.fileName);
       }
       _sources = await _repository.jsSourceList();

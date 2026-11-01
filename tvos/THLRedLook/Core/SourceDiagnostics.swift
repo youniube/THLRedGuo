@@ -13,6 +13,7 @@ public enum DiagnosticCategory: String, CaseIterable, Codable {
     case httpError = "http_error"             // HTTP 服务端返回非 2xx 异常
     case businessRejected = "business_reject" // 平台服务端业务拦截/频控
     case invalidResponse = "invalid_resp"     // 返回数据结构不符合规范
+    case configuration = "configuration"
     case unknown = "unknown"                  // 其他未知异常
 
     public var name: String {
@@ -26,6 +27,7 @@ public enum DiagnosticCategory: String, CaseIterable, Codable {
         case .httpError: return "HTTP服务端异常"
         case .businessRejected: return "业务风控拦截"
         case .invalidResponse: return "响应数据格式异常"
+        case .configuration: return "本机播放配置"
         case .unknown: return "未归类异常"
         }
     }
@@ -41,6 +43,7 @@ public enum DiagnosticCategory: String, CaseIterable, Codable {
         case .httpError: return "HTTP异常"
         case .businessRejected: return "风控拦截"
         case .invalidResponse: return "数据异常"
+        case .configuration: return "配置未就绪"
         case .unknown: return "检测失败"
         }
     }
@@ -142,16 +145,16 @@ public final class SourceDiagnostics: ObservableObject {
     public let objectWillChange = ObservableObjectPublisher()
     private let lock = NSLock()
     private var records: [SourceDiagnosticEntry] = []
-    private var sourceRuntimes: [String: (hash: String, ready: Bool)] = [:]
+    private var sourceRuntimes: [String: (hash: String, ready: Bool, importedVersion: String?)] = [:]
     private var networkResult: NetworkEgressResult?
     @MainActor private var networkTask: Task<Void, Never>?
 
     public init() {}
 
-    public func registerSourceRuntime(context: String, script: String, ready: Bool) {
+    public func registerSourceRuntime(context: String, script: String, ready: Bool, importedVersion: String? = nil) {
         let hash = Self.fingerprint(script)
         lock.lock()
-        sourceRuntimes[context] = (hash, ready)
+        sourceRuntimes[context] = (hash, ready, importedVersion)
         lock.unlock()
         NSLog("[Source] app=%@ context=%@ sha256=%@ ready=%d bundleMatch=%d", Self.version, context, hash, ready ? 1 : 0, hash == Self.sourceHash ? 1 : 0)
         DispatchQueue.main.async { self.objectWillChange.send() }
@@ -182,7 +185,8 @@ public final class SourceDiagnostics: ObservableObject {
         lock.unlock()
         return values.keys.sorted().map { key in
             let value = values[key]!
-            return key + " · SHA256 " + value.hash + " · " + (value.ready ? "已加载" : "加载失败")
+            return key + " · SHA256 " + value.hash + " · " + (value.ready ? "已加载" : "加载失败") +
+                (value.importedVersion.map { " · 导入版本 " + Self.redact(String($0.prefix(128))) } ?? "")
         }
     }
 
@@ -191,8 +195,10 @@ public final class SourceDiagnostics: ObservableObject {
         let values = Array(sourceRuntimes.values)
         lock.unlock()
         if values.isEmpty { return "运行 JS 尚未加载" }
-        return values.allSatisfy { $0.ready && $0.hash == Self.sourceHash }
-            ? "运行 JS 与本包一致" : "运行 JS 加载或版本校验异常，请导出诊断"
+        guard values.allSatisfy({ $0.ready && ($0.hash == Self.sourceHash || $0.importedVersion != nil) }) else {
+            return "运行 JS 加载或版本校验异常，请导出诊断"
+        }
+        return values.contains { $0.importedVersion != nil } ? "已加载导入的更新版 JS" : "运行 JS 与本包一致"
     }
 
     public var networkEgress: NetworkEgressResult? {
@@ -586,7 +592,7 @@ public final class SourceDiagnostics: ObservableObject {
                 value.replaceSubrange(range, with: desensitizeUrl(String(value[range])))
             }
         }
-        if let pattern = try? NSRegularExpression(pattern: #"(?i)(\"?(?:device_id(?:_str)?|install_id(?:_str)?|iid|openudid|cdid|cookie|authorization|access_token|refresh_token|device_token|session_id|token|password|query|keyword|search_word)\"?\s*[:=]\s*)(\"[^\"]*\"|[^\s,;]+)"#) {
+        if let pattern = try? NSRegularExpression(pattern: #"(?i)(\"?(?:configuration|common_key|sign_key|mLicensetStr|x[-_](?:gorgon|helios|medusa|argus|ladon)|device_id(?:_str)?|install_id(?:_str)?|iid|openudid|cdid|cookie|authorization|access_token|refresh_token|device_token|session_id|token|password|query|keyword|search_word)\"?\s*[:=]\s*)(\"[^\"]*\"|[^\s,;]+)"#) {
             value = pattern.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: "$1[已隐藏]")
         }
         return value
@@ -603,6 +609,14 @@ public final class SourceDiagnostics: ObservableObject {
 
     public static func advice(_ entry: SourceDiagnosticEntry) -> String {
         if !entry.suggestion.isEmpty { return entry.suggestion }
+        if entry.errorCode == "SOURCE_CONFIGURATION_MISSING" {
+            return "当前官方源为源码模板，请在站源管理中导入发布版 hongguo.js；开发构建需配置 HONGGUO_SIGNING_CONFIG。"
+        }
+        if entry.errorCode.hasPrefix("LOCAL_PROFILE_") {
+            return entry.errorCode == "LOCAL_PROFILE_UNAVAILABLE"
+                ? "本机签名缓存暂不可访问，请稍后重试。"
+                : "请更新 JS 数据源后重试，持续失败时导出诊断报告。"
+        }
         if entry.errorCode.hasPrefix("DNS") || entry.category == .dnsError {
             return "请检查当前网络的 DNS 或路由器屏蔽规则，并用手机热点作对照。"
         }
@@ -640,6 +654,7 @@ public final class SourceDiagnostics: ObservableObject {
         lines.append("· 源指纹 SHA256: \(Self.sourceHash)")
         lines.append("· 数据源版本: \(Self.sourceRevision)")
         lines.append("· 打包校验: \(Self.sourceBundleStatus)")
+        lines.append("· 签名方式: JS 内置签名 v04.10.03")
         lines.append("· 应用提交: \(Self.sourceManifest["appCommit"] ?? "未记录")")
         lines.append("· 运行源状态: \(sourceRuntimeStatus)")
         lines.append(contentsOf: sourceRuntimeLines.map { "  - " + $0 })

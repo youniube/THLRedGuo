@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +8,9 @@ import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 void main() {
   const series = '7673742740500270105';
-  final script = File('assets/sources/hongguo.js').readAsStringSync();
+  final script = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   final largeDescription = List.filled(18000, 'x').join();
   for (final cached in [false, true]) {
     test(

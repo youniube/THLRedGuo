@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:io';
 import 'dart:convert';
 
@@ -8,7 +9,9 @@ import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 void main() {
   setUp(CatPawJsRuntime.resetDeviceSessionForTesting);
-  final source = File('assets/sources/hongguo.js').readAsStringSync();
+  final source = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   const id = '7345678901234567000';
   const url = 'https://v5-reading-video.qznovelvod.com/synthetic.mp4';
   Future<CatPawPlayResult> resolve(

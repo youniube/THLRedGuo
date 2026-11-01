@@ -43,6 +43,139 @@ final class LocalLibraryTests: XCTestCase {
         XCTAssertEqual(identity["runtimeReady"] as? Bool, true)
     }
 
+    func testNewerImportedOfficialSourceSurvivesScanAndBridgeRestart() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = MemoryPlaybackProfile()
+        let recorder = SourceDiagnostics()
+        let bridge = NativeBridge(baseDirectory: root, diagnostics: recorder, persistentDeviceSession: false,
+                                  playbackProfileLoader: { try cache.load() })
+        func script(_ version: String) -> String {
+            "var count=0; var spider={meta:{id:'hongguo',name:'合成导入源',version:'\(version)'},play:async function(){return {url:'https://stream.fixture.invalid/imported-'+(++count)+'.mp4',quality:1080,qualities:[1080]}}};"
+        }
+        _ = try await bridge.request(action: "jsSource.saveAndLoad", payload: ["script": script("9999.0.0-dev.2"), "fileName": "hongguo.js"])
+        let newer = script("9999.0.0-dev.10")
+        _ = try await bridge.request(action: "jsSource.saveAndLoad", payload: ["script": newer, "fileName": "hongguo-update.js"])
+        let hash = SourceDiagnostics.fingerprint(newer)
+        let identity = try await bridge.request(action: "jsSource.identity", payload: [:])
+        XCTAssertEqual(identity["sha256"] as? String, hash)
+        XCTAssertEqual(identity["origin"] as? String, "imported")
+        XCTAssertEqual(identity["version"] as? String, "9999.0.0-dev.10")
+        XCTAssertEqual(identity["sourceCommit"] as? String, "")
+        XCTAssertEqual(recorder.sourceRuntimeStatus, "已加载导入的更新版 JS")
+        let payload: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567000", "source": "hongguo"], "index": 1]
+        let first = try await bridge.request(action: "resolve", payload: payload)
+        XCTAssertTrue((first["url"] as? String)?.contains("imported-1.mp4") == true)
+        _ = try await bridge.request(action: "jsSource.scan", payload: [:])
+        let second = try await bridge.request(action: "resolve", payload: payload)
+        XCTAssertTrue((second["url"] as? String)?.contains("imported-2.mp4") == true)
+        let restarted = NativeBridge(baseDirectory: root, persistentDeviceSession: false, playbackProfileLoader: { try cache.load() })
+        let restartedIdentity = try await restarted.request(action: "jsSource.identity", payload: [:])
+        XCTAssertEqual(restartedIdentity["sha256"] as? String, hash)
+        let afterRestart = try await restarted.request(action: "resolve", payload: payload)
+        XCTAssertTrue((afterRestart["url"] as? String)?.contains("imported-1.mp4") == true)
+        XCTAssertEqual(cache.readCount, 0)
+    }
+
+
+    func testBuiltInSigningIgnoresLegacyConfigurationAcrossBridges() async throws {
+        let (defaults, name) = try storage()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let guest = #"{"device_id":"7345678901234567100","iid":"7345678901234567200"}"#
+        defaults.set(guest, forKey: "thl_tv_hongguo_device_session")
+        defaults.set(Date().timeIntervalSince1970, forKey: "thl_tv_hongguo_guest_created_at")
+        let profile = MemoryPlaybackProfile()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LocalProfileDetailProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        LocalProfileDetailProtocol.reset()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bridges = ["播放", "下一集", "推荐", "弹幕"].enumerated().map { index, context in
+            NativeBridge(baseDirectory: root.appendingPathComponent(String(index)), httpSession: session,
+                         diagnostics: SourceDiagnostics(), diagnosticContext: context, deviceDefaults: defaults,
+                         playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision })
+        }
+        let payload: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567000"]]
+        for bridge in bridges {
+            let value = try await bridge.request(action: "detail", payload: payload)
+            XCTAssertEqual((value["episodes"] as? [[String: Any]])?.count, 1)
+        }
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 4)
+        XCTAssertEqual(profile.readCount, 0)
+        for _ in 0..<2 {
+            profile.replace(with: HongguoApkProfile(appVersion: "7.4.3.32", sdkVersion: "v04.10.03-ml-android",
+                                                   configuration: "unused-legacy-configuration", importedAt: Date()))
+            for bridge in bridges {
+                let result = try await bridge.request(action: "detail", payload: payload)
+                XCTAssertEqual((result["episodes"] as? [[String: Any]])?.count, 1)
+                _ = try await bridge.request(action: "detail", payload: payload)
+            }
+        }
+        XCTAssertEqual(profile.readCount, 0)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 4)
+        profile.replace(with: nil)
+        for bridge in bridges {
+            let value = try await bridge.request(action: "detail", payload: payload)
+            XCTAssertEqual((value["episodes"] as? [[String: Any]])?.count, 1)
+        }
+        XCTAssertEqual(profile.readCount, 0)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 4)
+        XCTAssertEqual(LocalProfileDetailProtocol.signatureVersions,
+                       Array(repeating: UInt32(5), count: 4))
+        XCTAssertEqual(LocalProfileDetailProtocol.unexpectedCount, 0)
+        XCTAssertEqual(defaults.string(forKey: "thl_tv_hongguo_device_session"), guest)
+        print("THL_BUILTIN_SIGNING independentBridges=4 legacyCacheReads=0 registrations=0 guestPreserved=true")
+    }
+
+    func testBuiltInSigningIgnoresUnreadableLegacyCache() async throws {
+        let (defaults, name) = try storage()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let guest = #"{"device_id":"7345678901234567100","iid":"7345678901234567200"}"#
+        defaults.set(guest, forKey: "thl_tv_hongguo_device_session")
+        defaults.set(Date().timeIntervalSince1970, forKey: "thl_tv_hongguo_guest_created_at")
+        let profile = MemoryPlaybackProfile()
+        let value = HongguoApkProfile(appVersion: "7.4.3.32", sdkVersion: "v04.10.03-ml-android",
+                                    configuration: "unused-legacy-configuration", importedAt: Date())
+        profile.replace(with: value)
+        profile.failNextLoad(with: .unavailable(-25308))
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LocalProfileDetailProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        LocalProfileDetailProtocol.reset()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: SourceDiagnostics(), deviceDefaults: defaults,
+                                  playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision })
+        let payload: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567000"]]
+        _ = try await bridge.request(action: "detail", payload: payload)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 1)
+        XCTAssertEqual(profile.readCount, 0)
+        let another: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567001"]]
+        _ = try await bridge.request(action: "detail", payload: another)
+        _ = try await bridge.request(action: "detail", payload: another)
+        XCTAssertEqual(profile.readCount, 0)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 2)
+        profile.replace(with: value)
+        profile.failNextLoad(with: .invalidProfile)
+        for _ in 0..<2 {
+            _ = try await bridge.request(action: "detail", payload: payload)
+        }
+        XCTAssertEqual(profile.readCount, 0)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 2)
+        profile.replace(with: value)
+        _ = try await bridge.request(action: "detail", payload: payload)
+        XCTAssertEqual(profile.readCount, 0)
+        XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 2)
+        XCTAssertEqual(LocalProfileDetailProtocol.signatureVersions, [5, 5])
+        XCTAssertEqual(LocalProfileDetailProtocol.unexpectedCount, 0)
+        XCTAssertEqual(defaults.string(forKey: "thl_tv_hongguo_device_session"), guest)
+        print("THL_BUILTIN_SIGNING unreadableLegacyCacheIgnored=true legacyCacheReads=0 runtimePreserved=true guestPreserved=true")
+    }
+
+
     func testSourceRuntimeReportDetectsMismatchedOrFailedContext() {
         let recorder = SourceDiagnostics()
         recorder.registerSourceRuntime(context: "播放", script: BuiltInHongguoJSContent, ready: true)
@@ -597,4 +730,55 @@ final class VideoFeedTests: XCTestCase {
         XCTAssertEqual(viewModel.items.first?.id, "drama_1")
     }
 
+}
+
+private final class MemoryPlaybackProfile: @unchecked Sendable {
+    private let lock = NSLock()
+    private var profile: HongguoApkProfile?
+    private var version: UInt64 = 0
+    private var reads = 0
+    private var pendingError: HongguoProfileStorageError?
+
+    var revision: UInt64 { lock.withLock { version } }
+    var readCount: Int { lock.withLock { reads } }
+    func load() throws -> HongguoApkProfile? {
+        try lock.withLock {
+            reads += 1
+            if let error = pendingError { pendingError = nil; throw error }
+            return profile
+        }
+    }
+    func failNextLoad(with error: HongguoProfileStorageError) { lock.withLock { pendingError = error } }
+    func replace(with value: HongguoApkProfile?) { lock.withLock { profile = value; version &+= 1 } }
+}
+
+private final class LocalProfileDetailProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var requests = 0
+    private static var unexpected = 0
+    private static var versions: [UInt32] = []
+    static var requestCount: Int { lock.withLock { requests } }
+    static var unexpectedCount: Int { lock.withLock { unexpected } }
+    static var signatureVersions: [UInt32] { lock.withLock { versions } }
+    static func reset() { lock.withLock { requests = 0; unexpected = 0; versions = [] } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard request.url?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "novel/player/video_detail/v1",
+              URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "device_id" })?.value == "7345678901234567100",
+              let signature = request.value(forHTTPHeaderField: "x-medusa"), let data = Data(base64Encoded: signature), data.count >= 4,
+              let time = UInt32(request.value(forHTTPHeaderField: "x-khronos") ?? "") else {
+            Self.lock.withLock { Self.unexpected += 1 }
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
+        let version = data.prefix(4).enumerated().reduce(UInt32(0), { $0 | UInt32($1.element) << (8 * $1.offset) }) ^ time
+        Self.lock.withLock { Self.requests += 1; Self.versions.append(version) }
+        let body = Data(#"{"data":{"video_data":{"series_title":"合成剧集","episode_cnt":1,"video_list":[{"vid":"7345678901234568000"}]}}}"#.utf8)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json; charset=utf-8"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

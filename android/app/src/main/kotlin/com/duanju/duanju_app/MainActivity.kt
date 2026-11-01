@@ -101,7 +101,7 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         if (televisionMode) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            window.setFormat(android.graphics.PixelFormat.RGBA_8888)
+            window.setFormat(android.graphics.PixelFormat.OPAQUE)
             val lp = window.attributes
             lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
             window.attributes = lp

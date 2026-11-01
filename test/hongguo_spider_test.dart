@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,7 +13,9 @@ import 'package:http/testing.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 void main() {
-  final script = File('assets/sources/hongguo.js').readAsStringSync();
+  final script = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   http.Response registration() => http.Response(
     '{"device_id_str":"7345678901234567100","install_id_str":"7345678901234567200"}',
     200,
@@ -166,14 +169,14 @@ void main() {
         isTrue,
         reason: 'assets/sources/hongguo.js 文件必须存在',
       );
-      hongguoScript = await file.readAsString();
+      hongguoScript = prepareHongguoFixtureSource(await file.readAsString());
       expect(hongguoScript, isNotEmpty);
     });
 
     test('1. 元数据 (meta) 与 CatPawOpen 规范契约验证', () async {
       expect(hongguoScript.contains('id: "hongguo"'), isTrue);
       expect(hongguoScript.contains('name: "官方免费短剧"'), isTrue);
-      expect(hongguoScript.contains('version: "1.1.0-dev.6"'), isTrue);
+      expect(hongguoScript.contains('version: "1.1.0-dev.13"'), isTrue);
       expect(
         hongguoScript.contains('"search"') &&
             hongguoScript.contains('"categories"') &&

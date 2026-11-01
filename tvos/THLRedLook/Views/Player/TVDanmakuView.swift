@@ -44,7 +44,7 @@ public final class TVDanmakuTrackCoordinator {
                 flightsById[item.id] == nil, flightsById.count < capacity else { continue }
             let text = String(item.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
             guard !text.isEmpty else { continue }
-            let width = (text as NSString).size(withAttributes: [.font: UIFont.boldSystemFont(ofSize: fontSize)]).width + 36
+            let width = (text as NSString).size(withAttributes: [.font: UIFont.boldSystemFont(ofSize: fontSize)]).width + 16
             let lanes = item.mode == .bottom ? Array((count - bottomRows)..<count).reversed().map { $0 } : Array(0..<regularRows)
             for lane in lanes {
                 if let previous = flightsById.values.filter({ $0.lane == lane }).max(by: { $0.time < $1.time }) {
@@ -133,7 +133,7 @@ public struct TVDanmakuView: View {
         let color = Color(red: Double((rgb >> 16) & 255) / 255, green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)
         Text(item.text)
             .lineLimit(1)
-            .font(.system(size: style.fontSize, weight: .heavy, design: .rounded))
+            .font(.system(size: style.fontSize, weight: .bold))
             .foregroundColor(color.opacity(style.opacity))
             // 8 方向 1.5pt 高对比度深黑描边（强光、白底、复杂背景下字体轮廓极其锐利清爽）
             .shadow(color: .black.opacity(style.outline ? style.opacity : 0), radius: 0, x: 1.5, y: 0)
@@ -145,13 +145,7 @@ public struct TVDanmakuView: View {
             .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: 1.2, y: -1.2)
             .shadow(color: .black.opacity(style.outline ? style.opacity * 0.95 : 0), radius: 0, x: -1.2, y: 1.2)
             // 外部柔和深影增强大屏立体感
-            .shadow(color: .black.opacity(style.shadow ? style.opacity * 0.8 : 0), radius: 4, x: 0, y: 2)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(
-                Capsule()
-                    .fill(Color.black.opacity(0.32 * style.opacity))
-            )
+            .shadow(color: .black.opacity(style.shadow ? style.opacity * 0.8 : 0), radius: 3, x: 0, y: 1.5)
             .fixedSize()
             .frame(width: item.width)
     }

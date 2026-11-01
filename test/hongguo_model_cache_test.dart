@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,7 +10,9 @@ import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 void main() {
   const firstId = '7345678901234568001';
   const secondId = '7345678901234568002';
-  final source = File('assets/sources/hongguo.js').readAsStringSync();
+  final source = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   setUp(CatPawJsRuntime.resetDeviceSessionForTesting);
 
   Future<

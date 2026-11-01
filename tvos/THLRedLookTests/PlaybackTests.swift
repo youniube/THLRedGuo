@@ -86,8 +86,12 @@ final class PlaybackTests: XCTestCase {
         try await repository.loadDetail(drama: Drama(id: "hongguo:" + id, source: "hongguo", sourceId: id, title: "原生播放验证"))
     }
 
-    private func model(_ detail: DramaDetail) -> PlayerViewModel {
-        let result = PlayerViewModel(drama: detail.drama, allEpisodes: detail.episodes, repository: repository)
+    private func model(_ detail: DramaDetail) throws -> PlayerViewModel {
+        let suite = "THLRedLook.PlaybackFixture." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let result = PlayerViewModel(drama: detail.drama, allEpisodes: detail.episodes, repository: repository,
+                                     store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
         result.danmakuEnabled = false
         return result
     }
@@ -136,7 +140,7 @@ final class PlaybackTests: XCTestCase {
         let suite = "THLRedLook.QA.Playback." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = LocalStore(defaults: defaults)
+        let store = LocalStore(defaults: defaults, cloudUpload: { _ in })
         let data = try await detail("7694896136963755032")
         let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, store: store)
         model.danmakuEnabled = false
@@ -171,7 +175,7 @@ final class PlaybackTests: XCTestCase {
         model.setSceneActive(true)
         try await wait(seconds: 15) { model.isPlaying && model.currentTime > interrupted + 0.5 }
         model.onDisappear()
-        let history = try XCTUnwrap(LocalStore(defaults: defaults).getWatchEntry(dramaId: data.drama.id))
+        let history = try XCTUnwrap(LocalStore(defaults: defaults, cloudUpload: { _ in }).getWatchEntry(dramaId: data.drama.id))
         XCTAssertEqual(history.episode, 1)
         XCTAssertGreaterThan(history.position, interrupted)
         XCTAssertGreaterThan(history.duration, history.position)
@@ -184,7 +188,7 @@ final class PlaybackTests: XCTestCase {
         let suite = "THLRedLook.QA.End." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = LocalStore(defaults: defaults)
+        let store = LocalStore(defaults: defaults, cloudUpload: { _ in })
         let data = try await detail("7694896136963755032")
         let model = PlayerViewModel(drama: data.drama, allEpisodes: Array(data.episodes.prefix(1)), repository: repository, store: store)
         model.danmakuEnabled = false
@@ -203,7 +207,7 @@ final class PlaybackTests: XCTestCase {
         model.togglePlayPause()
         try await wait(seconds: 20) { model.isPlaying && model.currentTime > 0.5 && model.currentTime < 8 }
         model.onDisappear()
-        XCTAssertFalse(try XCTUnwrap(LocalStore(defaults: defaults).getWatchEntry(dramaId: data.drama.id)).finished)
+        XCTAssertFalse(try XCTUnwrap(LocalStore(defaults: defaults, cloudUpload: { _ in }).getWatchEntry(dramaId: data.drama.id)).finished)
         print("THL_TV_PLAYBACK finalEpisode=true noFalseRecovery=true replay=true history=true")
     }
 
@@ -225,7 +229,7 @@ final class PlaybackTests: XCTestCase {
             let selected = try XCTUnwrap(search.searchResults.first)
             XCTAssertTrue(selected.cover.hasPrefix("https://"))
             let detail = try await repository.loadDetail(drama: selected)
-            let model = model(detail)
+            let model = try model(detail)
             defer { model.onDisappear() }
             let episode = max(1, detail.episodes.count / 2)
             await model.preparePlayback(episodeIndex: episode)
@@ -265,7 +269,7 @@ final class PlaybackTests: XCTestCase {
         try live()
         for (id, number) in [("7691902718872407102", 38), ("7685288902453644313", 41), ("7660929494034680857", 10)] {
             let detail = try await detail(id)
-            let model = model(detail)
+            let model = try model(detail)
             defer { model.onDisappear() }
             await model.preparePlayback(episodeIndex: number)
             try await ready(model)
@@ -282,7 +286,7 @@ final class PlaybackTests: XCTestCase {
     func testLiveLargeEpisodePreparation() async throws {
         try live()
         let detail = try await detail("7674630261790739481")
-        let model = model(detail)
+        let model = try model(detail)
         defer { model.onDisappear() }
         let started = Date()
         await model.preparePlayback(episodeIndex: 9)
@@ -296,7 +300,7 @@ final class PlaybackTests: XCTestCase {
     func testLiveFailureRecoveryAndContinuousPlayback() async throws {
         try live()
         let detail = try await detail("7694896136963755032")
-        let model = model(detail)
+        let model = try model(detail)
         defer { model.onDisappear() }
         await model.preparePlayback(episodeIndex: 37)
         try await ready(model)
@@ -354,13 +358,42 @@ final class PlaybackTests: XCTestCase {
     func testLiveNaturalContinuousPlaybackWithoutSeeking() async throws {
         try live()
         await JSSourceService.shared.initialize()
-        let data = try await detail("7694896136963755032")
+        let noApk = ProcessInfo.processInfo.environment["THL_NO_APK_PROFILE"] == "1"
         let suite = "THLRedLook.Natural." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
-        model.danmakuEnabled = true
+        let transientRead = ProcessInfo.processInfo.environment["THL_NATURAL_TEMPORARY_PROFILE_READ"] == "1" ? OnceUnavailablePlaybackProfile() : nil
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let playbackSource: NativeRepository
+        let preloadingSource: NativeRepository
+        if noApk {
+            playbackSource = NativeRepository(
+                bridge: NativeBridge(baseDirectory: root.appendingPathComponent("data"), playbackProfileLoader: { nil }),
+                playbackBridge: NativeBridge(baseDirectory: root.appendingPathComponent("play"), playbackProfileLoader: { nil }))
+            preloadingSource = NativeRepository(
+                bridge: NativeBridge(baseDirectory: root.appendingPathComponent("preloadData"), playbackProfileLoader: { nil }),
+                playbackBridge: NativeBridge(baseDirectory: root.appendingPathComponent("preloadPlay"), playbackProfileLoader: { nil }))
+        } else if let transientRead {
+            let bridge = NativeBridge(baseDirectory: root, playbackProfileLoader: { try transientRead.load() })
+            playbackSource = NativeRepository(bridge: NativeBridge.shared, playbackBridge: bridge)
+            preloadingSource = .preloading
+        } else {
+            playbackSource = repository
+            preloadingSource = .preloading
+        }
+        let data = try await playbackSource.loadDetail(drama: Drama(id: "hongguo:7694896136963755032", source: "hongguo", sourceId: "7694896136963755032", title: "雾锁情迷"))
+        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: playbackSource, preloadingRepository: preloadingSource, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
+        model.danmakuEnabled = !noApk
         defer { model.onDisappear() }
+        let firstEpisode = Int(ProcessInfo.processInfo.environment["THL_NATURAL_FIRST_EPISODE"] ?? "") ?? 5
+        let completeEpisodes = Int(ProcessInfo.processInfo.environment["THL_NATURAL_COMPLETE_EPISODES"] ?? "") ?? 3
+        let finalEpisode = firstEpisode + completeEpisodes
+        guard firstEpisode > 0, completeEpisodes > 0, finalEpisode <= data.episodes.count else {
+            XCTFail("Natural playback range is outside the selected drama")
+            return
+        }
+        let savedGuest = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session")
         let began = Date()
         var events: [[String: Any]] = []
         func record(_ event: [String: Any]) {
@@ -371,15 +404,25 @@ final class PlaybackTests: XCTestCase {
                 print("THL_NATURAL " + text)
             }
         }
-        record(["stage": "selected", "title": data.drama.title, "seriesId": data.drama.cleanSourceId, "rate": 1, "seek": false, "firstEpisode": 5, "completeEpisodes": 3])
-        await model.preparePlayback(episodeIndex: 5)
-        for episode in 5...8 {
+        record(["stage": "selected", "title": data.drama.title, "seriesId": data.drama.cleanSourceId, "rate": 1, "seek": false, "firstEpisode": firstEpisode, "completeEpisodes": completeEpisodes])
+        await model.preparePlayback(episodeIndex: firstEpisode)
+        if transientRead != nil {
+            XCTAssertNil(model.errorMessage)
+            record(["stage": "optionalSigningCacheUnavailable", "playbackAllowed": true])
+        }
+        if noApk { record(["stage": "withoutAPK", "nativeProfile": false, "guestReset": false]) }
+        for episode in firstEpisode...finalEpisode {
             try await ready(model)
             XCTAssertEqual(model.currentEpisodeIndex, episode)
             XCTAssertEqual(model.playbackRate, 1)
             XCTAssertFalse(try XCTUnwrap(model.player).isMuted)
             record(["stage": "ready", "episode": episode, "duration": model.duration, "position": model.currentTime, "video": true, "audio": true])
-            if episode == 8 { break }
+            if episode == firstEpisode, let path = ProcessInfo.processInfo.environment["THL_NATURAL_REIMPORT_PATH"] {
+                let imported = try await Task.detached { try HongguoApkImporter(url: URL(fileURLWithPath: path)).extract() }.value
+                try HongguoPlaybackProfileVault.save(imported)
+                record(["stage": "profileReimport", "currentEpisode": episode, "restart": false])
+            }
+            if episode == finalEpisode { break }
             let deadline = Date().addingTimeInterval(max(180, model.duration * 1.3 + 40))
             var lastLogged = -1
             while model.currentEpisodeIndex == episode && Date() < deadline {
@@ -398,7 +441,9 @@ final class PlaybackTests: XCTestCase {
             record(["stage": "autoNext", "from": episode, "to": model.currentEpisodeIndex])
         }
         XCTAssertNil(model.errorMessage)
-        record(["stage": "complete", "naturalCompleteEpisodes": 3, "currentEpisode": model.currentEpisodeIndex, "seek": false])
+        if let transientRead { XCTAssertGreaterThanOrEqual(transientRead.attempts, 1) }
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session"), savedGuest)
+        record(["stage": "complete", "naturalCompleteEpisodes": completeEpisodes, "currentEpisode": model.currentEpisodeIndex, "seek": false])
         let bytes = try JSONSerialization.data(withJSONObject: events, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(string: String(decoding: bytes, as: UTF8.self))
         attachment.name = "natural-playback.json"
@@ -416,7 +461,7 @@ final class PlaybackTests: XCTestCase {
         let suite = "THLRedLook.OverseasLive." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, store: LocalStore(defaults: defaults))
+        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
         model.danmakuEnabled = false
         defer { model.onDisappear() }
         await model.preparePlayback(episodeIndex: 184)
@@ -655,7 +700,7 @@ final class PlaybackTests: XCTestCase {
         let suite = "THLRedLook.Quality." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, preloadingRepository: repository, store: LocalStore(defaults: defaults))
+        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, preloadingRepository: repository, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
         model.danmakuEnabled = false
         defer { model.onDisappear() }
         func verifyResolution(_ expected: Int) async throws {
@@ -704,6 +749,7 @@ final class PlaybackTests: XCTestCase {
 
     func testLiveFullEpisodesPastThirtySecondsAndLegacyPreviewRecovery() async throws {
         try live()
+        let savedGuest = try existingGuest()
         OfficialModelFailureProtocol.configure(blockReadingBatch: false, missingModel: true)
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [OfficialModelFailureProtocol.self]
@@ -712,7 +758,7 @@ final class PlaybackTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: SourceDiagnostics(), diagnosticContext: "完整分集验证", persistentDeviceSession: false)
+        let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: SourceDiagnostics(), diagnosticContext: "完整分集验证", persistentDeviceSession: true)
         let source = NativeRepository(bridge: bridge, playbackBridge: bridge)
         for (series, number, minimumDuration) in [("7694896136963755032", 1, 150.0), ("7688558312157088793", 1, 120.0), ("7697541703539887129", 184, 60.0)] {
             let detail = try await source.loadDetail(drama: Drama(id: "hongguo:" + series, source: "hongguo", sourceId: series, title: "完整播放验证"))
@@ -726,7 +772,7 @@ final class PlaybackTests: XCTestCase {
             let suite = "THLRedLook.FullEpisode." + UUID().uuidString
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             defer { defaults.removePersistentDomain(forName: suite) }
-            let model = PlayerViewModel(drama: detail.drama, allEpisodes: episodes, repository: source, preloadingRepository: source, store: LocalStore(defaults: defaults))
+            let model = PlayerViewModel(drama: detail.drama, allEpisodes: episodes, repository: source, preloadingRepository: source, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
             model.danmakuEnabled = false
             defer { model.onDisappear() }
             await model.preparePlayback(episodeIndex: number)
@@ -753,6 +799,8 @@ final class PlaybackTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(OfficialModelFailureProtocol.count, 1)
         XCTAssertEqual(OfficialModelFailureProtocol.webCount, 0)
+        XCTAssertEqual(OfficialModelFailureProtocol.registrationCount, 0)
+        XCTAssertTrue(UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session") == savedGuest)
     }
 
     func testEncryptedPlaybackRecoversLaterRangeFailures() async throws {
@@ -775,7 +823,7 @@ final class PlaybackTests: XCTestCase {
             defer { defaults.removePersistentDomain(forName: suite) }
             let episode = Episode(id: "1", title: "合成分集", number: 1, raw: try JSONSerialization.data(withJSONObject: ["url": "1"]))
             let recorder = SourceDiagnostics()
-            let model = PlayerViewModel(drama: Drama(id: "synthetic:stream", source: "synthetic", sourceId: "stream", title: "合成断流恢复"), allEpisodes: [episode], repository: source, preloadingRepository: source, store: LocalStore(defaults: defaults), diagnostics: recorder)
+            let model = PlayerViewModel(drama: Drama(id: "synthetic:stream", source: "synthetic", sourceId: "stream", title: "合成断流恢复"), allEpisodes: [episode], repository: source, preloadingRepository: source, store: LocalStore(defaults: defaults, cloudUpload: { _ in }), diagnostics: recorder)
             model.danmakuEnabled = false
             defer { model.onDisappear() }
             await model.preparePlayback(episodeIndex: 1)
@@ -821,8 +869,19 @@ final class PlaybackTests: XCTestCase {
         XCTAssertTrue(PlaybackPlan(url: "https://fixture.qznovelvod.com/full360.mp4", quality: 360).isReusable())
     }
 
+    private func existingGuest() throws -> String {
+        let json = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session") ?? ""
+        let value = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        let valid = ["iid", "device_id"].allSatisfy {
+            (value?[$0] as? String)?.range(of: "^[1-9][0-9]{9,23}$", options: .regularExpression) != nil
+        }
+        try XCTSkipUnless(valid, "Requires an existing THL guest session")
+        return json
+    }
+
     private func verifyOfficialFallback(single: Bool) async throws {
         try live()
+        let savedGuest = try existingGuest()
         OfficialModelFailureProtocol.configure(blockReadingBatch: single)
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [OfficialModelFailureProtocol.self]
@@ -832,13 +891,13 @@ final class PlaybackTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let recorder = SourceDiagnostics()
-        let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: recorder, diagnosticContext: "官方备用实播", persistentDeviceSession: false)
+        let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: recorder, diagnosticContext: "官方备用实播", persistentDeviceSession: true)
         let repository = NativeRepository(bridge: bridge, playbackBridge: bridge)
         let data = try await repository.loadDetail(drama: Drama(id: "hongguo:7697541703539887129", source: "hongguo", sourceId: "7697541703539887129", title: "用户反馈分集"))
         let suite = "THLRedLook.OfficialFallback." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, preloadingRepository: repository, store: LocalStore(defaults: defaults))
+        let model = PlayerViewModel(drama: data.drama, allEpisodes: data.episodes, repository: repository, preloadingRepository: repository, store: LocalStore(defaults: defaults, cloudUpload: { _ in }))
         model.danmakuEnabled = false
         defer { model.onDisappear() }
         await model.preparePlayback(episodeIndex: 184)
@@ -852,6 +911,8 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(OfficialModelFailureProtocol.count, single ? 2 : 1)
         let path = single ? "/novel/player/video_model/v1/" : "/novel/player/multi_video_model/v1/"
         XCTAssertGreaterThanOrEqual(recorder.entries.filter { $0.stage == "播放解析" && $0.host == "reading.snssdk.com" && $0.url.contains(path) && !$0.failed }.count, 2)
+        XCTAssertTrue(UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session") == savedGuest)
+        XCTAssertEqual(OfficialModelFailureProtocol.registrationCount, 0)
         print("THL_OFFICIAL_FALLBACK single=\(single) episodes=184,185 video=true audio=true autoNext=true failedRouteNotRepeated=true")
     }
 
@@ -866,7 +927,7 @@ final class PlaybackTests: XCTestCase {
     func testLiveRapidEpisodeChangeAndExitCancellation() async throws {
         try live()
         let detail = try await detail("7694896136963755032")
-        let model = model(detail)
+        let model = try model(detail)
         let pending = Task { await model.preparePlayback(episodeIndex: 1) }
         try await Task.sleep(nanoseconds: 100_000_000)
         await model.preparePlayback(episodeIndex: 2)
@@ -886,7 +947,7 @@ final class PlaybackTests: XCTestCase {
     func testLiveStallWithoutNativeErrorRecovers() async throws {
         try live()
         let detail = try await detail("7694896136963755032")
-        let model = model(detail)
+        let model = try model(detail)
         defer { model.onDisappear() }
         await model.preparePlayback(episodeIndex: 1)
         try await ready(model)
@@ -909,7 +970,7 @@ final class PlaybackTests: XCTestCase {
         let suite = "THLRedLook.QA.YaoSeasons." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = LocalStore(defaults: defaults)
+        let store = LocalStore(defaults: defaults, cloudUpload: { _ in })
         for (season, id, number) in [(5, "7695704804978330649", 1), (4, "7688558312157088793", 4)] {
             let drama = try XCTUnwrap(catalog.items.first { $0.sourceId == id })
             let data = try await repository.loadDetail(drama: drama)
@@ -944,13 +1005,16 @@ final class PlaybackTests: XCTestCase {
         let oldSecond = Drama(id: "hongguo:7678338044344159000", sourceId: "7678338044344159000", title: "满院亲戚全是上古大妖第二季")
         let fifth = Drama(id: "hongguo:7695704804978330649", sourceId: "7695704804978330649", title: "满院亲戚全是上古大妖第五季")
         let unrelated = Drama(id: "test_stale_preservation", title: "合成本地记录")
-        let seed = LocalStore(defaults: defaults)
+        let seed = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        XCTAssertTrue(seed.followedDramas.isEmpty)
+        XCTAssertTrue(seed.history.isEmpty)
         seed.setFollowState(drama: oldFourth, state: .watched)
         seed.setFollowState(drama: oldSecond, state: .watching)
         for (drama, episode) in [(fifth, 11), (oldFourth, 12), (oldSecond, 5), (unrelated, 3)] {
             seed.recordWatch(drama: drama, episode: episode, position: 7, duration: 160)
         }
-        let store = LocalStore(defaults: defaults)
+        let store = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        XCTAssertEqual(store.followedDramas.count, 2)
         let detailModel = DetailViewModel(drama: fifth, repository: repository, store: store)
         await detailModel.loadDetail()
         XCTAssertNil(detailModel.errorMessage)
@@ -990,7 +1054,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNil(direct.errorMessage)
         XCTAssertEqual(direct.drama.cleanSourceId, "7688558312157088793")
         XCTAssertEqual(direct.lastWatchEntry?.episode, 2)
-        let reloaded = LocalStore(defaults: defaults)
+        let reloaded = LocalStore(defaults: defaults, cloudUpload: { _ in })
         XCTAssertEqual(reloaded.followedDramas.count, 2)
         XCTAssertFalse(reloaded.history.contains { [oldFourth.id, oldSecond.id].contains($0.drama.id) })
         XCTAssertEqual(reloaded.followState(for: direct.drama.id), .watched)
@@ -1080,7 +1144,7 @@ final class ContinuousPlaybackTests: XCTestCase {
         let episodes = try (1...4).map { index in
             Episode(id: String(index), title: "合成第\(index)集", number: index, raw: try JSONSerialization.data(withJSONObject: ["url": String(index)]))
         }
-        let model = PlayerViewModel(drama: Drama(id: "synthetic:series", source: "synthetic", sourceId: "series", title: "合成连续播放"), allEpisodes: episodes, repository: foreground, preloadingRepository: preloading, store: LocalStore(defaults: defaults), diagnostics: diagnostics)
+        let model = PlayerViewModel(drama: Drama(id: "synthetic:series", source: "synthetic", sourceId: "series", title: "合成连续播放"), allEpisodes: episodes, repository: foreground, preloadingRepository: preloading, store: LocalStore(defaults: defaults, cloudUpload: { _ in }), diagnostics: diagnostics)
         model.danmakuEnabled = false
         return model
     }
@@ -1234,11 +1298,14 @@ private final class OfficialModelFailureProtocol: URLProtocol {
     private static var blocked = 0
     private static var missingModel = false
     private static var blockedWeb = 0
-    static func configure(blockReadingBatch: Bool, missingModel: Bool = false) { lock.lock();defer { lock.unlock() };self.blockReadingBatch = blockReadingBatch;self.missingModel = missingModel;blocked = 0;blockedWeb = 0 }
+    private static var blockedRegistration = 0
+    static func configure(blockReadingBatch: Bool, missingModel: Bool = false) { lock.lock();defer { lock.unlock() };self.blockReadingBatch = blockReadingBatch;self.missingModel = missingModel;blocked = 0;blockedWeb = 0;blockedRegistration = 0 }
+    static var registrationCount: Int { lock.lock();defer { lock.unlock() };return blockedRegistration }
     static var webCount: Int { lock.lock();defer { lock.unlock() };return blockedWeb }
     static var count: Int { lock.lock();defer { lock.unlock() };return blocked }
     override class func canInit(with request: URLRequest) -> Bool {
         lock.lock();defer { lock.unlock() }
+        if request.url?.path.contains("/service/2/device_register") == true { return true }
         if request.url?.host == "hongguoduanju.com" { return true }
         guard request.url?.path.contains("/novel/player/multi_video_model/v1") == true else { return false }
         return request.url?.host == "api5-normal-sinfonlineb.fqnovel.com" || blockReadingBatch && request.url?.host == "reading.snssdk.com"
@@ -1247,6 +1314,13 @@ private final class OfficialModelFailureProtocol: URLProtocol {
     override func stopLoading() {}
     override func startLoading() {
         Self.lock.lock()
+        let registration = request.url?.path.contains("/service/2/device_register") == true
+        if registration {
+            Self.blockedRegistration += 1
+            Self.lock.unlock()
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
         let web = request.url?.host == "hongguoduanju.com"
         if web { Self.blockedWeb += 1 } else { Self.blocked += 1 }
         let missing = Self.missingModel
@@ -1260,5 +1334,16 @@ private final class OfficialModelFailureProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json", "Content-Length": String(body.count), "x-tt-logid": "synthetic-primary-empty"])!, cacheStoragePolicy: .notAllowed)
         if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class OnceUnavailablePlaybackProfile: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var attempts: Int { lock.withLock { count } }
+    func load() throws -> HongguoApkProfile? {
+        let attempt = lock.withLock { count += 1; return count }
+        if attempt == 1 { throw HongguoProfileStorageError.unavailable(-25308) }
+        return try HongguoPlaybackProfileVault.load()
     }
 }

@@ -5,10 +5,16 @@ on:
     branches-ignore: [main, master]
     paths:
       - 'tvos/**'
+      - 'shared/**'
+      - 'ios/Runner/EncryptedMediaStream.swift'
+      - 'ios/Runner/CENCStreamIndex.swift'
       - '.github/workflows/check-playback.yml'
   pull_request:
     paths:
       - 'tvos/**'
+      - 'shared/**'
+      - 'ios/Runner/EncryptedMediaStream.swift'
+      - 'ios/Runner/CENCStreamIndex.swift'
       - '.github/workflows/check-playback.yml'
   workflow_dispatch:
     inputs:

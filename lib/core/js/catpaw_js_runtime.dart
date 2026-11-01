@@ -6,7 +6,10 @@ import 'dart:typed_data';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'hongguo_guest_session.dart';
+import 'hongguo_playback_profile.dart';
 
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
 import 'package:THLRedLook/core/js/source_http_client.dart';
@@ -99,6 +102,10 @@ class CatPawSourceFailure implements Exception {
       'EMPTY_RESPONSE' => '官方播放接口连接成功，但没有返回播放数据',
       'RESPONSE_NOT_UTF8' => '官方播放接口返回了无法解码的数据',
       'GUEST_REGISTRATION_FAILED' => '官方访客会话初始化失败，请重试',
+      'SOURCE_CONFIGURATION_MISSING' => '官方源为源码模板，请在数据源管理中导入发布版 hongguo.js',
+      'LOCAL_PROFILE_REQUIRED' ||
+      'LOCAL_PROFILE_INVALID' => '数据源签名配置不可用，请更新数据源后重试',
+      'LOCAL_PROFILE_UNAVAILABLE' => '本机签名缓存暂不可访问，请稍后重试',
       _ => '站源暂未返回本集可播放地址，请重试',
     };
     return CatPawSourceFailure(message, code: normalized);
@@ -144,6 +151,8 @@ class CatPawJsRuntime {
   List<SourceDiagnosticEntry> _modelResponses = [];
   final HongguoGuestSession guestSessions;
   bool _ready = false;
+  bool _localProfileUnavailable = false;
+  bool _supportsSigningCache = false;
   bool _isDisposed = false;
   final Set<Completer<void>> _requestAborts = {};
   int _activeRequests = 0;
@@ -178,6 +187,7 @@ class CatPawJsRuntime {
 
   bool get isReady => _ready;
   bool get isDisposed => _isDisposed;
+  bool get localProfileUnavailable => _localProfileUnavailable;
   bool get hasPendingWork => _activeRequests > 0 || _activeEvals > 0;
 
   static Future<void> validateSource(String script) async {
@@ -202,12 +212,27 @@ typeof spider === 'object' && spider !== null &&
 
   Future<void> init(String script) async {
     if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
+    _localProfileUnavailable = false;
+    _supportsSigningCache = false;
     if (persistentDeviceSession) await guestSessions.preload();
     _rt = getJavascriptRuntime(xhr: false);
     _injectGlobals();
     final result = _rt.evaluate(script);
     if (result.isError) {
       throw Exception('JS 脚本加载失败: ${result.rawResult}');
+    }
+    final builtInSigning =
+        _rt
+            .evaluate('globalThis.__hongguoHasBuiltInSigning === true')
+            .stringResult ==
+        'true';
+    if (HongguoPlaybackProfile.supported && !builtInSigning) {
+      final bundled = await rootBundle.loadString('assets/sources/hongguo.js');
+      if (sha256.convert(utf8.encode(script)) ==
+          sha256.convert(utf8.encode(bundled))) {
+        _supportsSigningCache = true;
+        await _refreshSigningCache();
+      }
     }
     _storageSourceId = _rt
         .evaluate(
@@ -216,6 +241,26 @@ typeof spider === 'object' && spider !== null &&
         .stringResult;
     _officialSource = _storageSourceId == 'hongguo';
     _ready = true;
+  }
+
+  Future<void> _refreshSigningCache() async {
+    if (!_supportsSigningCache || _isDisposed) return;
+    try {
+      final profile = await HongguoPlaybackProfile.runtimeConfiguration();
+      if (_isDisposed) return;
+      _localProfileUnavailable = false;
+      if (profile != null) {
+        _rt.evaluate("""
+try {
+  globalThis.__hongguoUseLocalApkProfile(${jsonEncode(profile)});
+} catch (_) { globalThis.__hongguoProfileErrorCode = 'LOCAL_PROFILE_INVALID'; }
+""");
+      }
+    } catch (error) {
+      if (_isDisposed) return;
+      _localProfileUnavailable =
+          error is! PlatformException || error.code != 'LOCAL_PROFILE_INVALID';
+    }
   }
 
   void dispose() {
@@ -1666,7 +1711,15 @@ class CatPawRuntimePool {
       final pending = _pending[key];
       if (pending != null) return pending;
       final runtime = _pool[key];
-      if (runtime != null) return runtime;
+      if (runtime != null) {
+        if (runtime.localProfileUnavailable) {
+          await runtime._refreshSigningCache();
+          if (_isDisposed || !identical(_pool[key], runtime)) {
+            throw CatPawSourceFailure.playback('cancelled');
+          }
+        }
+        return runtime;
+      }
     }
     _removeKey(key);
     final generation = _generations[key]!;

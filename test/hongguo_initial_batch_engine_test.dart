@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:THLRedLook/core/engine/dart_core_engine.dart';
@@ -6,7 +7,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late DartCoreEngine engine;
   final script =
-      File('assets/sources/hongguo.js').readAsStringSync() +
+      prepareHongguoFixtureSource(
+        File('assets/sources/hongguo.js').readAsStringSync(),
+      ) +
       r'''
 function syntheticCell(offset, selectors) {
   return {

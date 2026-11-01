@@ -167,6 +167,10 @@ class LunaExoPlayer implements Player {
   PlaybackEngine engine;
   VoidCallback? _valueListener;
   Timer? _positionPollTimer;
+  Timer? _watchdogTimer;
+  int _zeroSizeTicks = 0;
+  Media? _currentMedia;
+  bool _playIntent = true;
 
   int _openGeneration = 0;
   int _seekSequence = 0;
@@ -223,6 +227,7 @@ class LunaExoPlayer implements Player {
     required bool play,
     String key = '',
     bool compatibility = false,
+    bool hwdec = true,
   }) async {
     if (key.isNotEmpty && !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(key)) {
       throw const FormatException('视频内容密钥无效');
@@ -230,6 +235,7 @@ class LunaExoPlayer implements Player {
     final generation = _openGeneration + 1;
     await stop();
     if (_disposed || generation != _openGeneration) return;
+    _playIntent = play;
     MediaKit.ensureInitialized();
     final volume = state.volume;
     final rate = state.rate;
@@ -243,7 +249,10 @@ class LunaExoPlayer implements Player {
     _compatibilityPlayback = compatibility;
     _streamVideo = kit.VideoController(
       native,
-      configuration: const kit.VideoControllerConfiguration(hwdec: 'auto-safe'),
+      configuration: kit.VideoControllerConfiguration(
+        enableHardwareAcceleration: hwdec,
+        hwdec: hwdec ? 'auto-safe' : 'no',
+      ),
     );
     revision.value++;
     WidgetsBinding.instance.scheduleFrame();
@@ -282,6 +291,7 @@ class LunaExoPlayer implements Player {
     mirror(native.stream.rate, stream.rateController);
     try {
       final backend = native.platform as NativePlayer;
+      await backend.setProperty('hwdec', hwdec ? 'auto-safe' : 'no');
       if (key.isNotEmpty) {
         await backend.setProperty('demuxer-lavf-o', 'decryption_key=$key');
       }
@@ -319,6 +329,7 @@ class LunaExoPlayer implements Player {
     _pendingSeekSequence = 0;
     _seekOperations = Future<void>.value();
     _positionPollTimer?.cancel();
+    _watchdogTimer?.cancel();
 
     final old = _controller;
     _controller = null;
@@ -337,7 +348,7 @@ class LunaExoPlayer implements Player {
         await old.dispose();
       } catch (_) {}
       if (Platform.isAndroid) {
-        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await Future<void>.delayed(const Duration(milliseconds: 120));
       }
     }
 
@@ -508,6 +519,7 @@ class LunaExoPlayer implements Player {
             compatibilityMedia(),
             play: play,
             compatibility: true,
+            hwdec: !Platform.isAndroid,
           );
         }
       } else {
@@ -517,7 +529,12 @@ class LunaExoPlayer implements Player {
         } catch (_) {}
         if (_disposed || myGen != _openGeneration) return;
         if (engine == PlaybackEngine.system) rethrow;
-        return _openMpv(compatibilityMedia(), play: play, compatibility: true);
+        return _openMpv(
+          compatibilityMedia(),
+          play: play,
+          compatibility: true,
+          hwdec: !Platform.isAndroid,
+        );
       }
     }
 
@@ -536,10 +553,17 @@ class LunaExoPlayer implements Player {
         throw StateError('系统内核未识别视频轨，请切换 MPV 内核后重试');
       }
       DiaryService.add('[MPV] 系统播放器未识别视频轨，切换兼容播放');
-      return _openMpv(compatibilityMedia(), play: play, compatibility: true);
+      return _openMpv(
+        compatibilityMedia(),
+        play: play,
+        compatibility: true,
+        hwdec: !Platform.isAndroid,
+      );
     }
 
     _controller = c;
+    _currentMedia = compatibilityMedia();
+    _playIntent = play;
     _controllerError = null;
     final dur = c.value.duration;
     final videoParams = _systemVideoParameters(c.value);
@@ -566,6 +590,7 @@ class LunaExoPlayer implements Player {
 
     // 定时轮询真实播放位置 (与 LunaTV-Mobile 对齐)
     _startPositionPolling();
+    _startVideoWatchdog(c, myGen);
 
     if (media.start != null && media.start! > Duration.zero) {
       try {
@@ -581,6 +606,79 @@ class LunaExoPlayer implements Player {
       } catch (_) {}
     }
     revision.value++;
+  }
+
+  void _startVideoWatchdog(VideoPlayerController controller, int generation) {
+    _watchdogTimer?.cancel();
+    _zeroSizeTicks = 0;
+    if (!Platform.isAndroid || engine != PlaybackEngine.automatic) return;
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_disposed ||
+          generation != _openGeneration ||
+          _controller != controller) {
+        timer.cancel();
+        return;
+      }
+      final value = controller.value;
+      if (!value.isInitialized ||
+          !value.isPlaying ||
+          value.isBuffering ||
+          value.position <= const Duration(seconds: 1)) {
+        _zeroSizeTicks = 0;
+        return;
+      }
+      if (value.size.width > 0 && value.size.height > 0) {
+        _zeroSizeTicks = 0;
+        return;
+      }
+      _zeroSizeTicks++;
+      if (_zeroSizeTicks == 2) {
+        unawaited(
+          controller
+              .seekTo(value.position)
+              .timeout(const Duration(seconds: 1))
+              .catchError((Object _) {}),
+        );
+      } else if (_zeroSizeTicks >= 3) {
+        timer.cancel();
+        unawaited(_recoverVideoWithSoftware(controller, generation));
+      }
+    });
+  }
+
+  Future<void> _recoverVideoWithSoftware(
+    VideoPlayerController controller,
+    int generation,
+  ) async {
+    final media = _currentMedia;
+    if (_disposed ||
+        generation != _openGeneration ||
+        _controller != controller ||
+        engine != PlaybackEngine.automatic ||
+        media == null) {
+      return;
+    }
+    final position = controller.value.position;
+    final recovery = Media(
+      media.uri,
+      httpHeaders: media.httpHeaders,
+      extras: media.extras,
+      start: position > Duration.zero ? position : media.start,
+      end: media.end,
+    );
+    DiaryService.add('[MPV] Android 系统解码失败或无画面，保留进度切换软解');
+    try {
+      await _openMpv(
+        recovery,
+        play: _playIntent,
+        compatibility: true,
+        hwdec: false,
+      );
+    } catch (error) {
+      if (!_disposed && generation + 1 == _openGeneration) {
+        _safeAdd(stream.errorController, error.toString());
+      }
+    }
   }
 
   void _startPositionPolling() {
@@ -629,6 +727,10 @@ class LunaExoPlayer implements Player {
       if (_controllerError != error) {
         _controllerError = error;
         DiaryService.add('[ExoPlayer] controller error: $error');
+        if (Platform.isAndroid && engine == PlaybackEngine.automatic) {
+          unawaited(_recoverVideoWithSoftware(c, _openGeneration));
+          return;
+        }
         _safeAdd(stream.errorController, error);
       }
     }
@@ -663,6 +765,7 @@ class LunaExoPlayer implements Player {
 
   @override
   Future<void> play() async {
+    _playIntent = true;
     if (_streamPlayer != null) return _streamPlayer!.play();
     final c = _controller;
     if (c == null) return;
@@ -673,6 +776,7 @@ class LunaExoPlayer implements Player {
 
   @override
   Future<void> pause() async {
+    _playIntent = false;
     if (_streamPlayer != null) return _streamPlayer!.pause();
     final c = _controller;
     if (c == null) return;
@@ -764,6 +868,10 @@ class LunaExoPlayer implements Player {
     _seekOperations = Future<void>.value();
     _positionPollTimer?.cancel();
     _positionPollTimer = null;
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
+    _currentMedia = null;
+    _playIntent = false;
     final c = _controller;
     _controller = null;
     _controllerError = null;

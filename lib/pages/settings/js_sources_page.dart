@@ -853,7 +853,7 @@ class _JsSourcesPageState extends State<JsSourcesPage> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              '原生独立沙箱引擎 (v1.0.1)',
+                              '数据源运行环境',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.hongguoRed,

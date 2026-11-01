@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,7 +7,9 @@ import 'package:http/testing.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 void main() {
-  final script = File('assets/sources/hongguo.js').readAsStringSync();
+  final script = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   const ids = [
     '7345678901234567000',
     '7345678901234567001',

@@ -9,6 +9,12 @@
   <a href="https://t.me/tanghulutvos"><img src="https://img.shields.io/badge/Telegram-Group-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Group" /></a>
 </p>
 
+## 项目定位
+
+以下声明适用于本项目当前公开源码：
+
+> 本项目仅用于学习交流网络框架与架构设计，出于法律合规与安全考虑，已移除目标平台的核心签名参数（Secret/Salt），不提供开箱即用的破解功能。
+
 > ⚠️ **免责声明 (Disclaimer)**：
 > 1. **仅供学习研究**：本项目仅供编程技术交流、Flutter 跨平台与 Apple tvOS 原生应用架构研究使用，严禁用于任何商业牟利或侵权用途；
 > 2. **纯客户端工具，无内容存储**：本项目为纯本地端侧播放器工具，无需注册登录即可直接使用；开发者不搭建、不运营任何流媒体服务器，不提供、不存储、不分发任何音视频资源；
@@ -17,7 +23,22 @@
 
 **糖葫芦Haw**（工程标识：`THLRedLook`，包名 / Application ID：`com.never88gone.redlook`）是一款基于 **Flutter + Apple tvOS 原生** 打造的全平台独立流媒体与短剧聚合应用。
 
-应用内无需注册账号、无需登录。站源解析、播放、弹幕呈现与离线下载在设备端完成；通用弹幕可按需连接用户配置的兼容 API 服务。
+应用内无需注册账号或登录。数据请求、签名和解析由设备端 JS 数据源完成，媒体解码、流式解密等底层能力由客户端提供，无需搭建远程中转或中心化代理服务。
+
+## JS 数据源
+
+应用内置官方 `assets/sources/hongguo.js`，也可在数据源管理页面导入兼容的 JS 数据源。iOS、iPadOS 与 tvOS 的浏览和在线播放均通过 JS 数据源工作，用户无需准备或导入 Android APK。
+
+独立导入请使用 [发布版 hongguo.js](https://github.com/never88gone/THLRedGuo/releases/download/official-source/hongguo.js)。
+
+公开仓库中的官方源是未注入签名参数的源码模板。本地调试可在数据源管理中导入上述发布版 JS；构建内置可用官方源时，通过 `HONGGUO_SIGNING_CONFIG` 提供配置，GitHub Actions 使用同名 Repository secret。本地构建也可读取工作区 `publicinfo/THLRedGuo-signing.json`；构建工具在完成或失败后恢复源码模板，配置内容不写入日志或提交到仓库。
+
+- **iOS / iPadOS**：进入「设置 → JS 数据源插件管理」管理数据源。
+- **tvOS**：进入「设置 → 站源管理」查看当前 JS 版本、导入数据源网址和执行诊断。
+
+收藏、历史和播放进度保存在设备端，并可通过 iCloud 在支持的平台间同步。
+
+通用弹幕可按需连接用户配置的兼容 API 服务。
 
 ---
 
@@ -215,7 +236,7 @@ THLRedLook
 ├── macos/                 # macOS 桌面端平台工程与权限配置
 ├── windows/               # Windows 桌面端 Runner 与 CMake 构建系统
 ├── tvos/                  # Apple tvOS 原生独立工程（SwiftUI + AVKit + Focus Engine）
-└── scripts/               # 工程工具链与辅助脚本
+└── .github/ci/            # 构建、打包、官方 JS 校验与 TestFlight 工具
 ```
 
 ---
@@ -231,7 +252,7 @@ THLRedLook
   - Windows：Visual Studio 2022 C++ 桌面开发套件
 
 ### 运行与调试
-本项目零服务器配置依赖，一键拉取依赖即可运行：
+使用 Flutter 启动本地调试：
 
 ```bash
 # 获取 Flutter 依赖
@@ -240,6 +261,22 @@ flutter pub get
 # 启动本地调试（全平台支持）
 flutter run
 ```
+
+### 构建与发布
+
+仓库保留的最小工具链位于 `.github/ci/`，CI 和本地打包使用相同入口：
+
+```bash
+python3 .github/ci/build_android.py
+python3 .github/ci/build_windows.py
+python3 .github/ci/build_ios.py
+python3 .github/ci/build_macos.py
+python3 .github/ci/build_tvos.py
+```
+
+Apple 平台的签名打包使用 `--export-options` 指定对应的 ExportOptions.plist；tvOS 归档另加 `--package`。tvOS 本地调试先在 `tvos/` 运行 `pod install`，再打开 `THLRedLook.xcworkspace`，选择 Apple TV 模拟器运行。
+
+应用版本保持 `1.0.0`。打包平台、GitHub Release 发布与 TestFlight 上传沿用工作流中的独立选项，手动运行时默认不发布、不上传；TestFlight 公开组不自动分发。官方 JS 工作流默认只生成构建产物，发布至 GitHub Releases 需在手动运行时明确勾选 `publish_release`。
 
 ---
 

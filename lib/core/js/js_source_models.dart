@@ -1,4 +1,51 @@
 class JsSourceMeta {
+  static final _versionPattern = RegExp(
+    r'^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$',
+  );
+
+  static String scriptVersion(String script) =>
+      RegExp(
+        r'''\bversion\s*:\s*["']([^"']+)["']''',
+      ).firstMatch(script)?.group(1) ??
+      '';
+
+  static bool isVersionNewer(String candidate, String baseline) {
+    if (candidate.length > 128 || baseline.length > 128) return false;
+    final a = _versionPattern.firstMatch(candidate);
+    final b = _versionPattern.firstMatch(baseline);
+    if (a == null || b == null) return false;
+    for (var index = 1; index <= 3; index++) {
+      final order = int.parse(
+        a.group(index)!,
+      ).compareTo(int.parse(b.group(index)!));
+      if (order != 0) return order > 0;
+    }
+    final ap = a.group(4);
+    final bp = b.group(4);
+    if (ap == null || bp == null) return ap == null && bp != null;
+    final ai = ap.split('.');
+    final bi = bp.split('.');
+    for (var index = 0; index < ai.length && index < bi.length; index++) {
+      final left = ai[index];
+      final right = bi[index];
+      if (left == right) continue;
+      final an = RegExp(r'^\d+$').hasMatch(left);
+      final bn = RegExp(r'^\d+$').hasMatch(right);
+      if (an != bn) return !an;
+      if (an) {
+        final digitsA = left.replaceFirst(RegExp(r'^0+'), '');
+        final digitsB = right.replaceFirst(RegExp(r'^0+'), '');
+        final order = digitsA.length == digitsB.length
+            ? digitsA.compareTo(digitsB)
+            : digitsA.length.compareTo(digitsB.length);
+        if (order != 0) return order > 0;
+      } else {
+        return left.compareTo(right) > 0;
+      }
+    }
+    return ai.length > bi.length;
+  }
+
   final String id;
   final String name;
   final String version;

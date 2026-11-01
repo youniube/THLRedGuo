@@ -88,16 +88,19 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
-    final isLandscape = mediaQuery.orientation == Orientation.landscape ||
+    final isLandscape =
+        mediaQuery.orientation == Orientation.landscape ||
         mediaQuery.size.width > mediaQuery.size.height;
     final sheetHeight = isLandscape
         ? mediaQuery.size.height * 0.88
         : mediaQuery.size.height * 0.62;
 
-    final crossAxisCount = isLandscape
-        ? (mediaQuery.size.width >= 900 ? 10 : 8)
-        : 5;
-    final childAspectRatio = isLandscape ? 1.35 : 1.25;
+    final maxTileWidth = mediaQuery.textScaler.scale(isLandscape ? 80 : 90);
+    final tileHeight = max(
+      52.0,
+      (mediaQuery.textScaler.scale(15) + mediaQuery.textScaler.scale(9)) * 1.5 +
+          10,
+    );
 
     final episodes = widget.episodes;
     final currentEp =
@@ -132,7 +135,9 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
             // 整个浮层内容区域统一可滚动
             Expanded(
               child: ScrollConfiguration(
-                behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false),
                 child: CustomScrollView(
                   controller: _scrollController,
                   physics: const BouncingScrollPhysics(
@@ -292,7 +297,8 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
                                 scrollDirection: Axis.horizontal,
                                 physics: const BouncingScrollPhysics(),
                                 itemCount: widget.seriesEntries.length,
-                                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(width: 8),
                                 itemBuilder: (context, sIdx) {
                                   final sEntry = widget.seriesEntries[sIdx];
                                   final isCurrentSeason =
@@ -302,10 +308,12 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
                                     onTap: isCurrentSeason || !sEntry.playable
                                         ? null
                                         : () => widget.onSeasonSelected?.call(
-                                              sEntry.drama,
-                                            ),
+                                            sEntry.drama,
+                                          ),
                                     child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 180),
+                                      duration: const Duration(
+                                        milliseconds: 180,
+                                      ),
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 14,
                                         vertical: 6,
@@ -362,29 +370,39 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
                                 scrollDirection: Axis.horizontal,
                                 physics: const BouncingScrollPhysics(),
                                 itemCount: _totalGroups,
-                                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(width: 8),
                                 itemBuilder: (context, gIdx) {
-                                  final isSelected = gIdx == _selectedGroupIndex;
+                                  final isSelected =
+                                      gIdx == _selectedGroupIndex;
                                   return InkWell(
                                     borderRadius: BorderRadius.circular(16),
                                     onTap: () {
-                                      setState(() => _selectedGroupIndex = gIdx);
+                                      setState(
+                                        () => _selectedGroupIndex = gIdx,
+                                      );
                                       _resetScrollPosition();
                                     },
                                     child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 150),
+                                      duration: const Duration(
+                                        milliseconds: 150,
+                                      ),
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 14,
                                       ),
                                       alignment: Alignment.center,
                                       decoration: BoxDecoration(
                                         color: isSelected
-                                            ? AppColors.hongguoRedWithAlpha(0.14)
+                                            ? AppColors.hongguoRedWithAlpha(
+                                                0.14,
+                                              )
                                             : AppColors.darkSurfaceHigh,
                                         borderRadius: BorderRadius.circular(16),
                                         border: Border.all(
                                           color: isSelected
-                                              ? AppColors.hongguoRedWithAlpha(0.5)
+                                              ? AppColors.hongguoRedWithAlpha(
+                                                  0.5,
+                                                )
                                               : AppColors.whiteWithAlpha(0.03),
                                           width: 0.8,
                                         ),
@@ -431,98 +449,100 @@ class _PlayerEpisodesSheetViewState extends State<PlayerEpisodesSheetView> {
                       SliverPadding(
                         padding: const EdgeInsets.only(bottom: 16),
                         sliver: SliverGrid(
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: crossAxisCount,
-                            crossAxisSpacing: 9,
-                            mainAxisSpacing: 9,
-                            childAspectRatio: childAspectRatio,
-                          ),
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final epIndex = groupIndices[index];
-                              final ep = episodes[epIndex];
-                              final isPlaying = epIndex == widget.currentIndex;
+                          gridDelegate:
+                              SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: maxTileWidth,
+                                crossAxisSpacing: 9,
+                                mainAxisSpacing: 9,
+                                mainAxisExtent: tileHeight,
+                              ),
+                          delegate: SliverChildBuilderDelegate((
+                            context,
+                            index,
+                          ) {
+                            final epIndex = groupIndices[index];
+                            final ep = episodes[epIndex];
+                            final isPlaying = epIndex == widget.currentIndex;
 
-                              return InkWell(
-                                key: ValueKey('episode-option-$epIndex'),
-                                borderRadius: BorderRadius.circular(12),
-                                onTap: () {
-                                  widget.onEpisodeSelected(epIndex);
-                                },
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  decoration: BoxDecoration(
-                                    color: isPlaying
-                                        ? null
-                                        : AppColors.darkSurfaceHigh,
-                                    gradient: isPlaying
-                                        ? const LinearGradient(
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                            colors: [
-                                              AppColors.hongguoRed,
-                                              AppColors.hongguoOrange,
-                                            ],
-                                          )
-                                        : null,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: isPlaying
-                                        ? null
-                                        : Border.all(
-                                            color: AppColors.whiteWithAlpha(0.03),
-                                            width: 0.8,
-                                          ),
-                                    boxShadow: isPlaying
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.hongguoRedWithAlpha(
-                                                0.35,
-                                              ),
-                                              blurRadius: 10,
-                                              offset: const Offset(0, 3),
-                                            ),
-                                          ]
-                                        : null,
-                                  ),
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            '${ep.number}',
-                                            style: TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: isPlaying
-                                                  ? FontWeight.w800
-                                                  : FontWeight.w600,
-                                              color: isPlaying
-                                                  ? AppColors.white
-                                                  : AppColors.textPrimaryDark,
-                                            ),
-                                          ),
-                                          if (isPlaying) ...[
-                                            const SizedBox(height: 2),
-                                            const Text(
-                                              '播放中',
-                                              style: TextStyle(
-                                                fontSize: 9,
-                                                fontWeight: FontWeight.w600,
-                                                color: AppColors.white,
-                                              ),
-                                            ),
+                            return InkWell(
+                              key: ValueKey('episode-option-$epIndex'),
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () {
+                                widget.onEpisodeSelected(epIndex);
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                decoration: BoxDecoration(
+                                  color: isPlaying
+                                      ? null
+                                      : AppColors.darkSurfaceHigh,
+                                  gradient: isPlaying
+                                      ? const LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: [
+                                            AppColors.hongguoRed,
+                                            AppColors.hongguoOrange,
                                           ],
-                                        ],
-                                      ),
-                                    ],
-                                  ),
+                                        )
+                                      : null,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: isPlaying
+                                      ? null
+                                      : Border.all(
+                                          color: AppColors.whiteWithAlpha(0.03),
+                                          width: 0.8,
+                                        ),
+                                  boxShadow: isPlaying
+                                      ? [
+                                          BoxShadow(
+                                            color:
+                                                AppColors.hongguoRedWithAlpha(
+                                                  0.35,
+                                                ),
+                                            blurRadius: 10,
+                                            offset: const Offset(0, 3),
+                                          ),
+                                        ]
+                                      : null,
                                 ),
-                              );
-                            },
-                            childCount: groupIndices.length,
-                          ),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          '${ep.number}',
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: isPlaying
+                                                ? FontWeight.w800
+                                                : FontWeight.w600,
+                                            color: isPlaying
+                                                ? AppColors.white
+                                                : AppColors.textPrimaryDark,
+                                          ),
+                                        ),
+                                        if (isPlaying) ...[
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            '播放中',
+                                            style: TextStyle(
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w600,
+                                              color: AppColors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }, childCount: groupIndices.length),
                         ),
                       ),
                   ],

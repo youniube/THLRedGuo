@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'network_egress_lookup.dart';
+import 'package:THLRedLook/core/js/hongguo_playback_profile.dart';
 
 /// 诊断分析结果对象，包含清晰分类、具体失败原因与针对性排查建议
 class DiagnosticAnalysisResult {
@@ -695,6 +696,11 @@ class SourceDiagnostics extends ChangeNotifier {
       return '域名解析失败，请检查 DNS、去广告规则（如 AdGuard）或分流代理是否拦截，并用手机热点对照。';
     }
     return switch (code) {
+      'SOURCE_CONFIGURATION_MISSING' =>
+        '当前官方源未注入签名配置，请在数据源管理中导入发布版 hongguo.js；开发构建需配置 HONGGUO_SIGNING_CONFIG。',
+      'LOCAL_PROFILE_REQUIRED' ||
+      'LOCAL_PROFILE_INVALID' => '请更新 JS 数据源后重试，持续失败时导出诊断报告。',
+      'LOCAL_PROFILE_UNAVAILABLE' => '本机签名缓存暂不可访问，请稍后重试。',
       'SEARCH_TAB_MISSING' => '官方连接成功但未提供短剧分类，请导出日志并对照不同网络；仅凭此响应无法确定地区限制。',
       'INVALID_SEARCH_CURSOR' => '官方搜索游标未推进，请重新搜索；持续出现时导出日志反馈。',
       'SEARCH_EMPTY' => '诊断搜索未取得样本，尚未验证分页、详情与播放解析，请导出日志反馈。',
@@ -767,7 +773,7 @@ class SourceDiagnostics extends ChangeNotifier {
         )
         .replaceAllMapped(
           RegExp(
-            r'''("?(?:device_id(?:_str)?|install_id(?:_str)?|iid|openudid|cdid|cookie|authorization|access_token|refresh_token|session_id|token|password|query|keyword|search_word)"?\s*[:=]\s*)("[^"]*"|[^\s,;&]+)''',
+            r'''("?(?:configuration|common_key|sign_key|mLicensetStr|x[-_](?:gorgon|helios|medusa|argus|ladon)|device_id(?:_str)?|install_id(?:_str)?|iid|openudid|cdid|cookie|authorization|access_token|refresh_token|session_id|token|password|query|keyword|search_word)"?\s*[:=]\s*)("[^"]*"|[^\s,;&]+)''',
             caseSensitive: false,
           ),
           (match) => '${match[1]}[已隐藏]',
@@ -851,6 +857,9 @@ class SourceDiagnostics extends ChangeNotifier {
       '  - 操作系统: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
     );
     buffer.writeln('  - 数据源指纹: hongguo · SHA256 $sourceHash');
+    if (HongguoPlaybackProfile.supported) {
+      buffer.writeln('  - 签名方式: ${HongguoPlaybackProfile.diagnosticSummary}');
+    }
     buffer.writeln(
       '  - 系统地区: ${Platform.localeName} · 时区: ${DateTime.now().timeZoneName}',
     );

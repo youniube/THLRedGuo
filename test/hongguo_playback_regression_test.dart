@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
@@ -13,7 +14,9 @@ void main() {
     CatPawJsRuntime.resetDeviceSessionForTesting();
   });
 
-  final script = File('assets/sources/hongguo.js').readAsStringSync();
+  final script = prepareHongguoFixtureSource(
+    File('assets/sources/hongguo.js').readAsStringSync(),
+  );
   const seriesId = '7345678901234567000';
   const videoId = '7345678901234568000';
   const playerUrl = 'https://hongguoduanju.com/player/$seriesId/$videoId';
@@ -28,8 +31,13 @@ void main() {
 
   test('Flutter、tvOS 与独立官方脚本保持完全一致', () async {
     final presetScript = await kPresetJsSources.single.loadScript();
-    expect(presetScript.trim(), script.trim());
-    expect(kPresetJsSources.single.loadScriptSync().trim(), script.trim());
+    expect(prepareHongguoFixtureSource(presetScript).trim(), script.trim());
+    expect(
+      prepareHongguoFixtureSource(
+        kPresetJsSources.single.loadScriptSync(),
+      ).trim(),
+      script.trim(),
+    );
     final swift = File(
       'tvos/THLRedLook/ViewModels/LibraryViewModel.swift',
     ).readAsStringSync();

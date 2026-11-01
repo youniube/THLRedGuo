@@ -1,3 +1,4 @@
+import 'fixtures/hongguo_source.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,9 +8,10 @@ import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/core/engine/dart_core_engine.dart';
 
 void main() {
-  final script = File('assets/sources/hongguo.js')
-      .readAsStringSync()
-      .replaceFirst(
+  final script =
+      prepareHongguoFixtureSource(
+        File('assets/sources/hongguo.js').readAsStringSync(),
+      ).replaceFirst(
         'const existingPlay = spider.play;',
         "const existingPlay = async function(){return {url:''};};",
       );

@@ -68,6 +68,10 @@ public actor NativeBridge {
     private var successfulPlaybackResolves = 0
     private var lastSuccessfulPlaybackAt: TimeInterval?
     private let timeProvider: @Sendable () -> TimeInterval
+    private let playbackProfileLoader: @Sendable () throws -> HongguoApkProfile?
+    private let playbackProfileRevision: @Sendable () -> UInt64
+    private var loadedPlaybackProfileRevision: UInt64?
+    private var localPlaybackProfileUnavailable = false
 
     // 沙盒路径
     private var baseDirURL: URL
@@ -81,7 +85,14 @@ public actor NativeBridge {
     // JS 运行时上下文缓存
     private var jsContexts: [String: JSContext] = [:]
 
-    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用", persistentDeviceSession: Bool = true, deviceDefaults: UserDefaults = .standard, timeProvider: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+    public func applyLocalPlaybackProfileChange() {
+        jsContexts.removeValue(forKey: "hongguo")
+        localPlaybackProfileUnavailable = false
+        successfulPlaybackResolves = 0
+        lastSuccessfulPlaybackAt = nil
+    }
+
+    init(baseDirectory: URL? = nil, httpSession: URLSession? = nil, diagnostics: SourceDiagnostics = .shared, diagnosticContext: String = "日常使用", persistentDeviceSession: Bool = true, deviceDefaults: UserDefaults = .standard, timeProvider: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }, playbackProfileLoader: @escaping @Sendable () throws -> HongguoApkProfile? = { try HongguoPlaybackProfileVault.load() }, playbackProfileRevision: @escaping @Sendable () -> UInt64 = { HongguoPlaybackProfileVault.revision }) {
         if let httpSession {
             self.httpSession = httpSession
         } else {
@@ -102,6 +113,8 @@ public actor NativeBridge {
         self.persistentDeviceSession = persistentDeviceSession
         self.deviceDefaults = deviceDefaults
         self.timeProvider = timeProvider
+        self.playbackProfileLoader = playbackProfileLoader
+        self.playbackProfileRevision = playbackProfileRevision
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.baseDirURL = baseDirectory ?? cachesDir.appendingPathComponent("THLRedLook_Data")
@@ -160,6 +173,8 @@ public actor NativeBridge {
         }
         installedSources.removeAll()
         sourceScripts.removeAll()
+        let official = BuiltInHongguoJSContent
+        let bundledMeta = extractScriptMeta(script: official, fallbackId: "hongguo") ?? [:]
 
         let files = (try? FileManager.default.contentsOfDirectory(at: sourcesDirURL, includingPropertiesForKeys: nil)) ?? []
 
@@ -169,30 +184,67 @@ public actor NativeBridge {
             }
             if var meta = extractScriptMeta(script: script, fallbackId: file.deletingPathExtension().lastPathComponent) {
                 let sid = meta["id"] as? String ?? file.deletingPathExtension().lastPathComponent
-                if sid == "hongguo" && script != BuiltInHongguoJSContent {
-                    script = BuiltInHongguoJSContent
-                    meta = extractScriptMeta(script: script, fallbackId: "hongguo") ?? meta
-                    try? BuiltInHongguoJSContent.write(to: file, atomically: true, encoding: .utf8)
+                if sid == "hongguo" && script != BuiltInHongguoJSContent &&
+                    !isSourceVersionNewer(meta["version"] as? String ?? "", than: bundledMeta["version"] as? String ?? "") {
+                    script = official
+                    meta = bundledMeta
+                    try? official.write(to: file, atomically: true, encoding: .utf8)
                     NSLog("🎬 [NativeBridge] 扫描时已将旧版沙盒数据源自动热升级为最新内置官方源")
+                }
+                if sid == "hongguo", let existing = installedSources[sid],
+                   !isSourceVersionNewer(meta["version"] as? String ?? "", than: existing["version"] as? String ?? "") {
+                    continue
                 }
                 installedSources[sid] = meta
                 sourceScripts[sid] = script
             }
         }
 
-        let official = BuiltInHongguoJSContent
-        if !official.isEmpty {
-            var meta = extractScriptMeta(script: official, fallbackId: "hongguo") ?? [:]
+        if !official.isEmpty, sourceScripts["hongguo"] == nil {
+            var meta = bundledMeta
             meta["sha256"] = SourceDiagnostics.fingerprint(official)
             meta["sourceCommit"] = SourceDiagnostics.sourceManifest["sourceCommit"] ?? ""
             installedSources["hongguo"] = meta
             sourceScripts["hongguo"] = official
+        }
+        if let script = sourceScripts["hongguo"] {
+            installedSources["hongguo"]?["sha256"] = SourceDiagnostics.fingerprint(script)
+            installedSources["hongguo"]?["sourceCommit"] = script == official ? SourceDiagnostics.sourceManifest["sourceCommit"] ?? "" : ""
         }
 
         // 如果存在活跃源但不在已安装列表中，清空或重置
         if !installedSources.keys.contains(activeSourceId) {
             activeSourceId = installedSources.keys.contains("hongguo") ? "hongguo" : (installedSources.keys.first ?? "")
         }
+    }
+
+    private func isSourceVersionNewer(_ candidate: String, than baseline: String) -> Bool {
+        guard candidate.count <= 128, baseline.count <= 128 else { return false }
+        let pattern = #"^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return false }
+        func fields(_ value: String) -> [String]? {
+            guard let match = expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) else { return nil }
+            return (1...4).map { index in Range(match.range(at: index), in: value).map { String(value[$0]) } ?? "" }
+        }
+        guard let a = fields(candidate), let b = fields(baseline) else { return false }
+        for index in 0..<3 {
+            let left = Int(a[index])!, right = Int(b[index])!
+            if left != right { return left > right }
+        }
+        if a[3].isEmpty || b[3].isEmpty { return a[3].isEmpty && !b[3].isEmpty }
+        let ap = a[3].split(separator: "."), bp = b[3].split(separator: ".")
+        for index in 0..<min(ap.count, bp.count) {
+            let left = ap[index], right = bp[index]
+            if left == right { continue }
+            let an = left.allSatisfy { $0.isASCII && $0.isNumber }, bn = right.allSatisfy { $0.isASCII && $0.isNumber }
+            if an != bn { return !an }
+            if an {
+                let digitsA = left.drop(while: { $0 == "0" }), digitsB = right.drop(while: { $0 == "0" })
+                if digitsA.count != digitsB.count { return digitsA.count > digitsB.count }
+                if digitsA != digitsB { return digitsA.lexicographicallyPrecedes(digitsB) == false }
+            } else { return right.lexicographicallyPrecedes(left) }
+        }
+        return ap.count > bp.count
     }
 
     /// 解析 Spider 脚本中的元数据 (meta)
@@ -235,7 +287,18 @@ public actor NativeBridge {
 
     /// 获取或构建指定数据源的 CatPawOpen JS 运行时上下文
     private func getOrCreateContext(sourceId: String) -> JSContext? {
+        if sourceId == "hongguo", jsContexts[sourceId]?.evaluateScript("globalThis.__hongguoHasBuiltInSigning === true")?.toBool() != true {
+            let revision = playbackProfileRevision()
+            if loadedPlaybackProfileRevision != revision {
+                applyLocalPlaybackProfileChange()
+                loadedPlaybackProfileRevision = revision
+            }
+        }
         if let existing = jsContexts[sourceId] {
+            if sourceId == "hongguo", localPlaybackProfileUnavailable,
+               sourceScripts[sourceId] == BuiltInHongguoJSContent {
+                refreshSigningCache(existing)
+            }
             synchronizeGuestSession(existing, sourceId: sourceId)
             return existing
         }
@@ -513,14 +576,39 @@ public actor NativeBridge {
 
         // 4. 执行 Spider 脚本代码
         context.evaluateScript(script)
+        if sourceId == "hongguo", script == BuiltInHongguoJSContent, context.exception == nil {
+            refreshSigningCache(context)
+        }
         if sourceId == "hongguo" {
             let ready = context.exception == nil && context.evaluateScript("typeof spider !== 'undefined' && typeof spider.play === 'function'")?.toBool() == true
-            diagnostics.registerSourceRuntime(context: diagnosticContext, script: script, ready: ready)
+            diagnostics.registerSourceRuntime(context: diagnosticContext, script: script, ready: ready,
+                                              importedVersion: script != BuiltInHongguoJSContent ? installedSources[sourceId]?["version"] as? String : nil)
         }
         context.evaluateScript("if (typeof spider !== 'undefined' && typeof spider.init === 'function') { spider.init({}); }")
 
         jsContexts[sourceId] = context
         return context
+    }
+
+    private func refreshSigningCache(_ context: JSContext) {
+        localPlaybackProfileUnavailable = false
+        guard context.evaluateScript("globalThis.__hongguoHasBuiltInSigning === true")?.toBool() != true else { return }
+        do {
+            if let profile = try playbackProfileLoader() {
+                context.setObject(["configuration": profile.configuration, "sdkVersion": profile.sdkVersion] as NSDictionary,
+                                  forKeyedSubscript: "__hongguoPendingLocalProfile" as NSString)
+                context.evaluateScript("""
+                try { globalThis.__hongguoUseLocalApkProfile(globalThis.__hongguoPendingLocalProfile); }
+                catch (_) { globalThis.__hongguoProfileErrorCode = 'LOCAL_PROFILE_INVALID'; }
+                delete globalThis.__hongguoPendingLocalProfile;
+                """)
+            }
+        } catch HongguoProfileStorageError.invalidProfile {
+            context.evaluateScript("globalThis.__hongguoProfileErrorCode = 'LOCAL_PROFILE_INVALID';")
+        } catch {
+            localPlaybackProfileUnavailable = true
+            context.evaluateScript("globalThis.__hongguoProfileErrorCode = 'LOCAL_PROFILE_UNAVAILABLE';")
+        }
     }
 
     private func synchronizeGuestSession(_ context: JSContext, sourceId: String) {
@@ -606,7 +694,13 @@ public actor NativeBridge {
         } : nil
         let category: DiagnosticCategory
         let description: String
-        if code == "MEDIA_URL_EXPIRED" {
+        if code == "SOURCE_CONFIGURATION_MISSING" {
+            category = .configuration
+            description = "官方源为源码模板，请在站源管理中导入发布版 hongguo.js"
+        } else if code.hasPrefix("LOCAL_PROFILE_") {
+            category = .configuration
+            description = code == "LOCAL_PROFILE_UNAVAILABLE" ? "本机签名缓存暂不可访问，请稍后重试" : "数据源签名配置不可用，请更新数据源后重试"
+        } else if code == "MEDIA_URL_EXPIRED" {
             category = .invalidResponse
             description = "本集媒体地址已经过期，请重新获取"
         } else if code.hasPrefix("MEDIA_HTTP_") {
@@ -629,7 +723,7 @@ public actor NativeBridge {
         let age = created > 0 ? String(max(0, Int(timeProvider() - created))) + "秒" : "未记录"
         let lastSuccess = lastSuccessfulPlaybackAt.map { String(max(0, Int(timeProvider() - $0))) + "秒前" } ?? "本次运行尚未成功"
         let sessionStatus = "游客会话创建距今：\(age)；本桥接成功取流：\(successfulPlaybackResolves)次；最近成功：\(lastSuccess)"
-        let advice = upstream?.suggestion ?? "请保留当前剧集与集数，并在设置的数据源诊断中扫码导出报告。"
+        let advice = code.hasPrefix("LOCAL_PROFILE_") ? description : upstream?.suggestion ?? "请保留当前剧集与集数，并在设置的数据源诊断中扫码导出报告。"
         diagnostics.add(SourceDiagnosticEntry(context: diagnosticContext, stage: "播放取流 第\(episode)集", host: upstream?.host ?? URL(string: trace.url)?.host ?? "", url: upstream?.url ?? trace.url, method: upstream?.method ?? trace.method, logId: upstream?.logId ?? trace.logId, status: upstream?.status ?? trace.status, errorCode: code, category: category, errorDetail: detail, suggestion: advice, responseSnippet: upstream?.responseSnippet ?? trace.snippet, sessionStatus: sessionStatus, bodyBytes: upstream?.bodyBytes, contentType: upstream?.contentType ?? "", contentEncoding: upstream?.contentEncoding ?? "", declaredBodyBytes: upstream?.declaredBodyBytes))
         return NSError(domain: "CatPawOpen.Playback", code: -2, userInfo: [NSLocalizedDescriptionKey: detail + "（" + code + "）", "diagnosticCode": code, "diagnosticCategory": category.rawValue, "diagnosticAdvice": advice, "diagnosticSession": sessionStatus])
     }
@@ -708,7 +802,9 @@ public actor NativeBridge {
             let ready = getOrCreateContext(sourceId: "hongguo") != nil
             return ["id": "hongguo", "sha256": SourceDiagnostics.fingerprint(script),
                     "bundleSha256": SourceDiagnostics.sourceHash, "runtimeReady": ready,
-                    "sourceCommit": SourceDiagnostics.sourceManifest["sourceCommit"] ?? ""]
+                    "sourceCommit": installedSources["hongguo"]?["sourceCommit"] as? String ?? "",
+                    "version": installedSources["hongguo"]?["version"] as? String ?? "",
+                    "origin": script == BuiltInHongguoJSContent ? "bundled" : "imported"]
 
         case "jsSource.list":
             return [
@@ -882,7 +978,9 @@ public actor NativeBridge {
                     let rawCat = evaluated?["category"] as? String ?? ""
                     let rawCode = evaluated?["code"] as? String ?? ""
                     let errCat: DiagnosticCategory
-                    if let parsedCat = DiagnosticCategory(rawValue: rawCat), rawCat != "js_error" {
+                    if rawCode.hasPrefix("LOCAL_PROFILE_") {
+                        errCat = .configuration
+                    } else if let parsedCat = DiagnosticCategory(rawValue: rawCat), rawCat != "js_error" {
                         errCat = parsedCat
                     } else if errMsg.contains("网络") || errMsg.contains("DNS") {
                         errCat = .dnsError
