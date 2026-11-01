@@ -124,6 +124,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
   DanmakuStyle _danmakuStyle = const DanmakuStyle();
+  DanmakuStyle? _pendingDanmakuStyle;
   late final PlayerInteractions _interactions;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
   final _videoPaneKey = GlobalKey();
@@ -215,7 +216,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     autoAdvance: _autoAdvance,
     pictureInPicture: widget.store.playbackPreferences.pictureInPicture,
     danmaku: _danmakuEnabled,
-    danmakuStyle: _danmakuStyle,
+    danmakuStyle: widget.feed
+        ? _pendingDanmakuStyle ?? widget.store.playbackPreferences.danmakuStyle
+        : _danmakuStyle,
     preload: _preloadEnabled,
     enhancement: _enhancement.preferences,
   );
@@ -618,6 +621,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       _danmaku.setPlan(null);
     }
     if (!_closed && mounted) {
+      if (widget.feed) {
+        _danmakuEnabled = widget.store.playbackPreferences.danmaku;
+        _danmaku.setEnabled(_danmakuEnabled);
+      }
       setState(() {});
     }
   }
@@ -2169,6 +2176,30 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  Future<void> _setFeedDanmakuStyle(DanmakuStyle style) async {
+    if (!mounted ||
+        _closed ||
+        widget.store.locked ||
+        widget.store.profileEpoch != _profileEpoch) {
+      return;
+    }
+    setState(() => _pendingDanmakuStyle = style);
+    try {
+      await widget.store.setPlaybackPreferences(
+        widget.store.playbackPreferences.copyWith(danmakuStyle: style),
+      );
+    } catch (_) {
+      if (identical(_pendingDanmakuStyle, style) &&
+          widget.store.profileEpoch == _profileEpoch) {
+        _notice('弹幕样式未能保存，请重试');
+      }
+    } finally {
+      if (mounted && !_closed && identical(_pendingDanmakuStyle, style)) {
+        setState(() => _pendingDanmakuStyle = null);
+      }
+    }
+  }
+
   Future<void> _retryDanmakuFromControls() async {
     try {
       _danmaku.retry();
@@ -2419,7 +2450,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       onChanged: _danmaku.reload,
     ),
     onStyleChanged: (newStyle) {
-      unawaited(_setPreferences(_preferences.copyWith(danmakuStyle: newStyle)));
+      unawaited(
+        widget.feed
+            ? _setFeedDanmakuStyle(newStyle)
+            : _setPreferences(_preferences.copyWith(danmakuStyle: newStyle)),
+      );
     },
   );
 

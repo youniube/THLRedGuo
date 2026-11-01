@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,21 +15,28 @@ import 'package:THLRedLook/core/player/playback_surface.dart';
 import 'package:THLRedLook/core/store/follow_state.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
+import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/pages/player/player_page.dart';
+import 'package:THLRedLook/views/danmaku/danmaku_overlay.dart';
 import 'package:THLRedLook/views/feed/feed_player_overlay.dart';
+import 'package:THLRedLook/views/player/player_danmaku_sheet_view.dart';
 import 'package:THLRedLook/views/player/player_viewport_view.dart';
 
 const _movie = Drama(
   id: 'hongguo:synthetic-movie',
   source: 'hongguo',
+  sourceId: 'synthetic-movie',
   title: '合成电影',
   category: '电影',
+  vip: false,
 );
 const _short = Drama(
   id: 'hongguo:synthetic-short',
   source: 'hongguo',
+  sourceId: 'synthetic-short',
   title: '合成短剧',
   category: '短剧',
+  vip: false,
 );
 
 DramaDetail _detail(Drama drama) => DramaDetail(drama, [
@@ -38,6 +46,7 @@ DramaDetail _detail(Drama drama) => DramaDetail(drama, [
 
 class _Repository extends AppRepository {
   final resolved = <int>[];
+  bool nativeDanmaku = false;
 
   @override
   Future<String> cover(Drama drama, {bool force = false}) async => '';
@@ -52,14 +61,49 @@ class _Repository extends AppRepository {
     return PlaybackPlan(
       url: 'https://synthetic.invalid/${episode.number}.mp4',
       session: '${drama.id}:${episode.number}',
+      danmakuId: nativeDanmaku ? 'native:${episode.number}' : '',
     );
   }
+
+  @override
+  Future<DanmakuPage> danmaku(
+    PlaybackPlan plan, {
+    required String source,
+    required int startMs,
+    required int durationMs,
+  }) async => DanmakuPage(
+    episodeId: plan.danmakuId,
+    startMs: startMs,
+    nextMs: min(startMs + danmakuWindowMs, durationMs),
+    items: [
+      DanmakuItem(
+        id: 'native:$startMs',
+        text: '原站合成弹幕',
+        timeMs: startMs + 1000,
+        color: 0xff0000,
+      ),
+    ],
+  );
 
   @override
   Future<void> release(String session) async {}
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _DelayedPlaybackStore extends LocalStore {
+  _DelayedPlaybackStore(super.preferences);
+
+  Completer<void>? saveGate;
+
+  @override
+  Future<void> setPlaybackPreferences(PlaybackPreferences value) {
+    final gate = saveGate;
+    return gate == null
+        ? super.setPlaybackPreferences(value)
+        : gate.future.then((_) => super.setPlaybackPreferences(value));
+  }
 }
 
 class _Player extends LunaExoPlayer {
@@ -158,20 +202,26 @@ class _Player extends LunaExoPlayer {
 
 Future<void> _pump(WidgetTester tester, [int count = 15]) async {
   for (var i = 0; i < count; i++) {
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pump(const Duration(milliseconds: 100));
   }
 }
 
 void main() {
-  late LocalStore store;
+  late _DelayedPlaybackStore store;
   late _Repository repository;
   late _Player player;
   late PlaybackLeaseQueue queue;
   late PlaybackSurface surface;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('window_manager'),
+          (_) async => null,
+        );
     SharedPreferences.setMockInitialValues({});
-    store = LocalStore(await SharedPreferences.getInstance());
+    store = _DelayedPlaybackStore(await SharedPreferences.getInstance());
     await store.setPlaybackPreferences(
       const PlaybackPreferences(danmaku: false, preload: false),
     );
@@ -227,6 +277,147 @@ void main() {
     tester.view.resetDevicePixelRatio();
   }
 
+  Future<void> openNativeDanmaku(
+    WidgetTester tester, {
+    bool feed = true,
+  }) async {
+    repository.nativeDanmaku = true;
+    player.mediaDuration = const Duration(seconds: 90);
+    player.portrait = true;
+    await tester.runAsync(
+      () => store.setPlaybackPreferences(
+        const PlaybackPreferences(preload: false),
+      ),
+    );
+    final plan = FeedPlaybackPlan(
+      drama: _short,
+      resumeIndex: 0,
+      resumePosition: 0,
+      episodeCount: 3,
+    );
+    await open(tester, _short, plan, feed: feed);
+    await player.pause();
+    await _pump(tester, 2);
+    expect(find.text('原站合成弹幕'), findsOneWidget);
+  }
+
+  testWidgets('推荐页弹幕样式在保存完成前作用于画面，连续调整与关闭面板保留最终值', (tester) async {
+    await openNativeDanmaku(tester);
+    await tester.tap(find.byKey(const ValueKey('feed-settings')));
+    await _pump(tester, 4);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('player-danmaku-settings')),
+    );
+    await tester.tap(find.byKey(const ValueKey('player-danmaku-settings')));
+    await _pump(tester, 4);
+    expect(find.byType(PlayerDanmakuSheetView), findsOneWidget);
+
+    final gate = Completer<void>();
+    store.saveGate = gate;
+    addTearDown(() {
+      if (!gate.isCompleted) gate.complete();
+    });
+    await tester.tap(find.byKey(const ValueKey('danmaku-size-1.5')));
+    await tester.pump();
+    expect(tester.widget<Text>(find.text('原站合成弹幕')).style!.fontSize, 24);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('danmaku-opacity-0.4')),
+    );
+    await tester.tap(find.byKey(const ValueKey('danmaku-opacity-0.4')));
+    await tester.pump();
+    final liveStyle = tester.widget<Text>(find.text('原站合成弹幕')).style!;
+    expect(liveStyle.fontSize, 24);
+    expect(liveStyle.color!.a, closeTo(.4, .01));
+    expect(store.playbackPreferences.danmakuStyle.fontSizeScale, 1);
+    expect(store.playbackPreferences.danmakuStyle.opacity, 1);
+
+    gate.complete();
+    store.saveGate = null;
+    await _pump(tester, 3);
+    await tester.tap(find.byTooltip('关闭'));
+    await _pump(tester, 4);
+    expect(find.byType(PlayerDanmakuSheetView), findsNothing);
+    expect(store.playbackPreferences.danmakuStyle.fontSizeScale, 1.5);
+    expect(store.playbackPreferences.danmakuStyle.opacity, .4);
+    expect(
+      tester.widget<Text>(find.text('原站合成弹幕')).style!.color!.a,
+      closeTo(.4, .01),
+    );
+    expect(repository.resolved, hasLength(1));
+    await close(tester);
+  });
+
+  testWidgets('推荐页保留播放器时同步全局弹幕样式、过滤与开关', (tester) async {
+    await openNativeDanmaku(tester);
+    const style = DanmakuStyle(
+      fontSizeScale: 1.5,
+      opacity: .4,
+      useOriginalColor: false,
+      color: 0xa5e8ff,
+      outline: true,
+      shadow: false,
+      displayArea: .75,
+      density: DanmakuDensity.low,
+      speed: 2,
+      subtitleSafe: false,
+    );
+    await tester.runAsync(
+      () => store.setPlaybackPreferences(
+        store.playbackPreferences.copyWith(danmakuStyle: style),
+      ),
+    );
+    await tester.pump();
+    final overlay = tester.widget<DanmakuOverlay>(find.byType(DanmakuOverlay));
+    expect(overlay.style.toJson(), style.toJson());
+    final text = tester.widget<Text>(find.text('原站合成弹幕')).style!;
+    expect(text.fontSize, 24);
+    expect(text.color, const Color(0xffa5e8ff).withValues(alpha: .4));
+    expect(text.shadows, hasLength(4));
+
+    await tester.runAsync(
+      () => store.setPlaybackPreferences(
+        store.playbackPreferences.copyWith(
+          danmakuStyle: style.copyWith(keywords: ['合成']),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('原站合成弹幕'), findsNothing);
+    await tester.runAsync(
+      () => store.setPlaybackPreferences(
+        store.playbackPreferences.copyWith(danmaku: false, danmakuStyle: style),
+      ),
+    );
+    await tester.pump();
+    expect(overlay.controller.visible, isFalse);
+    expect(find.text('原站合成弹幕'), findsNothing);
+    await tester.runAsync(
+      () => store.setPlaybackPreferences(
+        store.playbackPreferences.copyWith(danmaku: true),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('原站合成弹幕'), findsOneWidget);
+    expect(repository.resolved, hasLength(1));
+    await close(tester);
+  });
+
+  testWidgets('正片弹幕设置保留原有入口与保存行为', (tester) async {
+    await openNativeDanmaku(tester, feed: false);
+    await tester.tap(
+      find.byKey(const ValueKey('player-danmaku-settings-button')),
+    );
+    await _pump(tester, 4);
+    await tester.tap(find.byKey(const ValueKey('danmaku-size-1.5')));
+    await _pump(tester, 2);
+    expect(tester.widget<Text>(find.text('原站合成弹幕')).style!.fontSize, 24);
+    expect(store.playbackPreferences.danmakuStyle.fontSizeScale, 1.5);
+    await tester.tap(find.byTooltip('关闭'));
+    await _pump(tester, 4);
+    expect(repository.resolved, hasLength(1));
+    await close(tester);
+  });
+
   testWidgets('先静音定位才展示试看，定时保存、暂停与退出均不覆盖正片历史', (tester) async {
     final entry = WatchEntry(
       drama: _movie,
@@ -235,7 +426,7 @@ void main() {
       duration: 2700,
       updatedAt: DateTime(2026),
     );
-    await store.saveWatch(entry);
+    await tester.runAsync(() => store.saveWatch(entry));
     final plan = FeedPlaybackPlan(
       drama: _movie,
       resumeIndex: 1,
@@ -315,8 +506,10 @@ void main() {
       duration: 90,
       updatedAt: DateTime(2026),
     );
-    await store.saveWatch(entry);
-    await store.setFollowStatus(_short, FollowStatus.planned);
+    await tester.runAsync(() async {
+      await store.saveWatch(entry);
+      await store.setFollowStatus(_short, FollowStatus.planned);
+    });
     final following = store.following(_short.id)!.toJson();
     final shortPlan = FeedPlaybackPlan(
       drama: _short,
@@ -380,7 +573,9 @@ void main() {
       resumePosition: 0,
       episodeCount: 3,
     );
-    await store.setFollowStatus(_short, FollowStatus.planned);
+    await tester.runAsync(
+      () => store.setFollowStatus(_short, FollowStatus.planned),
+    );
     await open(tester, _short, plan);
     await _pump(tester, 60);
     expect(store.watched(_short.id), isNull);
