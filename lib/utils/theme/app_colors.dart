@@ -60,6 +60,7 @@ abstract final class AppColors {
   static const Color darkBorder = Color(0xFF262A38);
   /// 深色弱化边框
   static const Color darkBorderSubtle = Color(0xFF1E212E);
+  static const Color darkControlBorder = Color(0xFF73798C);
 
   // ==========================================
   // 4. 浅色主题环境色彩 (Light Mode Surfaces)

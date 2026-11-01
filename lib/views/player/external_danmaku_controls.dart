@@ -4,12 +4,13 @@ import 'package:THLRedLook/core/danmaku/danmaku_controller.dart';
 import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
 import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
+import 'package:THLRedLook/views/player/danmaku_settings_theme.dart';
 
 Future<bool> editDanmakuApi(
   BuildContext context,
   ExternalDanmakuSession session,
 ) async =>
-    await showDialog<bool>(
+    await showDanmakuDialog<bool>(
       context: context,
       builder: (_) => _DanmakuApiManager(session: session),
     ) ==
@@ -35,7 +36,7 @@ class ExternalDanmakuControls extends StatelessWidget {
   }
 
   Future<void> _search(BuildContext context) async {
-    final changed = await showDialog<bool>(
+    final changed = await showDanmakuDialog<bool>(
       context: context,
       builder: (_) => _DanmakuSearchDialog(session: session),
     );
@@ -144,7 +145,7 @@ class ExternalDanmakuControls extends StatelessWidget {
           children: [
             OutlinedButton.icon(
               key: const ValueKey('danmaku-manual-search'),
-              style: _actionStyle(primary: true),
+              style: DanmakuSettingsTheme.action(context, primary: true),
               onPressed: session.available && session.settings.mode != 'native'
                   ? () => _search(context)
                   : null,
@@ -153,7 +154,7 @@ class ExternalDanmakuControls extends StatelessWidget {
             ),
             OutlinedButton.icon(
               key: const ValueKey('danmaku-rematch'),
-              style: _actionStyle(),
+              style: DanmakuSettingsTheme.action(context),
               onPressed:
                   !session.available ||
                       loading ||
@@ -167,13 +168,13 @@ class ExternalDanmakuControls extends StatelessWidget {
               label: const Text('重新匹配'),
             ),
             if (controller?.canRetry == true)
-              TextButton(
+              OutlinedButton(
                 key: const ValueKey('danmaku-retry-load'),
                 onPressed: controller!.retry,
                 child: const Text('重试加载'),
               ),
             if (showOffset)
-              TextButton(
+              OutlinedButton(
                 onPressed: session.media == null
                     ? null
                     : () => _offset(context),
@@ -185,24 +186,15 @@ class ExternalDanmakuControls extends StatelessWidget {
     );
   }
 
-  ButtonStyle _actionStyle({bool primary = false}) => OutlinedButton.styleFrom(
-    foregroundColor: primary ? AppColors.hongguoRed : AppColors.textPrimaryDark,
-    backgroundColor: primary ? AppColors.accentSubtle12 : AppColors.darkCard,
-    side: BorderSide(
-      color: primary ? AppColors.accentBorder40 : AppColors.darkBorder,
-    ),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-  );
-
   Widget _apiSelector(BuildContext context) {
     final selected = session.settings.endpoints
         .where((source) => source.baseUrl == session.settings.baseUrl)
         .firstOrNull;
     return Material(
       key: const ValueKey('danmaku-current-api'),
-      color: AppColors.darkCard,
-      borderRadius: BorderRadius.circular(14),
+      color: Theme.of(context).colorScheme.surfaceContainer,
+      shape: DanmakuSettingsTheme.tileShape(context),
+      clipBehavior: Clip.antiAlias,
       child: Tooltip(
         message: '配置通用弹幕 API',
         child: InkWell(
@@ -257,48 +249,10 @@ class ExternalDanmakuControls extends StatelessWidget {
   Future<void> _offset(BuildContext context) async {
     final mediaKey = session.media?.key;
     final epoch = session.store.profileEpoch;
-    final field = TextEditingController(text: '${session.offsetMs / 1000}');
-    String? error;
-    final value = await showDialog<int>(
+    final value = await showDanmakuDialog<int>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('弹幕时间偏移'),
-          content: TextField(
-            controller: field,
-            keyboardType: const TextInputType.numberWithOptions(
-              signed: true,
-              decimal: true,
-            ),
-            decoration: InputDecoration(
-              labelText: '秒，正数延后，负数提前',
-              helperText: '范围 -1800 到 1800 秒',
-              errorText: error,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final seconds = double.tryParse(field.text);
-                if (seconds == null ||
-                    !seconds.isFinite ||
-                    seconds.abs() > 1800) {
-                  setState(() => error = '请输入有效的偏移秒数');
-                  return;
-                }
-                Navigator.pop(dialogContext, (seconds * 1000).round());
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => _DanmakuOffsetDialog(offsetMs: session.offsetMs),
     );
-    field.dispose();
     if (value != null &&
         session.media?.key == mediaKey &&
         session.store.profileEpoch == epoch) {
@@ -324,8 +278,9 @@ class ExternalDanmakuControls extends StatelessWidget {
                 ),
               ),
             ),
-            TextButton.icon(
+            OutlinedButton.icon(
               key: const ValueKey('danmaku-api-management'),
+              style: DanmakuSettingsTheme.action(context, primary: true),
               onPressed: () => _manage(context),
               icon: const Icon(Icons.tune_rounded, size: 16),
               label: Text('API 管理 · ${session.settings.endpoints.length}'),
@@ -345,7 +300,8 @@ class ExternalDanmakuControls extends StatelessWidget {
                 child: OutlinedButton(
                   key: ValueKey('danmaku-mode-${entry.key}'),
                   style:
-                      _actionStyle(
+                      DanmakuSettingsTheme.action(
+                        context,
                         primary: session.settings.mode == entry.key,
                       ).copyWith(
                         padding: const WidgetStatePropertyAll(
@@ -430,6 +386,7 @@ class _DanmakuSearchDialogState extends State<_DanmakuSearchDialog> {
   List<DanmakuLibraryEpisode> _episodes = [];
   DanmakuCandidate? _selected;
   bool _loading = false;
+  bool _searched = false;
   String _error = '';
   int _request = 0;
   @override
@@ -447,6 +404,7 @@ class _DanmakuSearchDialogState extends State<_DanmakuSearchDialog> {
   }
 
   Future<void> _load([DanmakuCandidate? candidate]) async {
+    FocusScope.of(context).unfocus();
     final ticket = ++_request;
     setState(() {
       _loading = true;
@@ -462,6 +420,7 @@ class _DanmakuSearchDialogState extends State<_DanmakuSearchDialog> {
       if (!mounted || ticket != _request) return;
       setState(() {
         _selected = candidate;
+        _searched = true;
         _candidates = candidates;
         _episodes = episodes;
       });
@@ -474,74 +433,112 @@ class _DanmakuSearchDialogState extends State<_DanmakuSearchDialog> {
     }
   }
 
+  Widget _result({
+    required Widget title,
+    Widget? subtitle,
+    required VoidCallback? onTap,
+  }) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Material(
+      color: Theme.of(context).colorScheme.surfaceContainer,
+      shape: DanmakuSettingsTheme.tileShape(context),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        enabled: onTap != null,
+        title: title,
+        subtitle: subtitle,
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: onTap,
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(_selected?.title ?? '搜索弹幕'),
+    key: const ValueKey('danmaku-search-dialog'),
+    scrollable: true,
+    title: Text(
+      _selected?.title ?? '搜索弹幕',
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    ),
     content: SizedBox(
-      width: 600,
-      height: 420,
+      width: 560,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextField(
+            key: const ValueKey('danmaku-search-keyword'),
             controller: _keyword,
+            textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               labelText: '影视名称',
-              suffixIcon: IconButton(
+              suffixIcon: IconButton.filled(
+                tooltip: '搜索弹幕',
                 onPressed: _loading ? null : () => _load(),
                 icon: const Icon(Icons.search),
               ),
             ),
-            onSubmitted: (_) => _load(),
+            onSubmitted: (_) {
+              if (!_loading) _load();
+            },
           ),
+          const SizedBox(height: 16),
           if (_loading) const LinearProgressIndicator(),
-          if (_error.isNotEmpty) Text(_error),
-          Expanded(
-            child: ListView(
-              children: _selected == null
-                  ? [
-                      for (final candidate in _candidates)
-                        ListTile(
-                          title: Text(candidate.title),
-                          subtitle: Text(
-                            [
-                              if (candidate.year > 0) '${candidate.year}',
-                              candidate.kind,
-                            ].where((text) => text.isNotEmpty).join(' · '),
-                          ),
-                          onTap: _loading ? null : () => _load(candidate),
-                        ),
-                      if (!_loading && _candidates.isEmpty)
-                        const ListTile(title: Text('搜索后选择作品和对应分集')),
-                    ]
-                  : [
-                      for (final episode in _episodes)
-                        ListTile(
-                          title: Text(episode.title),
-                          onTap: _loading
-                              ? null
-                              : () async {
-                                  if (widget.session.media?.key != _mediaKey) {
-                                    setState(() => _error = '播放分集已变化，请关闭后重新匹配');
-                                    return;
-                                  }
-                                  await widget.session.choose(
-                                    _selected!,
-                                    episode,
-                                  );
-                                  if (context.mounted) {
-                                    Navigator.pop(context, true);
-                                  }
-                                },
-                        ),
-                    ],
+          if (_error.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                _error,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             ),
-          ),
+          if (_selected == null) ...[
+            for (final candidate in _candidates)
+              _result(
+                title: Text(candidate.title),
+                subtitle: Text(
+                  [
+                    if (candidate.year > 0) '${candidate.year}',
+                    candidate.kind,
+                  ].where((text) => text.isNotEmpty).join(' · '),
+                ),
+                onTap: _loading ? null : () => _load(candidate),
+              ),
+            if (!_loading && _candidates.isEmpty)
+              Text(
+                _searched ? '未找到匹配作品，请修改名称后重试。' : '输入名称并搜索，再选择作品和对应分集。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+          ] else ...[
+            for (final episode in _episodes)
+              _result(
+                title: Text(episode.title),
+                onTap: _loading
+                    ? null
+                    : () async {
+                        if (widget.session.media?.key != _mediaKey) {
+                          setState(() => _error = '播放分集已变化，请关闭后重新匹配');
+                          return;
+                        }
+                        await widget.session.choose(_selected!, episode);
+                        if (context.mounted) {
+                          Navigator.pop(context, true);
+                        }
+                      },
+              ),
+            if (!_loading && _episodes.isEmpty)
+              const Text('该作品暂无可选分集，可返回选择其他作品。'),
+          ],
         ],
       ),
     ),
     actions: [
       if (_selected != null)
-        TextButton(
+        OutlinedButton(
           onPressed: () => setState(() {
             _selected = null;
             _episodes = [];
@@ -574,11 +571,14 @@ class ExternalDanmakuTimingControls extends StatelessWidget {
         const SizedBox(height: 8),
         Text('偏移 ${(session.offsetMs / 1000).toStringAsFixed(1)} 秒'),
         const Text('正数延后，负数提前，只调整当前分集的弹幕。'),
+        const SizedBox(height: 12),
         Wrap(
           spacing: 8,
+          runSpacing: 8,
           children: [
             for (final seconds in [-1, 0, 1])
-              TextButton(
+              OutlinedButton(
+                key: ValueKey('danmaku-offset-$seconds'),
                 onPressed: session.media == null
                     ? null
                     : () async {
@@ -595,7 +595,8 @@ class ExternalDanmakuTimingControls extends StatelessWidget {
                       : '−1 秒',
                 ),
               ),
-            TextButton(
+            OutlinedButton(
+              key: const ValueKey('danmaku-offset-edit'),
               onPressed: session.media == null
                   ? null
                   : () => ExternalDanmakuControls(
@@ -609,6 +610,64 @@ class ExternalDanmakuTimingControls extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _DanmakuOffsetDialog extends StatefulWidget {
+  const _DanmakuOffsetDialog({required this.offsetMs});
+  final int offsetMs;
+  @override
+  State<_DanmakuOffsetDialog> createState() => _DanmakuOffsetDialogState();
+}
+
+class _DanmakuOffsetDialogState extends State<_DanmakuOffsetDialog> {
+  late final _field = TextEditingController(text: '${widget.offsetMs / 1000}');
+  String? _error;
+
+  void _save() {
+    final seconds = double.tryParse(_field.text);
+    if (seconds == null || !seconds.isFinite || seconds.abs() > 1800) {
+      setState(() => _error = '请输入有效的偏移秒数');
+      return;
+    }
+    Navigator.pop(context, (seconds * 1000).round());
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    scrollable: true,
+    title: const Text('弹幕时间偏移'),
+    content: SizedBox(
+      width: 400,
+      child: TextField(
+        key: const ValueKey('danmaku-offset-input'),
+        controller: _field,
+        keyboardType: const TextInputType.numberWithOptions(
+          signed: true,
+          decimal: true,
+        ),
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _save(),
+        decoration: InputDecoration(
+          labelText: '时间偏移（秒）',
+          helperText: '正数延后，负数提前；范围 -1800 到 1800 秒',
+          errorText: _error,
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(onPressed: _save, child: const Text('保存')),
+    ],
+  );
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
 }
 
 class _DanmakuApiManager extends StatefulWidget {
@@ -627,7 +686,7 @@ class _DanmakuApiManagerState extends State<_DanmakuApiManager> {
   bool _saving = false;
   bool get _allowed => widget.session.store.profileEpoch == _epoch;
   Future<void> _edit([DanmakuApiSource? source]) async {
-    final next = await showDialog<DanmakuApiSource>(
+    final next = await showDanmakuDialog<DanmakuApiSource>(
       context: context,
       builder: (_) => _DanmakuApiEditor(source: source),
     );
@@ -668,70 +727,130 @@ class _DanmakuApiManagerState extends State<_DanmakuApiManager> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+    key: const ValueKey('danmaku-api-manager'),
+    scrollable: true,
     title: const Text('弹幕 API 管理'),
     content: SizedBox(
       width: 480,
-      height:
-          ((MediaQuery.sizeOf(context).height -
-                      MediaQuery.viewInsetsOf(context).bottom) *
-                  .45)
-              .clamp(100.0, 360.0),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('兼容 danmu_api，最多保存 16 个 API。选择一个作为当前服务。'),
+          Text(
+            '最多保存 16 个 API，选择一个作为当前服务。',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
           if (!_allowed) const Text('当前用户已变更，请关闭后重新打开。'),
           if (_error != null)
             Text(
               _error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
-          Expanded(
-            child: ListView(
-              children: [
-                for (final source in _sources)
-                  ListTile(
-                    leading: Icon(
-                      source.baseUrl == _selected
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_off,
-                    ),
-                    title: Text(source.name),
-                    subtitle: Text(
-                      _messages[source.baseUrl] ??
-                          Uri.parse(source.baseUrl).host,
-                    ),
-                    onTap: !_allowed || _saving
-                        ? null
-                        : () => setState(() => _selected = source.baseUrl),
-                    trailing: PopupMenuButton<String>(
-                      enabled: _allowed && !_saving,
-                      onSelected: (action) async {
-                        if (action == 'edit') {
-                          await _edit(source);
-                        } else if (action == 'probe') {
-                          await _probe(source);
-                        } else {
-                          setState(() {
-                            _sources.remove(source);
-                            if (_selected == source.baseUrl) {
-                              _selected = _sources.firstOrNull?.baseUrl ?? '';
-                            }
-                          });
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'probe', child: Text('检测连接')),
-                        PopupMenuItem(value: 'edit', child: Text('编辑')),
-                        PopupMenuItem(value: 'delete', child: Text('删除')),
-                      ],
+          const SizedBox(height: 16),
+          if (_sources.isEmpty)
+            Container(
+              key: const ValueKey('danmaku-api-empty'),
+              padding: const EdgeInsets.all(20),
+              decoration: ShapeDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainer,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.dns_outlined,
+                    size: 32,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '尚未添加弹幕 API',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '添加服务地址后，即可搜索和匹配弹幕。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
-          TextButton.icon(
+          for (final source in _sources)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Material(
+                color: source.baseUrl == _selected
+                    ? AppColors.accentSubtle12
+                    : Theme.of(context).colorScheme.surfaceContainer,
+                shape: DanmakuSettingsTheme.tileShape(
+                  context,
+                  selected: source.baseUrl == _selected,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ListTile(
+                  key: ValueKey('danmaku-api-source-${source.baseUrl}'),
+                  enabled: _allowed && !_saving,
+                  contentPadding: const EdgeInsets.only(left: 12, right: 4),
+                  minLeadingWidth: 24,
+                  horizontalTitleGap: 10,
+                  selected: source.baseUrl == _selected,
+                  selectedColor: DanmakuSettingsTheme.accent(
+                    Theme.of(context).colorScheme,
+                  ),
+                  leading: Icon(
+                    source.baseUrl == _selected
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                  ),
+                  title: Text(
+                    source.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    _messages[source.baseUrl] ?? Uri.parse(source.baseUrl).host,
+                  ),
+                  onTap: !_allowed || _saving
+                      ? null
+                      : () => setState(() => _selected = source.baseUrl),
+                  trailing: PopupMenuButton<String>(
+                    tooltip: 'API 操作',
+                    icon: const Icon(Icons.more_horiz_rounded),
+                    enabled: _allowed && !_saving,
+                    onSelected: (action) async {
+                      if (action == 'edit') {
+                        await _edit(source);
+                      } else if (action == 'probe') {
+                        await _probe(source);
+                      } else {
+                        setState(() {
+                          _sources.remove(source);
+                          if (_selected == source.baseUrl) {
+                            _selected = _sources.firstOrNull?.baseUrl ?? '';
+                          }
+                        });
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'probe', child: Text('检测连接')),
+                      PopupMenuItem(value: 'edit', child: Text('编辑')),
+                      PopupMenuItem(value: 'delete', child: Text('删除')),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
             key: const ValueKey('danmaku-api-add'),
+            style: DanmakuSettingsTheme.action(context, primary: true),
             onPressed: !_allowed || _saving || _sources.length >= 16
                 ? null
                 : () => _edit(),
@@ -813,8 +932,9 @@ class _DanmakuApiEditorState extends State<_DanmakuApiEditor> {
             keyboardType: TextInputType.url,
             autocorrect: false,
             decoration: InputDecoration(
-              labelText: 'danmu_api 兼容服务地址',
+              labelText: '服务地址',
               hintText: 'https://服务器地址/可选路径或令牌',
+              helperText: '填写兼容 danmu_api 的服务地址，可包含路径或令牌。',
               errorText: _error,
             ),
           ),

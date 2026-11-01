@@ -4,6 +4,7 @@ import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/utils/theme/app_colors.dart';
 import 'package:THLRedLook/utils/theme/app_theme.dart';
 import 'package:THLRedLook/views/danmaku/danmaku_overlay.dart';
+import 'package:THLRedLook/views/player/danmaku_settings_theme.dart';
 
 enum DanmakuSettingsTab { sources, display, advanced }
 
@@ -73,7 +74,7 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView>
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     return Theme(
-      data: AppTheme.dark,
+      data: DanmakuSettingsTheme.data(AppTheme.dark),
       child: Align(
         alignment: Alignment.bottomCenter,
         child: Container(
@@ -402,13 +403,20 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView>
         const SizedBox(height: 16),
       ],
       _caption('内容过滤'),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        key: const ValueKey('danmaku-keywords'),
-        title: const Text('屏蔽关键词'),
-        subtitle: Text('${_style.keywords.length} 个关键词'),
-        trailing: const Icon(Icons.edit_outlined),
-        onTap: _editKeywords,
+      Builder(
+        builder: (context) => Material(
+          color: AppColors.darkCard,
+          shape: DanmakuSettingsTheme.tileShape(context),
+          clipBehavior: Clip.antiAlias,
+          child: ListTile(
+            key: const ValueKey('danmaku-keywords'),
+            leading: const Icon(Icons.filter_alt_outlined),
+            title: const Text('屏蔽关键词'),
+            subtitle: Text('${_style.keywords.length} 个关键词 · 点击编辑'),
+            trailing: const Icon(Icons.edit_outlined),
+            onTap: _editKeywords,
+          ),
+        ),
       ),
       if (_style.keywords.isNotEmpty)
         Wrap(
@@ -453,8 +461,9 @@ class _PlayerDanmakuSheetViewState extends State<PlayerDanmakuSheetView>
     ]),
   );
   Future<void> _editKeywords() async {
-    final words = await showDialog<List<String>>(
+    final words = await showDanmakuDialog<List<String>>(
       context: context,
+      theme: AppTheme.dark,
       builder: (_) => _KeywordsDialog(words: _style.keywords),
     );
     if (words != null && mounted) _update(_style.copyWith(keywords: words));

@@ -13,9 +13,31 @@ import 'package:THLRedLook/core/danmaku/external_danmaku_session.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/danmaku/danmaku_models.dart';
 import 'package:THLRedLook/models/danmaku/external_danmaku_models.dart';
+import 'package:THLRedLook/utils/theme/app_theme.dart';
 import 'package:THLRedLook/views/danmaku/danmaku_overlay.dart';
 import 'package:THLRedLook/views/player/external_danmaku_controls.dart';
 import 'package:THLRedLook/views/player/player_danmaku_sheet_view.dart';
+
+double _contrast(Color first, Color second) {
+  final a = first.computeLuminance();
+  final b = second.computeLuminance();
+  return a > b ? (a + .05) / (b + .05) : (b + .05) / (a + .05);
+}
+
+Future<void> _capture(WidgetTester tester, String name) async {
+  final boundary = tester.renderObject<RenderRepaintBoundary>(
+    find.byKey(const ValueKey('danmaku-ui-capture')),
+  );
+  await tester.runAsync(() async {
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    Directory('build/verification').createSync(recursive: true);
+    File(
+      'build/verification/$name.png',
+    ).writeAsBytesSync(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +52,9 @@ void main() {
         await loader.load();
       }
     }
+    final icons = FontLoader('MaterialIcons')
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await icons.load();
   });
   test(
     'old style migrates and extended style persists without losing source settings',
@@ -424,12 +449,17 @@ void main() {
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.view.resetViewInsets);
         final store = LocalStore(await SharedPreferences.getInstance());
         addTearDown(store.dispose);
         final session = ExternalDanmakuSession(store);
         addTearDown(session.dispose);
         await tester.pumpWidget(
           MaterialApp(
+            builder: (_, child) => RepaintBoundary(
+              key: const ValueKey('danmaku-ui-capture'),
+              child: child!,
+            ),
             home: Scaffold(
               body: SingleChildScrollView(
                 child: ExternalDanmakuControls(
@@ -445,6 +475,12 @@ void main() {
         for (var i = 1; i <= 2; i++) {
           await tester.tap(find.byKey(const ValueKey('danmaku-api-add')));
           await tester.pumpAndSettle();
+          await tester.showKeyboard(
+            find.byKey(const ValueKey('danmaku-api-name')),
+          );
+          final keyboard = size.height > 500 ? 320.0 : 170.0;
+          tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
+          await tester.pumpAndSettle();
           await tester.enterText(
             find.byKey(const ValueKey('danmaku-api-name')),
             '服务$i',
@@ -453,7 +489,16 @@ void main() {
             find.byKey(const ValueKey('danmaku-api-address')),
             'https://service$i.invalid/prefix',
           );
+          expect(
+            tester.getRect(find.text('确定')).bottom,
+            lessThan(size.height - keyboard),
+          );
+          if (i == 1) {
+            await _capture(tester, 'danmaku-api-editor-${size.width.round()}');
+          }
           await tester.tap(find.text('确定'));
+          await tester.pumpAndSettle();
+          tester.view.resetViewInsets();
           await tester.pumpAndSettle();
         }
         await tester.ensureVisible(find.text('服务2'));
@@ -471,5 +516,198 @@ void main() {
         await tester.pumpWidget(const SizedBox());
       },
     );
+  }
+  testWidgets(
+    'enabled choices have readable labels and visible state borders',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          builder: (_, child) => RepaintBoundary(
+            key: const ValueKey('danmaku-ui-capture'),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: PlayerDanmakuSheetView(
+              style: const DanmakuStyle(),
+              onStyleChanged: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final selectedLabel = find.text('标准');
+      final unselectedLabel = find.text('大');
+      final theme = Theme.of(tester.element(selectedLabel));
+      final chip = theme.chipTheme;
+      final scheme = theme.colorScheme;
+      final selectedColor = tester
+          .renderObject<RenderParagraph>(selectedLabel)
+          .text
+          .style!
+          .color!;
+      final unselectedColor = tester
+          .renderObject<RenderParagraph>(unselectedLabel)
+          .text
+          .style!
+          .color!;
+      expect(selectedColor, isNot(unselectedColor));
+      for (final selected in [true, false]) {
+        final states = {if (selected) WidgetState.selected};
+        final background = Color.alphaBlend(
+          chip.color!.resolve(states)!,
+          scheme.surface,
+        );
+        final side = WidgetStateProperty.resolveAs<BorderSide?>(
+          chip.side,
+          states,
+        )!;
+        expect(
+          _contrast(selected ? selectedColor : unselectedColor, background),
+          greaterThanOrEqualTo(4.5),
+        );
+        expect(_contrast(side.color, background), greaterThanOrEqualTo(3));
+      }
+      await _capture(tester, 'danmaku-display-updated');
+      await tester.scrollUntilVisible(
+        find.text('弹幕密度'),
+        100,
+        scrollable: find.descendant(
+          of: find.byKey(const ValueKey('danmaku-display-list')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _capture(tester, 'danmaku-display-options-updated');
+      await tester.tap(find.text('高级'));
+      await tester.pumpAndSettle();
+      await _capture(tester, 'danmaku-advanced-updated');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final scenario in [
+    (size: const Size(390, 844), count: 0, scale: 1.0),
+    (size: const Size(390, 844), count: 1, scale: 1.0),
+    (size: const Size(390, 844), count: 16, scale: 1.0),
+    (size: const Size(320, 640), count: 0, scale: 1.0),
+    (size: const Size(320, 640), count: 16, scale: 1.0),
+    (size: const Size(844, 390), count: 0, scale: 1.0),
+    (size: const Size(844, 390), count: 16, scale: 1.0),
+    (size: const Size(320, 640), count: 2, scale: 1.3),
+  ]) {
+    testWidgets('API manager content fits and remains usable $scenario', (
+      tester,
+    ) async {
+      tester.view.physicalSize = scenario.size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final sources = [
+        for (var i = 1; i <= scenario.count; i++)
+          DanmakuApiSource(
+            name: i == 1 ? '合成服务一的较长名称用于验证窄屏换行与操作入口' : '合成服务$i',
+            baseUrl: 'https://service$i.invalid/prefix',
+          ),
+      ];
+      final store = LocalStore(await SharedPreferences.getInstance());
+      addTearDown(store.dispose);
+      await store.setExternalDanmakuSettings(
+        ExternalDanmakuSettings(
+          sources: sources,
+          baseUrl: sources.firstOrNull?.baseUrl ?? '',
+        ),
+      );
+      final session = ExternalDanmakuSession(store);
+      addTearDown(session.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(scenario.scale)),
+            child: RepaintBoundary(
+              key: const ValueKey('danmaku-ui-capture'),
+              child: child!,
+            ),
+          ),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: OutlinedButton(
+                  onPressed: () => editDanmakuApi(context, session),
+                  child: const Text('管理'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('管理'));
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const ValueKey('danmaku-api-manager'));
+      final save = find.byKey(const ValueKey('danmaku-api-save'));
+      final saveTheme = Theme.of(tester.element(save)).filledButtonTheme.style!;
+      expect(
+        _contrast(
+          saveTheme.foregroundColor!.resolve({})!,
+          saveTheme.backgroundColor!.resolve({})!,
+        ),
+        greaterThanOrEqualTo(4.5),
+      );
+      expect(tester.getRect(save).bottom, lessThan(scenario.size.height));
+      if (sources.isEmpty) {
+        final empty = find.byKey(const ValueKey('danmaku-api-empty'));
+        expect(empty, findsOneWidget);
+        final add = find.byKey(const ValueKey('danmaku-api-add'));
+        await tester.ensureVisible(add);
+        await tester.pumpAndSettle();
+        if (scenario.size.height > 800) {
+          final surface = find.descendant(
+            of: dialog,
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Material && widget.type == MaterialType.card,
+            ),
+          );
+          expect(tester.getSize(surface).height, lessThan(500));
+          expect(
+            tester.getRect(add).top - tester.getRect(empty).bottom,
+            lessThan(32),
+          );
+        }
+      } else {
+        final last = find.byKey(
+          ValueKey('danmaku-api-source-${sources.last.baseUrl}'),
+        );
+        await tester.ensureVisible(last);
+        await tester.pumpAndSettle();
+        await tester.tap(last);
+        await tester.pumpAndSettle();
+        expect(tester.widget<ListTile>(last).selected, isTrue);
+      }
+      await _capture(
+        tester,
+        'danmaku-api-${scenario.count}-${scenario.size.width.round()}-${scenario.scale}',
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(
+        store.externalDanmakuSettings.endpoints,
+        hasLength(sources.length),
+      );
+      expect(
+        store.externalDanmakuSettings.baseUrl,
+        sources.lastOrNull?.baseUrl ?? '',
+      );
+      await tester.pumpWidget(const SizedBox());
+    });
   }
 }

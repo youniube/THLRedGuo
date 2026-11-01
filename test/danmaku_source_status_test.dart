@@ -102,9 +102,28 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _captureFlow(WidgetTester tester, String name) async {
+  final boundary = tester.renderObject<RenderRepaintBoundary>(
+    find.byKey(const ValueKey('danmaku-flow-capture')),
+  );
+  await tester.runAsync(() async {
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    Directory('build/verification').createSync(recursive: true);
+    File(
+      'build/verification/$name.png',
+    ).writeAsBytesSync(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 Widget _panel(ExternalDanmakuSession session, DanmakuController controller) =>
     MaterialApp(
       theme: AppTheme.dark,
+      builder: (_, child) => RepaintBoundary(
+        key: const ValueKey('danmaku-flow-capture'),
+        child: child!,
+      ),
       home: Scaffold(
         body: RepaintBoundary(
           key: const ValueKey('source-status-capture'),
@@ -117,6 +136,10 @@ Widget _panel(ExternalDanmakuSession session, DanmakuController controller) =>
               controller: controller,
               onChanged: controller.reload,
               showOffset: false,
+            ),
+            timingControls: ExternalDanmakuTimingControls(
+              session: session,
+              onChanged: () {},
             ),
           ),
         ),
@@ -518,4 +541,180 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+  for (final scenario in [
+    (size: const Size(390, 844), keyboard: 320.0),
+    (size: const Size(320, 640), keyboard: 260.0),
+    (size: const Size(844, 390), keyboard: 170.0),
+  ]) {
+    testWidgets('search and editing dialogs fit keyboard $scenario', (
+      tester,
+    ) async {
+      tester.view.physicalSize = scenario.size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
+      _play(controller);
+      await tester.pumpWidget(_panel(session, controller));
+      await _settle(tester);
+      final search = find.byKey(const ValueKey('danmaku-manual-search'));
+      await tester.ensureVisible(search);
+      await _settle(tester);
+      await tester.tap(search);
+      await _settle(tester);
+      final keyword = find.byKey(const ValueKey('danmaku-search-keyword'));
+      await tester.showKeyboard(keyword);
+      tester.view.viewInsets = FakeViewPadding(bottom: scenario.keyboard);
+      await _settle(tester);
+      expect(
+        tester
+            .getRect(
+              find.byWidgetPredicate(
+                (widget) =>
+                    widget is Material && widget.type == MaterialType.card,
+              ),
+            )
+            .bottom,
+        lessThanOrEqualTo(scenario.size.height - scenario.keyboard),
+      );
+      await tester.ensureVisible(find.byTooltip('搜索弹幕'));
+      await _settle(tester);
+      await tester.tap(find.byTooltip('搜索弹幕'));
+      await _settle(tester);
+      final candidate = find.descendant(
+        of: find.byKey(const ValueKey('danmaku-search-dialog')),
+        matching: find.widgetWithText(ListTile, _candidate.title),
+      );
+      await tester.ensureVisible(candidate);
+      await _settle(tester);
+      await _captureFlow(
+        tester,
+        'danmaku-search-${scenario.size.width.round()}',
+      );
+      await tester.tap(candidate);
+      await _settle(tester);
+      final episode = find.text('第5集');
+      await tester.ensureVisible(episode);
+      await _settle(tester);
+      await tester.tap(episode);
+      await _settle(tester);
+      expect(session.binding['episodeId'], '705');
+      tester.view.resetViewInsets();
+      await _settle(tester);
+      await tester.tap(find.text('高级'));
+      await _settle(tester);
+      final forward = find.byKey(const ValueKey('danmaku-offset-1'));
+      await tester.ensureVisible(forward);
+      await _settle(tester);
+      await tester.tap(forward);
+      await _settle(tester);
+      expect(session.offsetMs, 1000);
+      await tester.tap(find.byKey(const ValueKey('danmaku-offset-0')));
+      await _settle(tester);
+      expect(session.offsetMs, 0);
+      final edit = find.byKey(const ValueKey('danmaku-offset-edit'));
+      await tester.ensureVisible(edit);
+      await _settle(tester);
+      if (scenario.size.width == 390) {
+        await _captureFlow(tester, 'danmaku-timing-updated');
+      }
+      await tester.tap(edit);
+      await _settle(tester);
+      await tester.showKeyboard(find.byType(TextField));
+      tester.view.viewInsets = FakeViewPadding(bottom: scenario.keyboard);
+      await _settle(tester);
+      await tester.enterText(find.byType(TextField), 'invalid');
+      await tester.tap(find.text('保存'));
+      await _settle(tester);
+      expect(find.text('请输入有效的偏移秒数'), findsOneWidget);
+      await _captureFlow(
+        tester,
+        'danmaku-offset-editor-${scenario.size.width.round()}',
+      );
+      expect(
+        tester.getRect(find.text('保存')).bottom,
+        lessThan(scenario.size.height - scenario.keyboard),
+      );
+      await tester.enterText(find.byType(TextField), '1.5');
+      await tester.tap(find.text('保存'));
+      await _settle(tester);
+      expect(session.offsetMs, 1500);
+      tester.view.resetViewInsets();
+      await _settle(tester);
+      final keywords = find.byKey(const ValueKey('danmaku-keywords'));
+      await tester.ensureVisible(keywords);
+      await _settle(tester);
+      await tester.tap(keywords);
+      await _settle(tester);
+      final input = find.byKey(const ValueKey('danmaku-keywords-input'));
+      await tester.showKeyboard(input);
+      tester.view.viewInsets = FakeViewPadding(bottom: scenario.keyboard);
+      await _settle(tester);
+      await tester.enterText(input, '剧透\n测试');
+      await tester.pumpAndSettle();
+      await _captureFlow(
+        tester,
+        'danmaku-keywords-editor-${scenario.size.width.round()}',
+      );
+      await tester.tap(find.text('保存'));
+      await _settle(tester);
+      tester.view.resetViewInsets();
+      await _settle(tester);
+      expect(find.text('2 个关键词 · 点击编辑'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+  testWidgets('API actions detect, edit and remove a draft without saving it', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(_panel(session, controller));
+    await _settle(tester);
+    await tester.tap(find.byKey(const ValueKey('danmaku-api-management')));
+    await _settle(tester);
+    await tester.tap(find.byTooltip('API 操作').first);
+    await _settle(tester);
+    await _captureFlow(tester, 'danmaku-api-actions-updated');
+    await tester.tap(find.text('检测连接'));
+    await _settle(tester);
+    expect(find.text('连接与搜索格式正常'), findsOneWidget);
+    await tester.tap(find.byTooltip('API 操作').first);
+    await _settle(tester);
+    await tester.tap(find.text('编辑'));
+    await _settle(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('danmaku-api-name')),
+      '修改后的合成服务',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('danmaku-api-address')),
+      'https://edited.invalid/prefix',
+    );
+    await _captureFlow(tester, 'danmaku-api-edit-updated');
+    await tester.tap(find.text('确定'));
+    await _settle(tester);
+    final edited = find.byKey(
+      const ValueKey('danmaku-api-source-https://edited.invalid/prefix'),
+    );
+    expect(tester.widget<ListTile>(edited).selected, isTrue);
+    await tester.tap(find.byTooltip('API 操作').last);
+    await _settle(tester);
+    await tester.tap(find.text('删除'));
+    await _settle(tester);
+    expect(find.byTooltip('API 操作'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await _settle(tester);
+    expect(store.externalDanmakuSettings.endpoints, hasLength(2));
+    expect(store.externalDanmakuSettings.endpoints.first.name, '合成服务一');
+    expect(
+      store.externalDanmakuSettings.baseUrl,
+      'https://one.invalid/private-token',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }
