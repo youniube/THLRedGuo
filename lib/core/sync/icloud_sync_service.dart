@@ -25,6 +25,7 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
   static const String keyMeta = 'thl_icloud_sync_v1_meta';
   static const String prefSyncEnabled = 'thl_icloud_sync_enabled';
   static const String prefLastSyncDate = 'thl_icloud_last_sync_date';
+  static const int maxHistoryCount = 40;
 
   bool _initialized = false;
   bool _isSyncing = false;
@@ -147,6 +148,10 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
               historySkipped = true;
             }
           }
+          if (remoteHistory.length > maxHistoryCount) {
+            remoteHistory.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+            remoteHistory.removeRange(maxHistoryCount, remoteHistory.length);
+          }
         } catch (e) {
           rethrow;
         }
@@ -158,6 +163,8 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
       });
       final Map<String, FollowState> remoteFollows = {};
       final List<Drama> remoteDramas = [];
+      final Map<String, int> remoteDeletedFollows = {};
+      final Map<String, int> remoteDeletedHistory = {};
       var dramasSkipped = false;
       if (followsRaw != null && followsRaw.isNotEmpty) {
         try {
@@ -199,6 +206,34 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
               }
             }
           }
+          final rawDelFollows = map['deletedFollows'] ?? map['deleted'];
+          if (rawDelFollows is Map) {
+            for (final entry in rawDelFollows.entries) {
+              final ts = entry.value is int
+                  ? entry.value as int
+                  : int.tryParse(entry.value.toString()) ?? 0;
+              if (ts > 0) remoteDeletedFollows[entry.key.toString()] = ts;
+            }
+          } else if (rawDelFollows is List) {
+            final now = DateTime.now().millisecondsSinceEpoch;
+            for (final item in rawDelFollows) {
+              if (item != null) remoteDeletedFollows[item.toString()] = now;
+            }
+          }
+          final rawDelHistory = map['deletedHistory'];
+          if (rawDelHistory is Map) {
+            for (final entry in rawDelHistory.entries) {
+              final ts = entry.value is int
+                  ? entry.value as int
+                  : int.tryParse(entry.value.toString()) ?? 0;
+              if (ts > 0) remoteDeletedHistory[entry.key.toString()] = ts;
+            }
+          } else if (rawDelHistory is List) {
+            final now = DateTime.now().millisecondsSinceEpoch;
+            for (final item in rawDelHistory) {
+              if (item != null) remoteDeletedHistory[item.toString()] = now;
+            }
+          }
         } catch (e) {
           rethrow;
         }
@@ -224,13 +259,56 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
 
       // 4. 双向合并逻辑
       if (!current()) return;
-      // 4.1 合并观看记录：同一剧集保留 updatedAt 较新者
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      const ttlMs = 30 * 24 * 3600 * 1000;
+      final cutoffMs = nowMs - ttlMs;
+
+      // 4.1 合并删除墓碑 (Tombstones)
+      final Map<String, int> mergedDeletedFollows = {};
+      void addFollowTombstone(String id, int ts) {
+        if (ts > cutoffMs) {
+          final old = mergedDeletedFollows[id];
+          if (old == null || ts > old) mergedDeletedFollows[id] = ts;
+        }
+      }
+
+      store.deletedFollows.forEach(addFollowTombstone);
+      remoteDeletedFollows.forEach(addFollowTombstone);
+
+      final Map<String, int> mergedDeletedHistory = {};
+      void addHistoryTombstone(String id, int ts) {
+        if (ts > cutoffMs) {
+          final old = mergedDeletedHistory[id];
+          if (old == null || ts > old) mergedDeletedHistory[id] = ts;
+        }
+      }
+
+      store.deletedHistory.forEach(addHistoryTombstone);
+      remoteDeletedHistory.forEach(addHistoryTombstone);
+
+      // 4.2 合并观看记录：同一剧集保留 updatedAt 较新者，并过滤删除墓碑
       final Map<String, WatchEntry> mergedHistory = {};
       for (final local in store.history) {
+        final delTs = mergedDeletedHistory[local.drama.id];
+        if (delTs != null) {
+          if (local.updatedAt.millisecondsSinceEpoch <= delTs) {
+            continue;
+          } else {
+            mergedDeletedHistory.remove(local.drama.id);
+          }
+        }
         mergedHistory[local.drama.id] = local;
       }
       for (final remote in remoteHistory) {
         final id = remote.drama.id;
+        final delTs = mergedDeletedHistory[id];
+        if (delTs != null) {
+          if (remote.updatedAt.millisecondsSinceEpoch <= delTs) {
+            continue;
+          } else {
+            mergedDeletedHistory.remove(id);
+          }
+        }
         final local = mergedHistory[id];
         if (local == null || remote.updatedAt.isAfter(local.updatedAt)) {
           mergedHistory[id] = remote;
@@ -242,12 +320,18 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
           return order != 0 ? order : a.drama.id.compareTo(b.drama.id);
         });
 
-      // 4.2 合并追剧列表
+      // 4.3 合并追剧列表：过滤已删除剧集
       final Map<String, Drama> mergedFavorites = {};
       for (final local in store.favorites) {
+        if (mergedDeletedFollows.containsKey(local.id)) {
+          continue;
+        }
         mergedFavorites[local.id] = local;
       }
       for (final remote in remoteDramas) {
+        if (mergedDeletedFollows.containsKey(remote.id)) {
+          continue;
+        }
         mergedFavorites[remote.id] = remote;
       }
 
@@ -264,11 +348,11 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
           mergedStates[id] =
               localState ??
               remoteState ??
-              FollowState.initial(mergedFavorites[id]!, store.watched(id));
+              FollowState.initial(mergedFavorites[id]!, store.localWatched(id));
         }
       }
 
-      // 4.3 合并设置项
+      // 4.4 合并设置项
       PlaybackPreferences? updatedPlayback;
       if (remoteDanmaku != null &&
           remoteDanmaku != store.playbackPreferences.danmaku) {
@@ -282,6 +366,8 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
         history: sortedHistory,
         favorites: mergedFavorites,
         followStates: mergedStates,
+        deletedFollows: mergedDeletedFollows,
+        deletedHistory: mergedDeletedHistory,
         source: remoteSource,
         playback: updatedPlayback,
       );
@@ -306,35 +392,64 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (!historySkipped &&
           historyContent(remoteHistory) !=
-              historyContent(sortedHistory.take(300))) {
+              historyContent(sortedHistory.take(maxHistoryCount))) {
         await write(
           keyHistory,
-          sortedHistory.take(300).map((e) => e.toJson()).toList(),
+          sortedHistory.take(maxHistoryCount).map((e) => e.toJson()).toList(),
         );
       }
 
-      final followsPayload = {
+      final followsPayload = <String, dynamic>{
         'follows': {
           for (final e in mergedStates.entries) e.key: e.value.status.name,
         },
         'dramas': mergedFavorites.values.map((d) => d.toJson()).toList(),
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
       };
+      if (mergedDeletedFollows.isNotEmpty) {
+        followsPayload['deleted'] = mergedDeletedFollows;
+        followsPayload['deletedFollows'] = mergedDeletedFollows;
+      }
+      if (mergedDeletedHistory.isNotEmpty) {
+        followsPayload['deletedHistory'] = mergedDeletedHistory;
+      }
+
       String followsContent(
         Map<String, FollowState> states,
-        Iterable<Drama> dramas,
-      ) {
+        Iterable<Drama> dramas, [
+        Map<String, int>? delFollows,
+        Map<String, int>? delHistory,
+      ]) {
         final ordered = dramas.toList()..sort((a, b) => a.id.compareTo(b.id));
         final keys = states.keys.toList()..sort();
-        return jsonEncode({
+        final map = <String, dynamic>{
           'follows': {for (final key in keys) key: states[key]!.status.name},
           'dramas': ordered.map((d) => d.toJson()).toList(),
-        });
+        };
+        if (delFollows != null && delFollows.isNotEmpty) {
+          final delFKeys = delFollows.keys.toList()..sort();
+          map['deletedFollows'] = {for (final k in delFKeys) k: delFollows[k]};
+        }
+        if (delHistory != null && delHistory.isNotEmpty) {
+          final delHKeys = delHistory.keys.toList()..sort();
+          map['deletedHistory'] = {for (final k in delHKeys) k: delHistory[k]};
+        }
+        return jsonEncode(map);
       }
 
       if (!dramasSkipped &&
-          followsContent(remoteFollows, remoteDramas) !=
-              followsContent(mergedStates, mergedFavorites.values)) {
+          followsContent(
+                remoteFollows,
+                remoteDramas,
+                remoteDeletedFollows,
+                remoteDeletedHistory,
+              ) !=
+              followsContent(
+                mergedStates,
+                mergedFavorites.values,
+                mergedDeletedFollows,
+                mergedDeletedHistory,
+              )) {
         await write(keyFollows, followsPayload);
       }
 
@@ -368,9 +483,12 @@ class ICloudSyncService extends ChangeNotifier with WidgetsBindingObserver {
         prefLastSyncDate,
         _lastSyncDate!.millisecondsSinceEpoch,
       );
+      final syncedHistoryCount = sortedHistory.length > maxHistoryCount
+          ? maxHistoryCount
+          : sortedHistory.length;
       _lastStatusMessage = historySkipped || dramasSkipped
           ? '部分记录格式不兼容，已保留云端原文'
-          : '已合并 (${sortedHistory.length}条记录, ${mergedFavorites.length}部追剧)，等待 iCloud 分发';
+          : '已合并 ($syncedHistoryCount条历史记录, ${mergedFavorites.length}部追剧)，等待 iCloud 分发';
     } catch (e) {
       debugPrint('iCloud 同步失败: $e');
       if (current()) _lastStatusMessage = 'iCloud 同步失败，本地记录已保留，请重试';

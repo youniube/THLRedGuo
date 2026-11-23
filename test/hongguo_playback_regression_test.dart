@@ -39,7 +39,7 @@ void main() {
       script.trim(),
     );
     final swift = File(
-      'tvos/THLRedLook/ViewModels/LibraryViewModel.swift',
+      'tvos/THLRedLook/ViewModels/JSSourceService.swift',
     ).readAsStringSync();
     expect(
       swift,

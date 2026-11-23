@@ -29,6 +29,7 @@ import 'package:THLRedLook/utils/privacy/privacy_lock_controller.dart';
 import 'package:THLRedLook/utils/screen/screen_wake_controller.dart';
 import 'package:THLRedLook/pages/privacy/privacy_lock_page.dart';
 import 'package:THLRedLook/core/js/js_source_service.dart';
+import 'package:THLRedLook/core/account/hongguo_account_session.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -89,6 +90,7 @@ class _AppBootstrapState extends State<AppBootstrap>
     LanController.current = null;
     MediaLibrary.current?.dispose();
     MediaLibrary.current = null;
+    store?.removeListener(_bindOfficialAccount);
     store?.dispose();
     super.dispose();
   }
@@ -145,6 +147,13 @@ class _AppBootstrapState extends State<AppBootstrap>
     setState(() => device = detected);
   }
 
+  void _bindOfficialAccount() {
+    final profile = store?.profile.id;
+    if (profile != null) {
+      unawaited(HongguoAccountSession.shared.bindProfile(profile));
+    }
+  }
+
   Future<void> _initialize() async {
     setState(() {
       error = null;
@@ -152,12 +161,14 @@ class _AppBootstrapState extends State<AppBootstrap>
     try {
       final preferences = await SharedPreferences.getInstance();
       await _refreshDevice();
+      final localStore = LocalStore(preferences);
+      await HongguoAccountSession.shared.bindProfile(localStore.profile.id);
       await repository.initialize();
       final jsSourceService = JsSourceService(repository);
       await jsSourceService.initialize();
       if (mounted) {
         final privacy = PrivacyLockController(preferences);
-        final localStore = LocalStore(preferences);
+        localStore.addListener(_bindOfficialAccount);
         if (localStore.source.isNotEmpty) {
           await jsSourceService.switchSource(localStore.source);
         }
@@ -243,6 +254,20 @@ class _AppBootstrapState extends State<AppBootstrap>
   );
 }
 
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+        PointerDeviceKind.unknown,
+      };
+}
+
 class DuanjuApp extends StatelessWidget {
   const DuanjuApp({
     super.key,
@@ -273,6 +298,7 @@ class DuanjuApp extends StatelessWidget {
   );
 
   Widget _application() => MaterialApp(
+    scrollBehavior: const AppScrollBehavior(),
     navigatorObservers: [appRouteObserver],
     navigatorKey: navigatorKey,
     title: appName,

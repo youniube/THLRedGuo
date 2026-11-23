@@ -17,12 +17,10 @@ class JsSourceService extends ChangeNotifier {
   }
 
   static JsSourceService? current;
+  static const _activeSourceKey = 'active_js_source_id';
   final AppRepository _repository;
   SharedPreferences? _preferences;
-
-  static const String _activeSourceKey = 'active_js_source_id';
   static const String _subscriptionsKey = 'js_source_subscriptions_v1';
-
   List<JsSourceMeta> _sources = [];
   List<JsSourceSubscription> _subscriptions = [];
   JsSubscriptionImportResult? _lastSubscriptionImport;
@@ -34,6 +32,9 @@ class JsSourceService extends ChangeNotifier {
   String _updatingSourceId = '';
   String _updatingSubscriptionUrl = '';
   String _lastError = '';
+  bool _disposed = false;
+  int _pendingOperations = 0;
+  Future<void>? _initializing;
 
   List<JsSourceMeta> get sources => List.unmodifiable(_sources);
   List<JsSourceSubscription> get subscriptions =>
@@ -42,17 +43,24 @@ class JsSourceService extends ChangeNotifier {
       _lastSubscriptionImport;
   String get activeSourceId => _activeSourceId;
   bool get initialized => _initialized;
-  bool get loading => _loading || _updatingAll;
+  bool get loading => _loading || _updatingAll || _pendingOperations > 0;
   bool get updatingAll => _updatingAll;
   String get updatingSourceId => _updatingSourceId;
   String get updatingSubscriptionUrl => _updatingSubscriptionUrl;
   String get lastError => _lastError;
+  JsSourceMeta? get activeSource =>
+      _sources.where((source) => source.id == _activeSourceId).firstOrNull ??
+      _sources.firstOrNull;
   bool get hasSubscriptions =>
       _subscriptions.isNotEmpty ||
       _sources.any((source) => source.sourceUrl.isNotEmpty);
 
   bool isBuiltinSource(String id) =>
       kPresetJsSources.any((source) => source.id == id);
+
+  void _notifyChange() {
+    if (!_disposed) notifyListeners();
+  }
 
   Future<void> loadSubscriptions() async {
     if (_subscriptionsLoaded) return;
@@ -66,7 +74,7 @@ class JsSourceService extends ChangeNotifier {
       }).toList();
     }
     _subscriptionsLoaded = true;
-    notifyListeners();
+    _notifyChange();
   }
 
   Future<void> _saveSubscriptions(
@@ -89,28 +97,24 @@ class JsSourceService extends ChangeNotifier {
           subscription,
       ]);
 
-  JsSourceMeta? get activeSource {
-    for (final src in _sources) {
-      if (src.id == _activeSourceId) {
-        return src;
-      }
+  Future<T> _withLoading<T>(Future<T> Function() operation) async {
+    if (_disposed) throw StateError('数据源管理已关闭');
+    _pendingOperations++;
+    _notifyChange();
+    try {
+      return await operation();
+    } finally {
+      _pendingOperations--;
+      _notifyChange();
     }
-    return _sources.isNotEmpty ? _sources.first : null;
   }
 
-  Future<void> initialize() async {
-    if (_initialized) return;
-    _loading = true;
-    notifyListeners();
-
-    try {
+  Future<void> initialize() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _withLoading(() async {
       unawaited(CatPawJsRuntime.preloadDeviceSession());
-      // 扫描本地已导入的 sources 目录
       await _repository.jsSourceScan();
-
-      // 3. 读取所有已加载的源列表
       _sources = await _repository.jsSourceList();
-
       for (final preset in kPresetJsSources) {
         if (_sources.any(
           (source) => source.id == preset.id && source.sourceUrl.isNotEmpty,
@@ -118,83 +122,56 @@ class JsSourceService extends ChangeNotifier {
           continue;
         }
         final script = await preset.loadScript();
-        final installed = _sources.where((source) => source.id == preset.id);
-        if (installed.any(
-          (source) => JsSourceMeta.isVersionNewer(
-            source.version,
-            JsSourceMeta.scriptVersion(script),
-          ),
+        if (_sources.any(
+          (source) =>
+              source.id == preset.id &&
+              JsSourceMeta.isVersionNewer(
+                source.version,
+                JsSourceMeta.scriptVersion(script),
+              ),
         )) {
           continue;
         }
-        await _repository.jsSourceSaveAndLoad(script, preset.fileName);
-      }
-      _sources = await _repository.jsSourceList();
-
-      // 4. 读取用户保存的活跃源偏好
-      _preferences ??= await SharedPreferences.getInstance();
-      var savedActiveId = _preferences?.getString(_activeSourceKey) ?? '';
-
-      // 验证 savedActiveId 是否依然存在
-      if (savedActiveId.isEmpty ||
-          !_sources.any((s) => s.id == savedActiveId)) {
-        if (_sources.isNotEmpty) {
-          savedActiveId = _sources.first.id;
+        if (!await _repository.jsSourceSaveAndLoad(script, preset.fileName)) {
+          throw StateError('内置数据源导入失败，请重试');
         }
       }
-
-      if (savedActiveId.isNotEmpty) {
-        await _repository.jsSourceSetActive(savedActiveId);
-        _activeSourceId = savedActiveId;
+      _sources = await _repository.jsSourceList();
+      _preferences ??= await SharedPreferences.getInstance();
+      var saved = _preferences?.getString(_activeSourceKey) ?? '';
+      if (!_sources.any((source) => source.id == saved)) {
+        saved = _sources.firstOrNull?.id ?? '';
       }
+      if (saved.isNotEmpty && !await _repository.jsSourceSetActive(saved)) {
+        throw StateError('数据源启用失败，请重试');
+      }
+      _activeSourceId = saved;
       await loadSubscriptions();
-    } catch (e) {
-      debugPrint('初始化 JsSourceService 异常: $e');
-    } finally {
       _initialized = true;
-      _loading = false;
-      notifyListeners();
-    }
+    }).whenComplete(() => _initializing = null);
   }
 
   Future<bool> switchSource(String sourceId) async {
     if (_activeSourceId == sourceId) return true;
-    if (!_sources.any((s) => s.id == sourceId)) return false;
-
-    _loading = true;
-    notifyListeners();
-
-    final ok = await _repository.jsSourceSetActive(sourceId);
-    if (ok) {
-      _activeSourceId = sourceId;
-      try {
+    if (!_sources.any((source) => source.id == sourceId)) return false;
+    return _withLoading(() async {
+      final ok = await _repository.jsSourceSetActive(sourceId);
+      if (ok) {
+        _activeSourceId = sourceId;
         _preferences ??= await SharedPreferences.getInstance();
         await _preferences?.setString(_activeSourceKey, sourceId);
-      } catch (_) {}
-    }
-
-    _loading = false;
-    notifyListeners();
-    return ok;
+      }
+      return ok;
+    });
   }
 
-  Future<bool> importScript(String script, String fileName) async {
-    _loading = true;
-    notifyListeners();
-
-    final ok = await _repository.jsSourceSaveAndLoad(script, fileName);
-    if (ok) {
-      _sources = await _repository.jsSourceList();
-      if (_sources.isNotEmpty &&
-          (_activeSourceId.isEmpty ||
-              !_sources.any((s) => s.id == _activeSourceId))) {
-        await switchSource(_sources.first.id);
-      }
-    }
-
-    _loading = false;
-    notifyListeners();
-    return ok;
+  Future<bool> importScript(String script, String fileName) {
+    if (loading) return Future.value(false);
+    return _withLoading(() async {
+      final ok = await _repository.jsSourceSaveAndLoad(script, fileName);
+      if (ok) await _syncImportedSources();
+      return ok;
+    });
   }
 
   Future<bool> importFromUrl(String url) async {
@@ -204,7 +181,7 @@ class JsSourceService extends ChangeNotifier {
     _loading = true;
     _lastError = '';
     _lastSubscriptionImport = null;
-    notifyListeners();
+    _notifyChange();
 
     try {
       await loadSubscriptions();
@@ -221,7 +198,7 @@ class JsSourceService extends ChangeNotifier {
       return false;
     } finally {
       _loading = false;
-      notifyListeners();
+      _notifyChange();
     }
   }
 
@@ -241,7 +218,7 @@ class JsSourceService extends ChangeNotifier {
     JsSourceSubscription subscription,
   ) async {
     _updatingSubscriptionUrl = subscription.url;
-    notifyListeners();
+    _notifyChange();
     final result = JsSubscriptionImportResult.fromJson(
       await _repository.jsSourceImportSubscription(subscription.url),
     );
@@ -256,7 +233,7 @@ class JsSourceService extends ChangeNotifier {
     if (loading) return null;
     _loading = true;
     _lastError = '';
-    notifyListeners();
+    _notifyChange();
     try {
       await loadSubscriptions();
       return await _refreshSubscription(subscription);
@@ -266,7 +243,7 @@ class JsSourceService extends ChangeNotifier {
     } finally {
       _loading = false;
       _updatingSubscriptionUrl = '';
-      notifyListeners();
+      _notifyChange();
     }
   }
 
@@ -274,7 +251,7 @@ class JsSourceService extends ChangeNotifier {
     if (loading) return false;
     _loading = true;
     _lastError = '';
-    notifyListeners();
+    _notifyChange();
     try {
       await loadSubscriptions();
       await _saveSubscriptions([
@@ -287,7 +264,7 @@ class JsSourceService extends ChangeNotifier {
       return false;
     } finally {
       _loading = false;
-      notifyListeners();
+      _notifyChange();
     }
   }
 
@@ -308,7 +285,7 @@ class JsSourceService extends ChangeNotifier {
     _loading = true;
     _updatingSourceId = sourceId;
     _lastError = '';
-    notifyListeners();
+    _notifyChange();
     try {
       final result = await _repository.jsSourceImportFromUrl(
         target,
@@ -332,7 +309,7 @@ class JsSourceService extends ChangeNotifier {
     } finally {
       _loading = false;
       _updatingSourceId = '';
-      notifyListeners();
+      _notifyChange();
     }
   }
 
@@ -340,7 +317,7 @@ class JsSourceService extends ChangeNotifier {
     if (loading) return [];
     _updatingAll = true;
     _lastError = '';
-    notifyListeners();
+    _notifyChange();
     try {
       await loadSubscriptions();
       final results = <JsSourceUpdateResult>[];
@@ -388,65 +365,36 @@ class JsSourceService extends ChangeNotifier {
     } finally {
       _updatingAll = false;
       _updatingSubscriptionUrl = '';
-      notifyListeners();
+      _notifyChange();
     }
   }
 
   Future<bool> removeSource(String sourceId) async {
     if (loading || isBuiltinSource(sourceId)) return false;
-    if (_activeSourceId == sourceId) {
-      final other = _sources.firstWhere(
-        (s) => s.id != sourceId,
-        orElse: () => const JsSourceMeta(id: '', name: ''),
-      );
-      if (other.id.isNotEmpty) {
-        await switchSource(other.id);
+    return _withLoading(() async {
+      final ok = await _repository.jsSourceRemove(sourceId);
+      if (ok) {
+        await _syncImportedSources();
+        if (_sources.isEmpty) {
+          _activeSourceId = '';
+          await _preferences?.remove(_activeSourceKey);
+        }
       }
-    }
-
-    _loading = true;
-    notifyListeners();
-
-    final ok = await _repository.jsSourceRemove(sourceId);
-    if (ok) {
-      _sources = await _repository.jsSourceList();
-      if (!_sources.any((s) => s.id == _activeSourceId)) {
-        _activeSourceId = _sources.isNotEmpty ? _sources.first.id : '';
-        try {
-          _preferences ??= await SharedPreferences.getInstance();
-          if (_activeSourceId.isNotEmpty) {
-            await _preferences?.setString(_activeSourceKey, _activeSourceId);
-          } else {
-            await _preferences?.remove(_activeSourceKey);
-          }
-        } catch (_) {}
-      }
-    }
-
-    _loading = false;
-    notifyListeners();
-    return ok;
+      return ok;
+    });
   }
 
-  Future<void> reload() async {
-    _loading = true;
-    notifyListeners();
-
-    try {
-      await _repository.jsSourceScan();
-      _sources = await _repository.jsSourceList();
-      _activeSourceId = await _repository.jsSourceGetActive();
-      await loadSubscriptions();
-    } finally {
-      _loading = false;
-      notifyListeners();
-    }
-  }
+  Future<void> reload() => _withLoading(() async {
+    await _repository.jsSourceScan();
+    _sources = await _repository.jsSourceList();
+    _activeSourceId = await _repository.jsSourceGetActive();
+    await loadSubscriptions();
+  });
 
   Future<void> clearAll() async {
     if (loading) return;
     _loading = true;
-    notifyListeners();
+    _notifyChange();
 
     try {
       await loadSubscriptions();
@@ -468,7 +416,14 @@ class JsSourceService extends ChangeNotifier {
       await _saveSubscriptions([]);
     } finally {
       _loading = false;
-      notifyListeners();
+      _notifyChange();
     }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    if (identical(current, this)) current = null;
+    super.dispose();
   }
 }

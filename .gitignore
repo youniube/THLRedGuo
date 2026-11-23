@@ -13,6 +13,8 @@ android/app/src/main/jniLibs/
 __pycache__/
 *.pyc
 key.properties
+key_debug.properties
+key*.properties
 .DS_Store
 .idea/
 *.iml
@@ -37,6 +39,7 @@ ios/Flutter/flutter_export_environment.sh
 **/*.xcframework/
 **/xcuserdata/
 .agents
+agents/
 *.mobileprovision
 *.provisionprofile
 *.pem
@@ -44,10 +47,12 @@ ios/Flutter/flutter_export_environment.sh
 *.cer
 *.p8
 .claude/
-fastlane/
+/fastlane/
+**/fastlane/
 
 tvos/THLRedLookTests
 tvos/THLRedLookUITests
 scripts
 test
 integration_test
+.fvm/

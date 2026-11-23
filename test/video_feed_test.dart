@@ -561,6 +561,9 @@ class _Repository extends AppRepository {
   Future<int> jsSourceScan() async => _sources.length;
   @override
   Future<bool> jsSourceSetActive(String sourceId) async => true;
+  @override
+  Future<bool> jsSourceSaveAndLoad(String script, String fileName) async =>
+      true;
 
   @override
   Future<FeedPage> videoFeed({
@@ -835,8 +838,10 @@ spider.feed = function(page, session) {
     }
 
     testWidgets('空范围仍显示推荐源入口，可以重新选择范围', (tester) async {
-      await store.setFeedSources(
-        const FeedSourceSelection(mode: FeedSourceMode.custom),
+      await tester.runAsync(
+        () => store.setFeedSources(
+          const FeedSourceSelection(mode: FeedSourceMode.custom),
+        ),
       );
       await tester.pumpWidget(
         MaterialApp(
@@ -854,6 +859,14 @@ spider.feed = function(page, session) {
       expect(find.text('全部站源'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('feed-mode-all')));
       await tester.pumpAndSettle();
+      for (
+        var frame = 0;
+        frame < 10 && store.feedSources.mode != FeedSourceMode.all;
+        frame++
+      ) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
       expect(store.feedSources.mode, FeedSourceMode.all);
       expect(feed.allowed, true);
       await tester.pumpWidget(const SizedBox.shrink());

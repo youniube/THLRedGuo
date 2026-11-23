@@ -55,7 +55,7 @@ public struct SettingsView: View {
             .padding(.vertical, 20)
             .background(
                 RoundedRectangle(cornerRadius: 24)
-                    .fill(Color(red: 0.10, green: 0.10, blue: 0.13).opacity(0.95))
+                    .fill(TVColors.settingsSidebarBg.opacity(0.95))
             )
             .focusSection()
             .onExitCommand {
@@ -84,6 +84,8 @@ public struct SettingsView: View {
                         )
                     case .cache:
                         SettingsStoragePanel()
+                    case .releaseNotes:
+                        SettingsReleaseNotesPanel()
                     case .help:
                         SettingsHelpPanel()
                     case .contact:
@@ -143,6 +145,8 @@ public struct SettingsView: View {
             if let testPage = testPage {
                 if testPage == "settings_cache" {
                     targetCat = .cache
+                } else if testPage == "settings_release_notes" {
+                    targetCat = .releaseNotes
                 } else if testPage == "settings_about" {
                     targetCat = .about
                 } else if testPage == "settings_help" {

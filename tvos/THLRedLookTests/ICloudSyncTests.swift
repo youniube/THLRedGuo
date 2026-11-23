@@ -77,6 +77,37 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertEqual(cloud.writes.count, writes)
     }
 
+    func testLocalUnfollowDeletesDramaFromCloudAndDoesNotResurrect() throws {
+        let (service, cloud, store) = try setup()
+        try seed(cloud)
+        let shared = Drama(id: "hongguo:7688558312157088793", sourceId: "7688558312157088793", title: "同步合成短剧")
+        service.syncWithCloud(store: store)
+        XCTAssertTrue(store.followedDramas.contains(where: { $0.id == shared.id }))
+
+        store.setFollowState(drama: shared, state: .none)
+        XCTAssertFalse(store.followedDramas.contains(where: { $0.id == shared.id }))
+        XCTAssertTrue(store.deletedFollowIds.contains(shared.id))
+
+        service.syncWithCloud(store: store)
+        XCTAssertFalse(store.followedDramas.contains(where: { $0.id == shared.id }))
+        XCTAssertEqual(store.followState(for: shared.id), .none)
+    }
+
+    func testLocalHistoryClearAndRemoveDoesNotResurrectFromCloud() throws {
+        let (service, cloud, store) = try setup()
+        try seed(cloud)
+        let shared = Drama(id: "hongguo:7688558312157088793", sourceId: "7688558312157088793", title: "同步合成短剧")
+        service.syncWithCloud(store: store)
+        XCTAssertEqual(store.history.first?.drama.id, shared.id)
+
+        store.clearHistory()
+        XCTAssertTrue(store.history.isEmpty)
+        XCTAssertTrue(store.deletedHistoryIds.contains(shared.id))
+
+        service.syncWithCloud(store: store)
+        XCTAssertTrue(store.history.isEmpty)
+    }
+
     func testMalformedRecordDoesNotDiscardGoodHistoryOrRewriteCloudOriginal() throws {
         let (service, cloud, store) = try setup()
         try seed(cloud)
@@ -234,5 +265,27 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertNil(store.getWatchEntry(dramaId: "hongguo:limit-0"))
         XCTAssertNotNil(store.getWatchEntry(dramaId: "hongguo:limit-new"))
         XCTAssertEqual(LocalStore(defaults: defaults, cloudUpload: { _ in }).history, store.history)
+    }
+
+    func testICloudSyncOnlyUploadsMostRecent40HistoryEntries() throws {
+        let (service, cloud, store) = try setup()
+        let entries = (1...60).map { i in
+            WatchEntry(
+                drama: Drama(id: "hongguo:\(i)", title: "测试短剧\(i)"),
+                episode: 1,
+                position: 10,
+                duration: 60,
+                updatedAt: Date(timeIntervalSince1970: Double(i * 100))
+            )
+        }
+        store.applySyncedData(history: entries, follows: [:], followedDramas: [])
+        service.syncWithCloud(store: store)
+        
+        let rawHistory = try XCTUnwrap(cloud.values[ICloudSyncService.keyHistory])
+        let uploaded = try ICloudSyncService.historyDecoder().decode([WatchEntry].self, from: Data(rawHistory.utf8))
+        XCTAssertEqual(uploaded.count, 40, "iCloud 观看历史应被限制为同步最近 40 条")
+        XCTAssertEqual(uploaded.first?.drama.id, "hongguo:60", "第一条应为最新观看记录")
+        XCTAssertEqual(uploaded.last?.drama.id, "hongguo:21", "最后一条应为第 40 条记录（即 hongguo:21）")
+        XCTAssertEqual(store.history.count, 60, "本地历史仍保留完整记录")
     }
 }

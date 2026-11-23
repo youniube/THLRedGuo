@@ -37,8 +37,10 @@ class PlayerMenu extends StatefulWidget {
     this.enhancement,
     this.onCompareEnhancement,
     this.currentEngine = '',
+    this.accountActions,
   });
 
+  final Widget? accountActions;
   final PlayerMenuSection section;
   final List<Episode> episodes;
   final int currentIndex;
@@ -347,6 +349,36 @@ class _PlayerMenuState extends State<PlayerMenu> {
           const SizedBox(height: 8),
         ],
         if (all) ...[
+          ListTile(
+            key: const ValueKey('player-decoder-mode'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('解码模式'),
+            subtitle: Text(
+              preferences.decoderMode == PlaybackDecoderMode.hardware
+                  ? '⚡ 优先使用设备硬件解码'
+                  : '🛡️ 兼容稳定模式（MediaKit 软解兼容引擎）',
+            ),
+            trailing: DropdownButton<PlaybackDecoderMode>(
+              value: preferences.decoderMode,
+              underline: const SizedBox.shrink(),
+              items: PlaybackDecoderMode.values
+                  .map(
+                    (mode) =>
+                        DropdownMenuItem(value: mode, child: Text(mode.label)),
+                  )
+                  .toList(),
+              onChanged: _busy
+                  ? null
+                  : (mode) {
+                      if (mode == null) return;
+                      setState(() {
+                        _preferences = _preferences.copyWith(decoderMode: mode);
+                      });
+                      _run(() => widget.onPreferences(_preferences));
+                    },
+            ),
+          ),
+          const SizedBox(height: 8),
           SwitchListTile.adaptive(
             key: const ValueKey('player-preload-enabled'),
             contentPadding: EdgeInsets.zero,
@@ -391,6 +423,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
               label: Text(widget.favorite ? '取消追剧' : '加入追剧'),
             ),
           ],
+          if (widget.accountActions != null) widget.accountActions!,
           const SizedBox(height: 12),
           OutlinedButton.icon(
             key: const ValueKey('player-diary-btn'),

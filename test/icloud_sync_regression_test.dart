@@ -274,11 +274,11 @@ void runICloudRegressionTests({String? fixtureJson}) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
       }
       final uploaded = jsonDecode(cloud[ICloudSyncService.keyHistory]!) as List;
-      expect(uploaded, hasLength(rows.length));
+      expect(uploaded, hasLength(ICloudSyncService.maxHistoryCount));
       final byId = {
         for (final row in uploaded) (row['drama'] as Map)['id']: row,
       };
-      for (final row in expected) {
+      for (final row in expected.take(ICloudSyncService.maxHistoryCount)) {
         final actual = byId[row['id']]!;
         expect(actual['episode'], row['episode']);
         expect(actual['position'], row['position']);

@@ -80,11 +80,12 @@ class _FeedSourceSheetState extends State<_FeedSourceSheet> {
       final sources = feed.selectableSources;
       final availableIds = sources.map((source) => source.id).toSet();
       final chosen = _selected.where(availableIds.contains).toList();
+      final height = MediaQuery.sizeOf(context).height;
       return SafeArea(
         top: false,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.75,
+            maxHeight: height < 440 ? height : height * 0.75,
           ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -124,6 +125,7 @@ class _FeedSourceSheetState extends State<_FeedSourceSheet> {
                               )
                             : ListView.builder(
                                 shrinkWrap: true,
+                                padding: EdgeInsets.zero,
                                 itemCount: sources.length,
                                 itemBuilder: (context, index) {
                                   final source = sources[index];

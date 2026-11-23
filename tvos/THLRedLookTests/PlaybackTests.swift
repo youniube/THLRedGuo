@@ -1,6 +1,8 @@
 import XCTest
 import AVFoundation
 import UIKit
+import SwiftUI
+import JavaScriptCore
 @testable import THLRedLook
 
 @MainActor
@@ -9,6 +11,100 @@ final class PlaybackTests: XCTestCase {
     private var videoView: UIView?
     private var videoLayer: AVPlayerLayer?
     private var testStarted = Date()
+
+    func testReTaGanMaDynamicVideoPlayback() async throws {
+        await JSSourceService.shared.initialize()
+        let query = "惹他干嘛，她家夫君妖力无边！第八季"
+        let catalog = try await repository.loadCatalog(source: "hongguo", query: query, force: true)
+        let drama = try XCTUnwrap(catalog.items.first { $0.title.contains("惹") && $0.title.contains("第八季") } ?? catalog.items.first)
+        let detail = try await repository.loadDetail(drama: drama)
+        XCTAssertGreaterThanOrEqual(detail.episodes.count, 1)
+
+        let firstEpisode = try XCTUnwrap(detail.episodes.first)
+        let plan1 = try await repository.resolvePlayback(drama: detail.drama, episode: firstEpisode, episodeIndex: 1)
+        XCTAssertFalse(plan1.url.isEmpty)
+        XCTAssertTrue(plan1.url.hasPrefix("https://"))
+
+        if detail.episodes.count >= 2 {
+            let ep2 = detail.episodes[1]
+            let plan2 = try await repository.resolvePlayback(drama: detail.drama, episode: ep2, episodeIndex: 2)
+            XCTAssertFalse(plan2.url.isEmpty)
+            XCTAssertTrue(plan2.url.hasPrefix("https://"))
+        }
+
+        if detail.episodes.count >= 10 {
+            let ep10 = detail.episodes[9]
+            let plan10 = try await repository.resolvePlayback(drama: detail.drama, episode: ep10, episodeIndex: 10)
+            XCTAssertFalse(plan10.url.isEmpty)
+            XCTAssertTrue(plan10.url.hasPrefix("https://"))
+        }
+
+        if ProcessInfo.processInfo.environment["HONGGUO_LIVE"] == "1" {
+            let playerModel = try model(detail)
+            defer { playerModel.onDisappear() }
+            await playerModel.preparePlayback(episodeIndex: 1)
+            try await ready(playerModel)
+            XCTAssertGreaterThan(playerModel.currentTime, 0.5)
+            XCTAssertNil(playerModel.errorMessage)
+        }
+    }
+
+    func testOfficialAccountCookieScope() throws {
+        let now = Date()
+        let record = HongguoAccountRecord(id: "123", nickname: "synthetic", cookies: [
+            HongguoCookie(name: "sessionid", value: "synthetic-session", domain: "hongguoduanju.com", path: "/", expires: now.addingTimeInterval(60)),
+            HongguoCookie(name: "passport_csrf_token", value: "synthetic-csrf", domain: "hongguoduanju.com", path: "/", expires: nil),
+            HongguoCookie(name: "uid_tt", value: "expired", domain: "hongguoduanju.com", path: "/", expires: now.addingTimeInterval(-60))])
+        let vault = HongguoAccountVault.shared
+        XCTAssertEqual(vault.header(for: try XCTUnwrap(URL(string: "https://reading.snssdk.com/novel/player/multi_video_model/v1/")), record: record), "sessionid=synthetic-session")
+        XCTAssertEqual(vault.header(for: try XCTUnwrap(URL(string: "https://api5-normal.fqnovel.com/novel/player/multi_video_model/v1/")), record: record), "sessionid=synthetic-session")
+        for raw in ["https://v5-reading-video.qznovelvod.com/reading/test", "https://github.com/reading/test", "https://reading.snssdk.com.evil.test/reading/test", "http://reading.snssdk.com/reading/test", "https://reading.snssdk.com/unrelated", "https://api5-normal.fqnovel.com.evil.test/novel/player/multi_video_model/v1/", "https://api5-normal.fqnovel.com/unrelated"] {
+            XCTAssertEqual(vault.header(for: try XCTUnwrap(URL(string: raw)), record: record), "")
+        }
+    }
+
+    func testOfficialAccountSourceContracts() async throws {
+        let command = try await NativeBridge.shared.accountRequest("qr")
+        let url = try XCTUnwrap(URLComponents(string: try XCTUnwrap(command["url"] as? String)))
+        XCTAssertEqual(url.host, "hongguoduanju.com")
+        XCTAssertEqual(url.path, "/passport/web/get_qrcode/")
+        XCTAssertEqual(url.queryItems?.first { $0.name == "aid" }?.value, "513755")
+        let profile = try await NativeBridge.shared.accountParse("profile", body: "{\"code\":0,\"data\":{\"biz_user_id\":7688558312157088793,\"user_name\":\"synthetic\"}}")
+        XCTAssertEqual(profile["id"] as? String, "7688558312157088793")
+        do {
+            _ = try await NativeBridge.shared.accountParse("poll", body: "{\"message\":\"error\",\"data\":{\"error_code\":1102,\"description\":\"synthetic\"}}")
+            XCTFail("Business rejection must remain distinguishable from a network failure")
+        } catch { XCTAssertEqual(error as? HongguoAccountError, .business(1102)) }
+    }
+
+    func testOfficialAccountLibraryContracts() async throws {
+        let rows = try await NativeBridge.shared.accountParse("history", body: "{\"code\":0,\"data\":null,\"video_data\":[{\"series_id\":7688558312157088793,\"vid\":1234567890123456789,\"vid_index\":12,\"current_play_time\":23500,\"current_total_time\":90000}]}")
+        let items = try XCTUnwrap(rows["items"] as? [[String: Any]])
+        XCTAssertEqual(items.first?["id"] as? String, "7688558312157088793")
+        XCTAssertEqual((items.first?["episode"] as? NSNumber)?.intValue, 12)
+        XCTAssertEqual((items.first?["positionMs"] as? NSNumber)?.intValue, 23500)
+        let favorites = try await NativeBridge.shared.accountParse("favorites", body: "{\"code\":0,\"data\":{\"video_shelf_info\":[{\"series_id\":7688558312157088793,\"book_type\":2,\"collect_time\":1700000000}]}}")
+        XCTAssertEqual((favorites["items"] as? [[String: Any]])?.first?["id"] as? String, "7688558312157088793")
+        do {
+            _ = try await NativeBridge.shared.accountParse("favorites", body: "{\"code\":0,\"data\":null}")
+            XCTFail("Invalid library data must remain an error")
+        } catch { XCTAssertEqual(error as? HongguoAccountError, .invalid) }
+    }
+
+    func testOfficialAccountProfileRequestUsesBoundDevice() async throws {
+        try XCTSkipIf(HongguoAccountVault.shared.snapshot.record != nil, "Requires an isolated guest fixture")
+        let suite = "THLRedLook.AccountContract." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("{\"iid\":\"7345678901234567200\",\"device_id\":\"7345678901234567100\",\"cdid\":\"synthetic-device\"}", forKey: "thl_tv_hongguo_device_session")
+        let bridge = NativeBridge(deviceDefaults: defaults)
+        let command = try await bridge.accountRequest("profile")
+        let url = try XCTUnwrap(URLComponents(string: try XCTUnwrap(command["url"] as? String)))
+        XCTAssertEqual(url.host, "api5-normal-sinfonlinea.fqnovel.com")
+        XCTAssertEqual(url.path, "/reading/user/info/v1/")
+        XCTAssertEqual(url.queryItems?.first { $0.name == "device_id" }?.value, "7345678901234567100")
+        XCTAssertNotNil((command["headers"] as? [String: String])?["x-medusa"])
+    }
 
     override func setUp() {
         super.setUp()
@@ -353,6 +449,39 @@ final class PlaybackTests: XCTestCase {
             }
         }
         print("THL_CONTINUOUS automaticTransitions=7 lastEpisode=8 error=false")
+    }
+
+    func testLiveDebugSourceVideoAudioAndNaturalNext() async throws {
+        try live()
+        await JSSourceService.shared.initialize()
+        let data = try await detail("7695704804978330649")
+        let model = try model(data)
+        defer { model.onDisappear() }
+        let savedGuest = UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session")
+        await model.preparePlayback(episodeIndex: 3)
+        try await ready(model)
+        XCTAssertEqual(model.currentEpisodeIndex, 3)
+        XCTAssertEqual(model.selectedQuality, 1080)
+        XCTAssertEqual(model.playbackRate, 1)
+        XCTAssertFalse(try XCTUnwrap(model.player).isMuted)
+        XCTAssertGreaterThan(try XCTUnwrap(model.player).volume, 0)
+        let initial = model.currentTime
+        try await wait(seconds: 20) { model.currentTime > initial + 3 }
+        print("THL_DEBUG_TV_NATIVE episode=3 quality=1080 firstFrame=true audioTrack=true volume=positive natural=true seek=false")
+        let deadline = Date().addingTimeInterval(120)
+        while model.currentEpisodeIndex == 3 && Date() < deadline {
+            XCTAssertNil(model.errorMessage)
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        XCTAssertEqual(model.currentEpisodeIndex, 4)
+        try await ready(model)
+        let next = model.currentTime
+        try await wait(seconds: 20) { model.currentTime > next + 5 }
+        XCTAssertEqual(model.selectedQuality, 1080)
+        XCTAssertFalse(try XCTUnwrap(model.player).isMuted)
+        XCTAssertGreaterThan(try XCTUnwrap(model.player).volume, 0)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "thl_tv_hongguo_device_session"), savedGuest)
+        print("THL_DEBUG_TV_NATIVE_RESULT episode=4 quality=1080 firstFrame=true audioTrack=true volume=positive natural=true seek=false guestPreserved=true")
     }
 
     func testLiveNaturalContinuousPlaybackWithoutSeeking() async throws {
@@ -1113,6 +1242,7 @@ final class ContinuousPlaybackTests: XCTestCase {
         let behavior: String
         switch mode {
         case "denied": behavior = "throw Object.assign(new Error('synthetic failure'),{code:'BUSINESS_REJECTED'});"
+        case "slowSecond": behavior = "if(id==='2'){const end=Date.now()+1200;while(Date.now()<end){}}"
         case "slow": behavior = "const stop=Date.now()+4000;while(Date.now()<stop){};"
         case "transientWindow": behavior = "if(!firstFailure)firstFailure=Date.now();if(Date.now()-firstFailure<3000)throw Object.assign(new Error('synthetic temporary outage'),{code:'HTTP_503'});"
         case "retry": behavior = "if(id==='2'&&calls[id]===1)throw Object.assign(new Error('synthetic transient failure'),{code:'HTTP_503'});"
@@ -1154,6 +1284,137 @@ final class ContinuousPlaybackTests: XCTestCase {
         while !condition(), Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
         XCTAssertTrue(condition())
         guard condition() else { throw NSError(domain: "ContinuousPlaybackTests", code: 1) }
+    }
+
+    func testDanmakuClockTracksPlaybackBetweenProgressCallbacks() async throws {
+        let (repository, _) = try await repository(mode: "normal", long: true)
+        let model = try model(foreground: repository, preloading: repository)
+        defer { model.onDisappear() }
+        await model.preparePlayback(episodeIndex: 1)
+        try await wait { model.currentTime > 1 && model.isPlaying }
+        let player = try XCTUnwrap(model.player)
+        func renderedTime() -> Double {
+            TVDanmakuView(danmakus: [], position: model.currentTime,
+                          anchor: model.playbackClockDate, rate: Double(model.playbackRate),
+                          moving: model.isPlaying).playbackTime(at: Date())
+        }
+        var largestError = 0.0
+        var largestStep = 0.0
+        var previousTime = renderedTime()
+        for _ in 0..<120 {
+            try await Task.sleep(nanoseconds: 16_666_667)
+            let time = renderedTime()
+            largestError = max(largestError, abs(time - player.currentTime().seconds))
+            largestStep = max(largestStep, time - previousTime)
+            previousTime = time
+        }
+        XCTAssertLessThan(largestError, 0.1)
+        XCTAssertLessThan(largestStep, 0.15)
+        model.togglePlayPause()
+        let paused = renderedTime()
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        XCTAssertEqual(renderedTime(), paused, accuracy: 0.1)
+        model.setRate(2)
+        model.togglePlayPause()
+        try await wait { model.isPlaying && player.rate == 2 }
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        XCTAssertEqual(renderedTime(), player.currentTime().seconds, accuracy: 0.1)
+        model.seekBy(seconds: 12 - model.currentTime)
+        try await wait { player.currentTime().seconds >= 12 && model.currentTime >= 12 }
+        XCTAssertEqual(renderedTime(), player.currentTime().seconds, accuracy: 0.15)
+        print("THL_DANMAKU_CLOCK maxError=\(largestError) maxStep=\(largestStep) pause=true rate2=true seek=true")
+    }
+
+    func testReleasedObserverIgnoresQueuedEndAndStopsClockCallbacks() async throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["THL_SYNTHETIC_VIDEO"])
+        let item = AVPlayerItem(url: URL(fileURLWithPath: path))
+        let player = AVPlayer(playerItem: item)
+        let observer = PlayerObserverManager()
+        var events = 0
+        observer.attach(to: player, item: item, seekTo: 0, playbackRate: 1, isFeedMode: false,
+            onPlayingChanged: { _ in events += 1 }, onBufferingChanged: { _ in events += 1 },
+            onReadyToPlay: { _, _ in events += 1 }, onTimeUpdated: { _ in events += 1 },
+            onItemEnded: { events += 1 }, onError: { _ in events += 1 })
+        NotificationCenter.default.post(name: .AVPlayerItemDidPlayToEndTime, object: item)
+        observer.release()
+        player.play()
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        player.pause()
+        XCTAssertEqual(events, 0)
+    }
+
+    func testDisplayUpdatesCannotResumeModelOwnedPausedPlayer() async throws {
+        let (repository, _) = try await repository(mode: "normal")
+        let model = try model(foreground: repository, preloading: repository)
+        defer { model.onDisappear() }
+        await model.preparePlayback(episodeIndex: 1)
+        try await wait { model.currentTime > 0.5 }
+        let player = try XCTUnwrap(model.player)
+        let container = AVPlayerContainerView()
+        container.managesPlayback = false
+        container.player = player
+        model.togglePlayPause()
+        let position = player.currentTime().seconds
+        for _ in 0..<4 {
+            container.playbackRate = 1
+            NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(player.currentTime().seconds, position, accuracy: 0.1)
+        container.cleanup()
+        await model.selectEpisode(number: 2)
+        try await wait { model.currentEpisodeIndex == 2 && model.currentTime > 0.5 && model.isPlaying }
+        XCTAssertTrue(model.wantsPlayback)
+    }
+
+    func testFeedCacheCannotStopOrEvictTransferredPlayer() async throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["THL_SYNTHETIC_VIDEO"])
+        let url = URL(fileURLWithPath: path)
+        let cache = VideoCacheManager.shared
+        cache.preload(asset: AVURLAsset(url: url), for: url.absoluteString, namespace: "test-feed")
+        let player = try XCTUnwrap(cache.takePlayer(for: url.absoluteString, namespace: "test-feed"))
+        let item = player.currentItem
+        player.play()
+        try await wait { player.currentTime().seconds > 0.5 }
+        let position = player.currentTime().seconds
+        cache.clearNamespace("test-feed")
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertGreaterThan(player.currentTime().seconds, position + 0.5)
+        XCTAssertFalse(player.isMuted)
+        player.pause()
+    }
+
+    func testNativeBridgeTimeoutDoesNotDeadlockCompletion() async throws {
+        let bridge = NativeBridge(persistentDeviceSession: false)
+        let context = try XCTUnwrap(JSContext())
+        let start = Date()
+        let result = await bridge.evalAsync(context: context, scriptExpr: "(()=>{let end=Date.now()+16000;while(Date.now()<end){};return 1;})()")
+        XCTAssertEqual(result?["code"] as? String, "TIMEOUT")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 17)
+        let next = await bridge.evalAsync(context: context, scriptExpr: "42")
+        XCTAssertEqual((next?["data"] as? NSNumber)?.intValue, 42)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 20)
+    }
+
+    func testNewSelectionWinsOverDelayedPreviousResolution() async throws {
+        let (repository, _) = try await repository(mode: "slowSecond")
+        let model = try model(foreground: repository, preloading: repository)
+        defer { model.onDisappear() }
+        await model.preparePlayback(episodeIndex: 1)
+        try await wait { model.currentTime > 0.5 }
+        let first = Task { await model.selectEpisode(number: 2) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let second = Task { await model.selectEpisode(number: 3) }
+        await first.value; await second.value
+        try await wait { model.currentEpisodeIndex == 3 && model.currentTime > 0.5 && model.isPlaying }
+        let item = model.player?.currentItem
+        let position = model.currentTime
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        XCTAssertEqual(model.currentEpisodeIndex, 3)
+        XCTAssertTrue(model.player?.currentItem === item)
+        XCTAssertGreaterThan(model.currentTime, position + 0.5)
     }
 
     func testPlanExpiryUsesSafetyWindow() {
@@ -1345,5 +1606,121 @@ private final class OnceUnavailablePlaybackProfile: @unchecked Sendable {
         let attempt = lock.withLock { count += 1; return count }
         if attempt == 1 { throw HongguoProfileStorageError.unavailable(-25308) }
         return try HongguoPlaybackProfileVault.load()
+    }
+}
+
+@MainActor
+final class DanmakuRenderingTests: XCTestCase {
+    private func rgba(_ image: UIImage) throws -> [UInt8] {
+        let cg = try XCTUnwrap(image.cgImage)
+        let context = try XCTUnwrap(CGContext(data: nil, width: cg.width, height: cg.height,
+            bitsPerComponent: 8, bytesPerRow: cg.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        return Array(UnsafeBufferPointer(start: bytes, count: cg.width * cg.height * 4))
+    }
+
+    func testOutlinedTextPreservesSolidWhiteFillAcrossSizesAndScales() throws {
+        let text = "弹幕清晰白字 Aa123"
+        for size: CGFloat in [22, 26, 34] {
+            let font = UIFont.boldSystemFont(ofSize: size)
+            let width = (text as NSString).size(withAttributes: [.font: font]).width + 16
+            for scale: CGFloat in [1, 2] {
+                let image = TVDanmakuView.renderText(text, fontSize: size, width: width, scale: scale)
+                XCTAssertEqual(image.renderingMode, .alwaysOriginal)
+                XCTAssertEqual(image.scale, scale)
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = scale; format.preferredRange = .standard
+                let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+                let reference = renderer.image { _ in
+                    NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.white])
+                        .draw(at: CGPoint(x: 8, y: 4))
+                }
+                let pixels = try rgba(image), plain = try rgba(reference)
+                var white = 0, retained = 0, outerBlack = 0
+                for index in stride(from: 0, to: plain.count, by: 4) {
+                    if plain[index] >= 245 && plain[index + 3] >= 245 {
+                        white += 1
+                        if pixels[index] >= 240 && pixels[index + 1] >= 240 && pixels[index + 2] >= 240 { retained += 1 }
+                    }
+                    if plain[index + 3] < 10 && pixels[index + 3] > 200 && pixels[index] < 10 { outerBlack += 1 }
+                }
+                XCTAssertGreaterThan(white, 100)
+                XCTAssertGreaterThan(outerBlack, 100)
+                let ratio = Double(retained) / Double(max(white, 1))
+                XCTAssertGreaterThan(ratio, 0.98)
+                print("THL_DANMAKU_STYLE size=\(size) scale=\(scale) whiteFillPreserved=\(ratio) outsideBlackPixels=\(outerBlack)")
+                if size == 26 && scale == 2 {
+                    for (name, color) in [("dark", UIColor.black), ("light", UIColor.white), ("colored", UIColor.systemOrange)] {
+                        let comparison = UIGraphicsImageRenderer(size: CGSize(width: image.size.width + 32, height: image.size.height * 2 + 48), format: format).image { context in
+                            color.setFill(); context.fill(CGRect(x: 0, y: 0, width: image.size.width + 32, height: image.size.height * 2 + 48))
+                            image.draw(at: CGPoint(x: 16, y: 12))
+                            image.draw(at: CGPoint(x: 16, y: image.size.height + 24), blendMode: .normal, alpha: 0.75)
+                        }
+                        let attachment = XCTAttachment(image: comparison)
+                        attachment.name = "danmaku-style-\(name)-opacity-1-and-075"
+                        attachment.lifetime = .keepAlways; add(attachment)
+                    }
+                }
+            }
+        }
+    }
+
+    func testRenderedTextMovesContinuouslyAndFreezesWhilePaused() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let items = [DanmakuItem(id: "render", text: "弹幕连续移动验证", timeMs: 1000)]
+        func content(moving: Bool, items: [DanmakuItem]) -> some View {
+            TVDanmakuView(danmakus: items, position: 3, anchor: Date(), rate: 1, moving: moving)
+                .foregroundStyle(.red).background(Color.black).ignoresSafeArea()
+        }
+        let host = UIHostingController(rootView: content(moving: true, items: items))
+        window.rootViewController = host
+        window.windowLevel = .alert + 1
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKey() }
+        func capture(_ name: String) throws -> (Double, Int) {
+            let image = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+            let cg = try XCTUnwrap(image.cgImage)
+            let w = cg.width, h = cg.height
+            var pixels = [UInt8](repeating: 0, count: w * h * 4)
+            let context = try XCTUnwrap(CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8,
+                bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            var total = 0.0, count = 0
+            for y in 0..<h {
+                for x in 0..<w {
+                    let offset = (y * w + x) * 4
+                    if pixels[offset] > 210 && pixels[offset + 1] > 210 && pixels[offset + 2] > 210 {
+                        total += Double(x); count += 1
+                    }
+                }
+            }
+            return (count > 0 ? total / Double(count) / image.scale : 0, count)
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let first = try capture("moving-first")
+        try await Task.sleep(nanoseconds: 220_000_000)
+        let second = try capture("moving-second")
+        XCTAssertGreaterThan(first.1, 100)
+        XCTAssertGreaterThan(second.1, 100)
+        XCTAssertGreaterThan(first.0 - second.0, 20)
+        host.rootView = content(moving: false, items: items)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let paused = try capture("paused-first")
+        try await Task.sleep(nanoseconds: 550_000_000)
+        let still = try capture("paused-second")
+        XCTAssertGreaterThan(paused.1, 100)
+        XCTAssertEqual(still.0, paused.0, accuracy: 1)
+        host.rootView = content(moving: false, items: [])
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(try capture("cleared").1, 0)
+        print("THL_DANMAKU_RENDER pixels=\(first.1) movement=\(first.0-second.0) pauseDrift=\(abs(still.0-paused.0)) cleared=true")
     }
 }

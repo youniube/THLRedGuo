@@ -1,71 +1,6 @@
 import Foundation
 import Combine
 
-public struct TVDanmakuStyle: Codable, Equatable {
-    public var fontSize: CGFloat = 26
-    public var opacity: Double = 1
-    public var laneCount = 8
-    public var displayArea: Double = 0.5
-    public var useOriginalColor = true
-    public var color = 0xffffff
-    public var outline = true
-    public var shadow = true
-    public var density = "medium"
-    public var speed: Double = 1
-    public var scroll = true
-    public var top = true
-    public var bottom = true
-    public var subtitleSafe = true
-    public var keywords: [String] = []
-    public var blockColored = false
-
-    public init(fontSize: CGFloat = 26, opacity: Double = 1, laneCount: Int = 8) {
-        self.fontSize = fontSize
-        self.opacity = opacity
-        self.laneCount = laneCount
-    }
-    public func accepts(_ item: DanmakuItem) -> Bool {
-        if blockColored && item.rgb != 0xffffff { return false }
-        switch item.mode {
-        case .scroll: if !scroll { return false }
-        case .top: if !top { return false }
-        case .bottom: if !bottom { return false }
-        }
-        return !keywords.contains { !$0.isEmpty && item.text.localizedCaseInsensitiveContains($0) }
-    }
-    private enum CodingKeys: String, CodingKey {
-        case fontSize, opacity, laneCount, displayArea, useOriginalColor, color, outline, shadow, density, speed, scroll, top, bottom, subtitleSafe, keywords, blockColored
-    }
-    public init(from decoder: Decoder) throws {
-        self.init()
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        func bounded(_ key: CodingKeys, _ fallback: Double, _ minValue: Double, _ maxValue: Double) throws -> Double {
-            let value = try values.decodeIfPresent(Double.self, forKey: key) ?? fallback
-            return value.isFinite ? max(minValue, min(maxValue, value)) : fallback
-        }
-        fontSize = CGFloat(try bounded(.fontSize, 26, 12, 48))
-        opacity = try bounded(.opacity, 1, 0.1, 1)
-        laneCount = max(1, min(16, try values.decodeIfPresent(Int.self, forKey: .laneCount) ?? 8))
-        displayArea = try bounded(.displayArea, 0.5, 0.2, 1)
-        useOriginalColor = try values.decodeIfPresent(Bool.self, forKey: .useOriginalColor) ?? true
-        color = max(0, min(0xffffff, try values.decodeIfPresent(Int.self, forKey: .color) ?? 0xffffff))
-        outline = try values.decodeIfPresent(Bool.self, forKey: .outline) ?? true
-        shadow = try values.decodeIfPresent(Bool.self, forKey: .shadow) ?? true
-        let savedDensity = try values.decodeIfPresent(String.self, forKey: .density) ?? "medium"
-        density = ["low", "medium", "high"].contains(savedDensity) ? savedDensity : "medium"
-        speed = try bounded(.speed, 1, 0.5, 2)
-        scroll = try values.decodeIfPresent(Bool.self, forKey: .scroll) ?? true
-        top = try values.decodeIfPresent(Bool.self, forKey: .top) ?? true
-        bottom = try values.decodeIfPresent(Bool.self, forKey: .bottom) ?? true
-        subtitleSafe = try values.decodeIfPresent(Bool.self, forKey: .subtitleSafe) ?? true
-        blockColored = try values.decodeIfPresent(Bool.self, forKey: .blockColored) ?? false
-        var seen = Set<String>()
-        keywords = (try values.decodeIfPresent([String].self, forKey: .keywords) ?? []).prefix(100)
-            .map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60)) }
-            .filter { !$0.isEmpty && seen.insert($0).inserted }
-    }
-}
-
 public final class LocalStore: ObservableObject {
     public static let shared = LocalStore()
 
@@ -99,7 +34,10 @@ public final class LocalStore: ObservableObject {
     @Published public var currentSourceId: String = "hongguo"
     @Published public var cachedCategories: [CatalogCategory] = []
     @Published public var cachedHomeDramas: [Drama] = []
+    public private(set) var deletedFollowIds: Set<String> = []
+    public private(set) var deletedHistoryIds: Set<String> = []
 
+    private let usesOfficialAccount: Bool
     private let defaults: UserDefaults
     private let cloudUpload: (LocalStore) -> Void
     private var applyingCloudData = false
@@ -109,6 +47,8 @@ public final class LocalStore: ObservableObject {
     private let historyKey = "zgj_tv_history"
     private let followsKey = "zgj_tv_follows"
     private let followedDramasKey = "zgj_tv_followed_dramas"
+    private let deletedFollowIdsKey = "zgj_tv_deleted_follow_ids"
+    private let deletedHistoryIdsKey = "zgj_tv_deleted_history_ids"
     private let searchHistoryKey = "zgj_tv_search_history"
     private let unlockedKey = "zgj_tv_sources_unlocked"
     private let settingsKey = "zgj_tv_resource_settings"
@@ -116,9 +56,22 @@ public final class LocalStore: ObservableObject {
     private let cachedCategoriesKey = "thl_tv_cached_categories"
     private let cachedHomeDramasKey = "thl_tv_cached_home_dramas"
 
+    private var isStandardStore: Bool { defaults === UserDefaults.standard }
+
+    private var catalogCacheURL: URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("thl_tv_catalog_cache.json")
+    }
+
     public init(defaults: UserDefaults = .standard, cloudUpload: @escaping (LocalStore) -> Void = { ICloudSyncService.shared.scheduleUpload(store: $0) }) {
+        self.usesOfficialAccount = defaults === UserDefaults.standard
         self.defaults = defaults
         self.cloudUpload = cloudUpload
+        if isStandardStore {
+            do { try DownloadJobStore.shared.migrateLegacyJobs() }
+            catch { NSLog("[Storage] 下载记录迁移未完成，原记录已保留") }
+        }
         loadFromStorage()
     }
 
@@ -131,15 +84,30 @@ public final class LocalStore: ObservableObject {
             defaults.set("hongguo", forKey: currentSourceKey)
         }
 
-        if let data = defaults.data(forKey: cachedCategoriesKey),
-           let cats = try? JSONDecoder().decode([CatalogCategory].self, from: data) {
-            cachedCategories = cats
+        if isStandardStore {
+            struct CatalogCache: Codable {
+                let categories: [CatalogCategory]
+                let dramas: [Drama]
+            }
+            if let data = try? Data(contentsOf: catalogCacheURL),
+               let cache = try? JSONDecoder().decode(CatalogCache.self, from: data) {
+                cachedCategories = cache.categories
+                cachedHomeDramas = cache.dramas
+            }
+            // 关键：彻底从 defaults 中删除历史写入的超大剧集列表，消除 CFPreferences 崩溃
+            defaults.removeObject(forKey: cachedCategoriesKey)
+            defaults.removeObject(forKey: cachedHomeDramasKey)
+        } else {
+            if let data = defaults.data(forKey: cachedCategoriesKey),
+               let cats = try? JSONDecoder().decode([CatalogCategory].self, from: data) {
+                cachedCategories = cats
+            }
+            if let data = defaults.data(forKey: cachedHomeDramasKey),
+               let dramas = try? JSONDecoder().decode([Drama].self, from: data) {
+                cachedHomeDramas = dramas
+            }
         }
 
-        if let data = defaults.data(forKey: cachedHomeDramasKey),
-           let dramas = try? JSONDecoder().decode([Drama].self, from: data) {
-            cachedHomeDramas = dramas
-        }
         searchHistory = defaults.stringArray(forKey: searchHistoryKey) ?? []
         danmakuEnabled = defaults.object(forKey: danmakuKey) as? Bool ?? true
 
@@ -161,6 +129,14 @@ public final class LocalStore: ObservableObject {
         if let data = defaults.data(forKey: followedDramasKey),
            let list = try? JSONDecoder().decode([Drama].self, from: data) {
             followedDramas = list
+        }
+
+        if let deletedList = defaults.stringArray(forKey: deletedFollowIdsKey) {
+            deletedFollowIds = Set(deletedList)
+        }
+
+        if let deletedHList = defaults.stringArray(forKey: deletedHistoryIdsKey) {
+            deletedHistoryIds = Set(deletedHList)
         }
 
         if let data = defaults.data(forKey: settingsKey),
@@ -196,30 +172,57 @@ public final class LocalStore: ObservableObject {
         }
     }
 
+    public func clearAccountCatalogCache() {
+        cachedHomeDramas = []; cachedCategories = []
+        if isStandardStore {
+            try? FileManager.default.removeItem(at: catalogCacheURL)
+        }
+        defaults.removeObject(forKey: cachedHomeDramasKey)
+        defaults.removeObject(forKey: cachedCategoriesKey)
+    }
+
     public func saveCachedCatalog(categories: [CatalogCategory], dramas: [Drama]) {
-        if !categories.isEmpty {
-            self.cachedCategories = categories
-            if let data = try? JSONEncoder().encode(categories) {
+        if !categories.isEmpty { self.cachedCategories = categories }
+        if !dramas.isEmpty { self.cachedHomeDramas = Array(dramas.prefix(36)) }
+        if isStandardStore {
+            struct CatalogCache: Codable {
+                let categories: [CatalogCategory]
+                let dramas: [Drama]
+            }
+            let cache = CatalogCache(categories: self.cachedCategories, dramas: self.cachedHomeDramas)
+            if let data = try? JSONEncoder().encode(cache) {
+                try? data.write(to: catalogCacheURL, options: .atomic)
+            }
+        } else {
+            if !categories.isEmpty, let data = try? JSONEncoder().encode(categories) {
                 defaults.set(data, forKey: cachedCategoriesKey)
             }
-        }
-        if !dramas.isEmpty {
-            let prefixDramas = Array(dramas.prefix(36))
-            self.cachedHomeDramas = prefixDramas
-            if let data = try? JSONEncoder().encode(prefixDramas) {
+            if !dramas.isEmpty, let data = try? JSONEncoder().encode(self.cachedHomeDramas) {
                 defaults.set(data, forKey: cachedHomeDramasKey)
             }
         }
     }
 
     // MARK: - Watch History
-    public func recordWatch(drama: Drama, episode: Int, position: Double, duration: Double) {
+    public func recordWatch(drama: Drama, episode: Int, position: Double, duration: Double, itemId: String = "", force: Bool = false) {
+        if usesOfficialAccount && HongguoAccountLibraryCache.shared.handles(drama.id) {
+            guard position.isFinite, duration.isFinite, position >= 0, duration > 0, episode > 0 else { return }
+            let entry = WatchEntry(drama: drama, episode: episode, position: min(position, duration), duration: duration, updatedAt: Date())
+            let revision = HongguoAccountVault.shared.snapshot.revision
+            Task { @MainActor in
+                guard HongguoAccountVault.shared.snapshot.revision == revision else { return }
+                do { try await HongguoAccountModel.shared.uploadProgress(entry, itemId: itemId, force: force) }
+                catch { NSLog("[AccountLibrary] progress upload failed") }
+            }
+            return
+        }
         guard !drama.id.isEmpty, episode > 0, position.isFinite, duration.isFinite,
               position >= 0, duration > 0 else { return }
         let previous = history.first { $0.drama.id == drama.id }?.drama
             ?? followedDramas.first { $0.id == drama.id }
         let current = previous?.merge(with: drama) ?? drama
         let entry = WatchEntry(drama: current, episode: episode, position: min(position, duration), duration: duration, updatedAt: Date())
+        deletedHistoryIds.remove(drama.id)
         history.removeAll { $0.drama.id == drama.id }
         history.insert(entry, at: 0)
         if history.count > 300 {
@@ -233,38 +236,64 @@ public final class LocalStore: ObservableObject {
     }
 
     public func getWatchEntry(dramaId: String) -> WatchEntry? {
-        history.first { $0.drama.id == dramaId }
+        if usesOfficialAccount && HongguoAccountLibraryCache.shared.handles(dramaId) { return HongguoAccountLibraryCache.shared.watch(dramaId) }
+        return history.first { $0.drama.id == dramaId }
     }
 
     public func clearHistory(for source: String? = nil) {
+        let removed: [WatchEntry]
         if let s = source, !s.isEmpty {
             let target = s.lowercased()
+            removed = history.filter { $0.drama.source.lowercased() == target }
             history.removeAll { $0.drama.source.lowercased() == target }
         } else {
+            removed = history
             history.removeAll()
+        }
+        for item in removed {
+            deletedHistoryIds.insert(item.id)
         }
         saveHistory()
     }
 
     public func removeHistory(dramaId: String) {
         history.removeAll { $0.drama.id == dramaId }
+        deletedHistoryIds.insert(dramaId)
         saveHistory()
+    }
+
+    public func acknowledgeDeletedHistoryIds(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        deletedHistoryIds.subtract(ids)
+        defaults.set(Array(deletedHistoryIds), forKey: deletedHistoryIdsKey)
     }
 
     private func saveHistory() {
         if let data = try? JSONEncoder().encode(history) {
             defaults.set(data, forKey: historyKey)
         }
+        defaults.set(Array(deletedHistoryIds), forKey: deletedHistoryIdsKey)
         cloudUpload(self)
     }
 
     // MARK: - Follow State
     public func setFollowState(drama: Drama, state: FollowState) {
+        if usesOfficialAccount && HongguoAccountLibraryCache.shared.handles(drama.id) {
+            let revision = HongguoAccountVault.shared.snapshot.revision
+            Task { @MainActor in
+                guard HongguoAccountVault.shared.snapshot.revision == revision else { return }
+                do { try await HongguoAccountModel.shared.setFollowing(drama, add: state != .none) }
+                catch { NSLog("[AccountLibrary] follow update failed") }
+            }
+            return
+        }
         guard !drama.id.isEmpty else { return }
         if state == .none {
             follows.removeValue(forKey: drama.id)
             followedDramas.removeAll { $0.id == drama.id }
+            deletedFollowIds.insert(drama.id)
         } else {
+            deletedFollowIds.remove(drama.id)
             follows[drama.id] = state
             if !followedDramas.contains(where: { $0.id == drama.id }) {
                 followedDramas.insert(drama, at: 0)
@@ -277,8 +306,31 @@ public final class LocalStore: ObservableObject {
         saveFollows()
     }
 
+    public func removeFollow(dramaId: String) {
+        if usesOfficialAccount && HongguoAccountLibraryCache.shared.handles(dramaId) {
+            if let entry = HongguoAccountLibraryCache.shared.entries(history: false).first(where: { $0.drama.id == dramaId }) { setFollowState(drama: entry.drama, state: .none) }
+            return
+        }
+        guard !dramaId.isEmpty else { return }
+        follows.removeValue(forKey: dramaId)
+        followedDramas.removeAll { $0.id == dramaId }
+        deletedFollowIds.insert(dramaId)
+        saveFollows()
+    }
+
     public func followState(for dramaId: String) -> FollowState {
-        follows[dramaId] ?? .none
+        if usesOfficialAccount && HongguoAccountLibraryCache.shared.handles(dramaId) {
+            guard HongguoAccountLibraryCache.shared.followed(dramaId) else { return .none }
+            guard let watch = HongguoAccountLibraryCache.shared.watch(dramaId) else { return .wishlist }
+            return watch.finished && watch.drama.episodes > 0 && watch.episode >= watch.drama.episodes ? .watched : .watching
+        }
+        return follows[dramaId] ?? .none
+    }
+
+    public func acknowledgeDeletedFollowIds(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        deletedFollowIds.subtract(ids)
+        defaults.set(Array(deletedFollowIds), forKey: deletedFollowIdsKey)
     }
 
     private func saveFollows() {
@@ -288,24 +340,36 @@ public final class LocalStore: ObservableObject {
         if let dramaData = try? JSONEncoder().encode(followedDramas) {
             defaults.set(dramaData, forKey: followedDramasKey)
         }
+        defaults.set(Array(deletedFollowIds), forKey: deletedFollowIdsKey)
         cloudUpload(self)
     }
 
-    public func applySyncedData(history: [WatchEntry], follows: [String: FollowState], followedDramas: [Drama], source: String? = nil, danmaku: Bool? = nil) {
+    public func applySyncedData(history: [WatchEntry], follows: [String: FollowState], followedDramas: [Drama],
+                                deletedFollows: Set<String>? = nil, deletedHistory: Set<String>? = nil,
+                                source: String? = nil, danmaku: Bool? = nil) {
         applyingCloudData = true
         defer { applyingCloudData = false }
         if let source, !source.isEmpty { setSource(source) }
         if let danmaku { danmakuEnabled = danmaku }
-        self.history = history
-        self.follows = follows
-        self.followedDramas = followedDramas
-        if let data = try? JSONEncoder().encode(history) {
+        if let delFollows = deletedFollows {
+            self.deletedFollowIds = delFollows
+            defaults.set(Array(self.deletedFollowIds), forKey: deletedFollowIdsKey)
+        }
+        if let delHistory = deletedHistory {
+            self.deletedHistoryIds = delHistory
+            defaults.set(Array(self.deletedHistoryIds), forKey: deletedHistoryIdsKey)
+        }
+        self.history = history.filter { !deletedHistoryIds.contains($0.id) }
+        // 排除已删除墓碑中的追剧，防止云端旧数据复活覆盖本地删除操作
+        self.follows = follows.filter { !deletedFollowIds.contains($0.key) }
+        self.followedDramas = followedDramas.filter { !deletedFollowIds.contains($0.id) }
+        if let data = try? JSONEncoder().encode(self.history) {
             defaults.set(data, forKey: historyKey)
         }
-        if let data = try? JSONEncoder().encode(follows) {
+        if let data = try? JSONEncoder().encode(self.follows) {
             defaults.set(data, forKey: followsKey)
         }
-        if let data = try? JSONEncoder().encode(followedDramas) {
+        if let data = try? JSONEncoder().encode(self.followedDramas) {
             defaults.set(data, forKey: followedDramasKey)
         }
     }

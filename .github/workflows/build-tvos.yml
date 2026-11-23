@@ -19,6 +19,14 @@ on:
       - '.github/workflows/build-tvos.yml'
   workflow_dispatch:
     inputs:
+      apple_runner:
+        description: 'Apple 构建机（arm64 排队时可选择 Intel）'
+        required: true
+        default: macos-latest
+        type: choice
+        options:
+          - macos-latest
+          - macos-15-intel
       publish_release:
         description: '将构建产物发布至 GitHub Releases'
         required: true
@@ -43,12 +51,16 @@ env:
 jobs:
   tvos:
     name: Apple tvOS 大屏原生自动化打包
-    runs-on: macos-latest
+    runs-on: ${{ inputs.apple_runner || 'macos-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: 检查 Xcode 与 tvOS SDK 版本
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i appletvos || true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -139,7 +151,8 @@ jobs:
             python .github/ci/source_manifest.py verify --ipa "$signed_ipa"
             xcrun altool --upload-app -f "$signed_ipa" -t ios --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
             echo "✅ tvOS 版本成功上传到 App Store Connect！"
-            python .github/ci/set_testflight_notes.py || true
+            echo "正在自动从 tvos/release.md 提取最新修改内容并同步至 TestFlight 更新说明..."
+            python .github/ci/set_testflight_notes.py --notes-file tvos/release.md || echo "::warning::同步 TestFlight 更新说明提示非阻断异常"
           else
             echo "::error::未发现签名的 tvOS IPA 产物，无法上传。"
             exit 1

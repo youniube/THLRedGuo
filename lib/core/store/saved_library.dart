@@ -140,7 +140,12 @@ class _SavedLibraryState extends State<SavedLibrary> {
         : () => widget.onDownload!(drama),
   );
 
-  Widget _tile(Drama drama, {FocusNode? focusNode, VoidCallback? onFocus}) {
+  Widget _tile(
+    Drama drama, {
+    FocusNode? focusNode,
+    VoidCallback? onFocus,
+    bool compact = false,
+  }) {
     final watched = widget.store.watched(drama.id);
     final state = widget.store.following(drama.id);
     final badge = state == null
@@ -152,6 +157,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
       repository: widget.repository,
       focusNode: focusNode,
       onFocus: onFocus,
+      compact: compact,
       onTap: () => widget.onOpen(drama),
       onMore: () => _actions(drama),
       actions: DramaActionButton(
@@ -199,13 +205,16 @@ class _SavedLibraryState extends State<SavedLibrary> {
           .firstOrNull;
       final header = [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
           child: Row(
             children: [
               Expanded(
                 child: Text(
                   '${widget.history ? '最近观看' : '我的追剧'} · ${items.length}',
-                  style: Theme.of(context).textTheme.titleLarge,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               if (!widget.history)
@@ -214,6 +223,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
                   icon: const Icon(
                     Icons.shield_outlined,
                     color: AppColors.hongguoRed,
+                    size: 20,
                   ),
                   onPressed: _openPrivacyVault,
                 ),
@@ -221,13 +231,17 @@ class _SavedLibraryState extends State<SavedLibrary> {
                 IconButton(
                   tooltip: '清空观看记录',
                   onPressed: _clearHistory,
-                  icon: const Icon(Icons.delete_outline_rounded),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: Colors.white70,
+                  ),
                 ),
             ],
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
           child: TextField(
             key: ValueKey(
               widget.history ? 'history-search' : 'favorites-search',
@@ -235,16 +249,51 @@ class _SavedLibraryState extends State<SavedLibrary> {
             controller: _search,
             onChanged: (_) => setState(() {}),
             textInputAction: TextInputAction.search,
+            style: const TextStyle(fontSize: 14, color: Colors.white),
             decoration: InputDecoration(
               hintText: widget.history ? '搜索观看记录' : '搜索追剧',
-              prefixIcon: const Icon(Icons.search_rounded),
+              hintStyle: const TextStyle(
+                fontSize: 14,
+                color: Color(0x66FFFFFF),
+              ),
+              prefixIcon: const Icon(
+                Icons.search_rounded,
+                size: 20,
+                color: Color(0x80FFFFFF),
+              ),
               suffixIcon: _search.text.isEmpty
                   ? null
                   : IconButton(
                       tooltip: '清空搜索',
                       onPressed: () => setState(_search.clear),
-                      icon: const Icon(Icons.close_rounded),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        size: 18,
+                        color: Color(0x80FFFFFF),
+                      ),
                     ),
+              filled: true,
+              fillColor: const Color(0x14FFFFFF),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(
+                  color: Color(0x33FFFFFF),
+                  width: 1,
+                ),
+              ),
             ),
           ),
         ),
@@ -342,7 +391,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
               ],
             );
           }
-          final padding = constraints.maxWidth < 600 ? 16.0 : 24.0;
+          final padding = constraints.maxWidth < 600 ? 12.0 : 16.0;
           return CustomScrollView(
             key: PageStorageKey(
               'saved-${widget.history}-$_filter-${_search.text}',
@@ -353,14 +402,14 @@ class _SavedLibraryState extends State<SavedLibrary> {
                 SliverFillRemaining(hasScrollBody: false, child: empty)
               else
                 SliverPadding(
-                  padding: EdgeInsets.fromLTRB(padding, 0, padding, 20),
+                  padding: EdgeInsets.fromLTRB(padding, 0, padding, 16),
                   sliver: SliverGrid(
-                    gridDelegate: dramaGridDelegate(
+                    gridDelegate: compactDramaGridDelegate(
                       context,
                       constraints.maxWidth - 2 * padding,
                     ),
                     delegate: SliverChildBuilderDelegate(
-                      (_, index) => _tile(items[index]),
+                      (_, index) => _tile(items[index], compact: true),
                       childCount: items.length,
                     ),
                   ),

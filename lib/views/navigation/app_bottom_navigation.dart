@@ -17,25 +17,19 @@ class AppBottomNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colors = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xE612141C) : const Color(0xF2FFFFFF),
+        color: isDark
+            ? AppColors.darkSurface.withValues(alpha: 0.94)
+            : AppColors.lightSurface.withValues(alpha: 0.94),
         border: Border(
           top: BorderSide(
-            color: isDark ? const Color(0x2EFFFFFF) : colors.outlineVariant.withValues(alpha: 0.5),
-            width: 0.6,
+            color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+            width: 0.5,
           ),
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 16,
-            offset: Offset(0, -4),
-          ),
-        ],
       ),
       child: SafeArea(
         top: false,

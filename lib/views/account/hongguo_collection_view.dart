@@ -1,0 +1,194 @@
+import 'package:flutter/material.dart';
+import '../../core/account/hongguo_collection_controller.dart';
+
+class HongguoCollectionView<T> extends StatefulWidget {
+  const HongguoCollectionView({
+    super.key,
+    required this.controller,
+    required this.name,
+    required this.title,
+    required this.emptyMessage,
+    required this.sliver,
+    this.localItems = const [],
+    this.itemKey,
+  });
+  final HongguoCollectionController<T> controller;
+  final String name, title, emptyMessage;
+  final Widget Function(BuildContext, List<T>) sliver;
+  final List<T> localItems;
+  final Object Function(T)? itemKey;
+
+  @override
+  State<HongguoCollectionView<T>> createState() =>
+      _HongguoCollectionViewState<T>();
+}
+
+class _HongguoCollectionViewState<T> extends State<HongguoCollectionView<T>> {
+  final scroll = ScrollController();
+
+  List<T> get _effectiveItems {
+    if (widget.localItems.isEmpty) return widget.controller.items;
+    final seen = <Object?>{};
+    final result = <T>[];
+    for (final item in widget.localItems) {
+      final key = widget.itemKey?.call(item) ?? item;
+      if (seen.add(key)) result.add(item);
+    }
+    for (final item in widget.controller.items) {
+      final key = widget.itemKey?.call(item) ?? item;
+      if (seen.add(key)) result.add(item);
+    }
+    return result;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    scroll.addListener(_nearEnd);
+    widget.controller.addListener(_changed);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !widget.controller.loaded) widget.controller.load();
+    });
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _nearEnd();
+    });
+  }
+
+  void _nearEnd() {
+    final model = widget.controller;
+    if (!model.loading &&
+        model.error == null &&
+        model.hasMore &&
+        scroll.hasClients &&
+        scroll.position.extentAfter < 350) {
+      model.load();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_changed);
+    scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final model = widget.controller;
+    final items = _effectiveItems;
+    final waiting =
+        model.session.loggedIn &&
+        (model.loading || (!model.loaded && model.error == null));
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 8, 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.title,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              IconButton(
+                key: ValueKey('account-${widget.name}-refresh'),
+                tooltip: '刷新列表',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                padding: EdgeInsets.zero,
+                onPressed: model.loading
+                    ? null
+                    : () => model.load(refresh: true),
+                icon: Icon(
+                  Icons.refresh,
+                  size: 18,
+                  color: isDark ? Colors.white70 : scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (waiting && items.isEmpty)
+          LinearProgressIndicator(
+            key: ValueKey('account-${widget.name}-loading'),
+          ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () => model.load(refresh: true),
+            child: CustomScrollView(
+              key: ValueKey('account-${widget.name}-list'),
+              controller: scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                if (items.isNotEmpty) widget.sliver(context, items),
+                if (items.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            waiting
+                                ? '正在获取账号列表'
+                                : model.error ?? widget.emptyMessage,
+                            key: ValueKey('account-${widget.name}-state'),
+                          ),
+                          if (model.error != null)
+                            TextButton(
+                              key: ValueKey('account-${widget.name}-retry'),
+                              onPressed: () => model.load(refresh: true),
+                              child: const Text('重试'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          if (model.error != null) ...[
+                            Text(
+                              model.error!,
+                              key: ValueKey('account-${widget.name}-error'),
+                            ),
+                            TextButton(
+                              key: ValueKey('account-${widget.name}-retry'),
+                              onPressed: () => model.load(),
+                              child: const Text('重试加载'),
+                            ),
+                          ] else if (!model.hasMore)
+                            Text(
+                              '已加载全部',
+                              key: ValueKey('account-${widget.name}-end'),
+                            ),
+                          if (model.unsupportedCount > 0)
+                            const Text('部分内容暂不支持展示'),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}

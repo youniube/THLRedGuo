@@ -280,6 +280,7 @@ var spider = {
       expect(jsFile.existsSync(), isTrue);
       hongguoScript = await jsFile.readAsString();
       hongguoScript += r"""
+globalThis.__hongguoLocalSign = function() { return {}; };
 globalThis.fetch = async function(url, options) {
   if (String(url).indexOf('/service/2/device_register/') >= 0) return {status:200,text:async()=>JSON.stringify({device_id_str:"7345678901234567001",install_id_str:"7345678901234567002"})};
   if (String(url).indexOf('/reading/bookapi/bookmall/tab/v') >= 0) {
@@ -353,16 +354,15 @@ globalThis.fetch = async function(url, options) {
 
       final settingsRes = await engine.dispatch({'action': 'resourceSettings'});
       expect(settingsRes['ok'], isTrue);
-      expect(settingsRes['data']['concurrency'], equals(3));
-      expect(settingsRes['data']['intervalMs'], equals(250));
+      expect(settingsRes['data']['catalogConcurrency'], equals(3));
+      expect(settingsRes['data']['catalogIntervalMs'], equals(250));
 
       final saveRes = await engine.dispatch({
         'action': 'saveResourceSettings',
         'settings': {'concurrency': 5, 'intervalMs': 300},
       });
-      expect(saveRes['ok'], isTrue);
-      expect(saveRes['data']['concurrency'], equals(5));
-      expect(saveRes['data']['intervalMs'], equals(300));
+      expect(saveRes['ok'], isFalse);
+      expect(saveRes['error'], contains('尚未接入'));
     });
 
     test('2. 载入并安装官方数据源插件 (jsSource.saveAndLoad & setActive)', () async {
@@ -525,7 +525,7 @@ globalThis.fetch = async function(url, options) {
       // 控制命令暂停/恢复
       final ctrlRes = await engine.dispatch({
         'action': 'controlDownloads',
-        'jobId': 'hongguo:7345678901234567890:1',
+        'jobId': 'hongguo:7345678901234567890_1',
         'command': 'pause',
       });
       expect(ctrlRes['ok'], isTrue);
@@ -534,8 +534,8 @@ globalThis.fetch = async function(url, options) {
       final batchCtrlRes = await engine.dispatch({
         'action': 'controlDownloadBatch',
         'jobIds': [
-          'hongguo:7345678901234567890:1',
-          'hongguo:7345678901234567890:2',
+          'hongguo:7345678901234567890_1',
+          'hongguo:7345678901234567890_2',
         ],
         'command': 'resume',
       });

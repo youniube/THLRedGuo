@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -9,7 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'hongguo_guest_session.dart';
+import '../account/hongguo_account_session.dart';
 import 'hongguo_playback_profile.dart';
+import 'safe_jscore_runtime.dart';
 
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
 import 'package:THLRedLook/core/js/source_http_client.dart';
@@ -134,7 +137,8 @@ class CatPawJsRuntime {
   static void resetDeviceSessionForTesting([String? session]) =>
       HongguoGuestSession.shared.resetForTesting(session);
 
-  late final JavascriptRuntime _rt;
+  JavascriptRuntime? _runtime;
+  JavascriptRuntime get _rt => _runtime!;
   final http.Client _httpClient;
   final bool _isOwnedClient;
   final SourceDiagnostics diagnostics;
@@ -145,6 +149,8 @@ class CatPawJsRuntime {
   DateTime? _injectedDeviceCreatedAt;
   bool _officialSource = false;
   String _storageSourceId = '';
+  bool _trustedAccountSource = false;
+  int _activeAccountRevision = 0;
   int _successfulPlaybackResolves = 0;
   DateTime? _lastSuccessfulPlayback;
   int _evaluationSequence = 0;
@@ -214,8 +220,13 @@ typeof spider === 'object' && spider !== null &&
     if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
     _localProfileUnavailable = false;
     _supportsSigningCache = false;
-    if (persistentDeviceSession) await guestSessions.preload();
-    _rt = getJavascriptRuntime(xhr: false);
+    if (persistentDeviceSession) {
+      await guestSessions.preload();
+      if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
+    }
+    _runtime = (Platform.isIOS || Platform.isMacOS)
+        ? SafeJavascriptCoreRuntime()
+        : getJavascriptRuntime(xhr: false);
     _injectGlobals();
     final result = _rt.evaluate(script);
     if (result.isError) {
@@ -228,10 +239,12 @@ typeof spider === 'object' && spider !== null &&
         'true';
     if (HongguoPlaybackProfile.supported && !builtInSigning) {
       final bundled = await rootBundle.loadString('assets/sources/hongguo.js');
+      if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
       if (sha256.convert(utf8.encode(script)) ==
           sha256.convert(utf8.encode(bundled))) {
         _supportsSigningCache = true;
         await _refreshSigningCache();
+        if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
       }
     }
     _storageSourceId = _rt
@@ -240,7 +253,93 @@ typeof spider === 'object' && spider !== null &&
         )
         .stringResult;
     _officialSource = _storageSourceId == 'hongguo';
+    if (_officialSource) {
+      try {
+        final bundled = await rootBundle.loadString(
+          'assets/sources/hongguo.js',
+        );
+        if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
+        _trustedAccountSource =
+            sha256.convert(utf8.encode(script)) ==
+            sha256.convert(utf8.encode(bundled));
+      } catch (_) {
+        _trustedAccountSource = false;
+      }
+    }
+    if (_isDisposed) throw StateError('CatPawJsRuntime 已被释放');
     _ready = true;
+  }
+
+  Future<Map<String, dynamic>> accountRequest(
+    String action,
+    Map<String, dynamic> payload,
+  ) async {
+    if (!_trustedAccountSource) {
+      throw const HongguoAccountFailure('当前数据源不支持安全账号接入');
+    }
+    final value = await _evalAsync(
+      'spider.accountRequest(${jsonEncode(action)}, ${jsonEncode(payload)})',
+      operation: '账号请求准备',
+    );
+    if (value is! Map) throw const HongguoAccountFailure('账号请求格式无效');
+    return Map<String, dynamic>.from(value);
+  }
+
+  Map<String, dynamic> accountParse(String action, String body) {
+    _assertReady();
+    if (!_trustedAccountSource) {
+      throw const HongguoAccountFailure('当前数据源不支持安全账号接入');
+    }
+    final value = _rt.evaluate(
+      'JSON.stringify(spider.accountParse(${jsonEncode(action)}, ${jsonEncode(body)}))',
+    );
+    if (value.isError) {
+      if (value.stringResult.contains(
+        'ACCOUNT_SECONDARY_VERIFICATION_REQUIRED',
+      )) {
+        throw const HongguoAccountFailure(
+          '请在红果 App 完成账号安全验证后使用扫码登录',
+          'SECONDARY_VERIFICATION_REQUIRED',
+        );
+      }
+      if (value.stringResult.contains('ACCOUNT_CHALLENGE_REQUIRED')) {
+        throw const HongguoAccountFailure(
+          '红果要求额外安全验证，请使用红果 App 扫码登录',
+          'CHALLENGE_REQUIRED',
+        );
+      }
+      final code = RegExp(
+        r'ACCOUNT_BUSINESS_(-?[0-9]{1,9})',
+      ).firstMatch(value.stringResult)?.group(1);
+      if (code != null) {
+        if (action == 'creatorFollow' && code == '103012') {
+          throw const HongguoAccountFailure(
+            '红果安全校验未通过（103012），请稍后重试',
+            'BUSINESS_103012',
+          );
+        }
+        throw HongguoAccountFailure('官方账号请求失败（错误码 $code）', 'BUSINESS_$code');
+      }
+      if (const {
+        'socialDetail',
+        'creatorList',
+        'likeUpdate',
+        'creatorFollow',
+        'followingCreators',
+        'creatorWorks',
+        'likedVideos',
+        'creatorProfile',
+        'commentList',
+        'commentReplyList',
+      }.contains(action)) {
+        throw const HongguoAccountFailure(
+          '官方互动数据暂不可用，请刷新后重试',
+          'INVALID_RESPONSE',
+        );
+      }
+      throw const HongguoAccountFailure('账号校验失败，请重新扫码或稍后重试');
+    }
+    return Map<String, dynamic>.from(jsonDecode(value.stringResult) as Map);
   }
 
   Future<void> _refreshSigningCache() async {
@@ -288,7 +387,7 @@ try {
   }
 
   void cancelPending() {
-    if (_isDisposed || !_ready) return;
+    if (_isDisposed || !_ready || _runtime == null) return;
     _cancellation++;
     _cancelSignal.complete();
     _cancelSignal = Completer<void>();
@@ -305,7 +404,7 @@ globalThis.__fetchPendingQueue = [];
 
   void _cleanup() {
     try {
-      _rt.dispose();
+      _runtime?.dispose();
     } catch (_) {}
     if (_isOwnedClient) {
       _httpClient.close();
@@ -455,6 +554,29 @@ globalThis.__native_save_device = function(json) {
       final binaryResponse = params['responseEncoding'] == 'base64';
 
       final uri = Uri.parse(url);
+      final account = HongguoAccountSession.shared;
+      final accountBusiness =
+          _officialSource && HongguoAccountSession.businessUrl(uri);
+      if (accountBusiness && _activeAccountRevision != account.revision) {
+        throw const HongguoAccountFailure('账号已切换，请重试', 'CANCELLED');
+      }
+      if (accountBusiness && account.loggedIn) {
+        if (!_trustedAccountSource) {
+          throw const HongguoAccountFailure(
+            '请更新官方数据源后使用账号',
+            'ACCOUNT_SOURCE_UNTRUSTED',
+          );
+        }
+        final cookie = account.headerFor(uri);
+        if (cookie.isEmpty) {
+          throw const HongguoAccountFailure(
+            '账号登录态已过期，请重新扫码',
+            'ACCOUNT_EXPIRED',
+          );
+        }
+        headers['Cookie'] = cookie;
+      }
+
       final officialMetadata =
           uri.scheme == 'https' &&
           (uri.host == 'reading.snssdk.com' ||
@@ -482,7 +604,9 @@ globalThis.__native_save_device = function(json) {
         final request =
             http.AbortableRequest(method, uri, abortTrigger: abort.future)
               ..headers.addAll(headers)
-              ..followRedirects = params['redirect'] != 'manual';
+              ..followRedirects =
+                  !(accountBusiness && account.loggedIn) &&
+                  params['redirect'] != 'manual';
         if (method != 'HEAD' && method != 'GET') {
           if (bodyBase64 != null) {
             final decoded = base64Decode(bodyBase64);
@@ -517,6 +641,9 @@ globalThis.__native_save_device = function(json) {
         if (!abort.isCompleted) abort.complete();
       }
 
+      if (accountBusiness && _activeAccountRevision != account.revision) {
+        throw const HongguoAccountFailure('账号已切换，请重试', 'CANCELLED');
+      }
       if (_isDisposed) {
         return {'status': 0, 'headers': <String, String>{}, 'body': ''};
       }
@@ -1008,6 +1135,10 @@ globalThis.__native_save_device = function(json) {
         initializationOwner = guestSessions.beginInitialization();
       }
       final data = await _runEval(jsCode, timeout, stopwatch, cancellation);
+      if (_officialSource &&
+          _activeAccountRevision != HongguoAccountSession.shared.revision) {
+        throw const HongguoAccountFailure('账号已切换，请重试', 'CANCELLED');
+      }
       if (!recoverGuest || !_officialSource || !persistentDeviceSession) {
         return data;
       }
@@ -1073,6 +1204,10 @@ globalThis.__native_save_device = function(json) {
     if (cancellation != _cancellation) {
       throw CatPawSourceFailure.playback('cancelled');
     }
+    _activeAccountRevision = HongguoAccountSession.shared.revision;
+    _rt.evaluate(
+      'globalThis.__hongguoAccountActive = ${_trustedAccountSource && HongguoAccountSession.shared.loggedIn};',
+    );
     final evaluation = ++_evaluationSequence;
     _modelResponses = [];
     _syncDeviceSession();
@@ -1092,7 +1227,7 @@ globalThis.__native_save_device = function(json) {
     dynamic rawResult;
 
     while (true) {
-      if (cancellation != _cancellation) {
+      if (_isDisposed || cancellation != _cancellation) {
         throw CatPawSourceFailure.playback('cancelled');
       }
       if (stopwatch.elapsed > timeout) {
@@ -1152,6 +1287,9 @@ globalThis.__native_save_device = function(json) {
       _syncSavedDevice();
       _rt.executePendingJob();
       await Future.delayed(const Duration(milliseconds: 10));
+      if (_isDisposed || cancellation != _cancellation) {
+        throw CatPawSourceFailure.playback('cancelled');
+      }
     }
 
     _syncSavedDevice();
@@ -1207,8 +1345,16 @@ globalThis.__native_save_device = function(json) {
       );
 
   void _syncDeviceSession() {
-    if (!persistentDeviceSession) return;
-    final session = guestSessions.value;
+    final account = HongguoAccountSession.shared;
+    if (!persistentDeviceSession &&
+        !(_trustedAccountSource &&
+            account.loggedIn &&
+            account.deviceSession != null)) {
+      return;
+    }
+    final session = _trustedAccountSource && account.loggedIn
+        ? account.deviceSession ?? guestSessions.value
+        : guestSessions.value;
     if (_injectedDeviceSession == session) {
       _injectedDeviceCreatedAt = guestSessions.createdAt;
       return;
@@ -1684,6 +1830,7 @@ class CatPawRuntimePool {
   final Map<String, int> _generations = {};
   bool _isDisposed = false;
   bool _appForeground = true;
+  int _accountRevision = -1;
 
   CatPawRuntimePool([http.Client? httpClient])
     : _httpClient = httpClient ?? SourceHttpClient(),
@@ -1706,6 +1853,11 @@ class CatPawRuntimePool {
     String scope = 'catalog',
   }) async {
     if (_isDisposed) throw StateError('CatPawRuntimePool 已经销毁');
+    final revision = HongguoAccountSession.shared.revision;
+    if (_accountRevision != revision) {
+      clear();
+      _accountRevision = revision;
+    }
     final key = '$sourceId\u0000$scope';
     if (_scripts[key] == script) {
       final pending = _pending[key];

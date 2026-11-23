@@ -17,6 +17,7 @@ import 'package:THLRedLook/pages/player/player_page.dart';
 import 'package:THLRedLook/pages/settings/playback_settings_page.dart';
 import 'package:THLRedLook/utils/screen/app_layout.dart';
 import 'package:THLRedLook/views/player/player_bottom_bar_view.dart';
+import 'package:THLRedLook/views/player/player_viewport_view.dart';
 
 class _MockRepo extends AppRepository {
   @override
@@ -76,69 +77,124 @@ class _MockPlayer extends LunaExoPlayer {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('画中画 (Picture-in-Picture) 设置与播放器联动测试', () {
-    test('1. 验证 PlaybackPreferences 中 pictureInPicture 默认为 false，并支持 copyWith 与持久化序列化', () async {
+  testWidgets('修改播放器倍速后保留兼容解码和关闭的画中画偏好', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
       SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      final store = LocalStore(prefs);
-
-      // 1. 默认状态为关闭
+      final store = LocalStore(await SharedPreferences.getInstance());
+      await store.setPlaybackPreferences(
+        store.playbackPreferences.copyWith(
+          decoderMode: PlaybackDecoderMode.compatible,
+          pictureInPicture: false,
+          preload: false,
+          danmaku: false,
+        ),
+      );
+      const drama = Drama(id: 'synthetic', source: 'hongguo', title: '合成播放器设置');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerScreen(
+            detail: DramaDetail(drama, [
+              Episode(const {'url': 'synthetic', 'title': '第1集'}, 1),
+            ]),
+            initialIndex: 0,
+            repository: _MockRepo(),
+            store: store,
+            playerFactory: _MockPlayer.new,
+            videoBuilder: (controls) => Stack(children: [controls]),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      tester
+          .widget<PlayerBottomBarView>(find.byType(PlayerBottomBarView).first)
+          .onSpeed();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('sheet-speed-1.5')));
+      await tester.pumpAndSettle();
+      expect(store.playbackPreferences.speed, 1.5);
+      expect(
+        store.playbackPreferences.decoderMode,
+        PlaybackDecoderMode.compatible,
+      );
       expect(store.playbackPreferences.pictureInPicture, isFalse);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 
-      // 2. 开启画中画
-      final updated = store.playbackPreferences.copyWith(pictureInPicture: true);
-      await store.setPlaybackPreferences(updated);
-
-      expect(store.playbackPreferences.pictureInPicture, isTrue);
-
-      // 3. 从持久化重新构建 store，确认值保持 true
-      final reloadedStore = LocalStore(prefs);
-      expect(reloadedStore.playbackPreferences.pictureInPicture, isTrue);
-
-      // 4. JSON 序列化反序列化一致性
-      final json = updated.toJson();
-      expect(json['pictureInPicture'], isTrue);
-      final restored = PlaybackPreferences.fromJson(json);
-      expect(restored.pictureInPicture, isTrue);
-    });
-
-    testWidgets('2. UI 验证：PlaybackSettingsPage 在 Android/iOS 平台渲染画中画模式开关并支持点击开启', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      try {
+  group('画中画 (Picture-in-Picture) 设置与播放器联动测试', () {
+    test(
+      '1. 验证 PlaybackPreferences 中 pictureInPicture 默认为 true，并支持 copyWith 与持久化序列化',
+      () async {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = LocalStore(prefs);
 
+        expect(store.playbackPreferences.pictureInPicture, isTrue);
+
+        final updated = store.playbackPreferences.copyWith(
+          pictureInPicture: false,
+        );
+        await store.setPlaybackPreferences(updated);
+
         expect(store.playbackPreferences.pictureInPicture, isFalse);
 
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: ThemeData.light(),
-            home: PlaybackSettingsPage(store: store),
-          ),
-        );
-        await tester.pumpAndSettle();
+        final reloadedStore = LocalStore(prefs);
+        expect(reloadedStore.playbackPreferences.pictureInPicture, isFalse);
 
-        // 验证开关存在并处于关闭状态
-        final switchFinder = find.byKey(const ValueKey('settings-pip-switch'));
-        expect(switchFinder, findsOneWidget);
-        expect(find.text('画中画模式'), findsOneWidget);
+        final json = updated.toJson();
+        expect(json['pictureInPicture'], isFalse);
+        final restored = PlaybackPreferences.fromJson(json);
+        expect(restored.pictureInPicture, isFalse);
+      },
+    );
 
-        SwitchListTile tile = tester.widget<SwitchListTile>(switchFinder);
-        expect(tile.value, isFalse);
+    testWidgets(
+      '2. UI 验证：PlaybackSettingsPage 在 Android/iOS 平台渲染画中画模式开关并支持点击开启',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        try {
+          SharedPreferences.setMockInitialValues({});
+          final prefs = await SharedPreferences.getInstance();
+          final store = LocalStore(prefs);
+          await store.setPlaybackPreferences(
+            store.playbackPreferences.copyWith(pictureInPicture: false),
+          );
 
-        // 点击开关开启画中画
-        await tester.tap(switchFinder);
-        await tester.pumpAndSettle();
+          expect(store.playbackPreferences.pictureInPicture, isFalse);
 
-        // 验证持久化已更新为 true
-        expect(store.playbackPreferences.pictureInPicture, isTrue);
-        tile = tester.widget<SwitchListTile>(switchFinder);
-        expect(tile.value, isTrue);
-      } finally {
-        debugDefaultTargetPlatformOverride = null;
-      }
-    });
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: ThemeData.light(),
+              home: PlaybackSettingsPage(store: store),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final switchFinder = find.byKey(
+            const ValueKey('settings-pip-switch'),
+          );
+          expect(switchFinder, findsOneWidget);
+          expect(find.text('画中画模式'), findsOneWidget);
+
+          SwitchListTile tile = tester.widget<SwitchListTile>(switchFinder);
+          expect(tile.value, isFalse);
+
+          await tester.tap(switchFinder);
+          await tester.pumpAndSettle();
+
+          expect(store.playbackPreferences.pictureInPicture, isTrue);
+          tile = tester.widget<SwitchListTile>(switchFinder);
+          expect(tile.value, isTrue);
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
 
     testWidgets('3. UI 验证：iOS 平台同样正确渲染并支持切换画中画设置', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
@@ -146,6 +202,9 @@ void main() {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = LocalStore(prefs);
+        await store.setPlaybackPreferences(
+          store.playbackPreferences.copyWith(pictureInPicture: false),
+        );
 
         await tester.pumpWidget(
           MaterialApp(
@@ -168,7 +227,6 @@ void main() {
     });
 
     testWidgets('4. 播控联动：当画中画关闭时播放器底部栏隐藏画中画按钮；开启且可用时显示画中画按钮', (tester) async {
-      // 场景 A: onPictureInPicture == null (即画中画未开启或不可用)
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -196,10 +254,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final pipBtnFinder = find.byKey(const ValueKey('player-picture-in-picture'));
+      final pipBtnFinder = find.byKey(
+        const ValueKey('player-picture-in-picture'),
+      );
       expect(pipBtnFinder, findsNothing);
 
-      // 场景 B: onPictureInPicture != null (画中画在设置中开启且平台支持)
       bool pipClicked = false;
       await tester.pumpWidget(
         MaterialApp(
@@ -235,12 +294,17 @@ void main() {
       expect(pipClicked, isTrue);
     });
 
-    testWidgets('5. UI 验证：进入画中画状态时，界面绝不呈现无操作纯黑屏，必须渲染中央操作面板与安全区返回按钮', (tester) async {
+    testWidgets('5. UI 验证：进入画中画状态时，界面绝不呈现无操作纯黑屏，必须渲染中央操作面板与安全区返回按钮', (
+      tester,
+    ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       try {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = LocalStore(prefs);
+        await store.setPlaybackPreferences(
+          store.playbackPreferences.copyWith(pictureInPicture: false),
+        );
         await store.setPlaybackPreferences(
           store.playbackPreferences.copyWith(pictureInPicture: true),
         );
@@ -278,8 +342,8 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        // 模拟原生层通知画中画已激活 (active: true)
-        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
         final enterMessage = const StandardMethodCodec().encodeMethodCall(
           const MethodCall('pictureInPictureChanged', {'active': true}),
         );
@@ -291,28 +355,116 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        // 1. 验证左上角返回按钮存在
-        expect(find.byKey(const ValueKey('player-pip-viewport-back')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('player-pip-viewport-back')),
+          findsOneWidget,
+        );
 
-        // 2. 验证中央操作面板存在，绝非纯黑屏
-        expect(find.byIcon(Icons.picture_in_picture_alt_rounded), findsOneWidget);
+        expect(
+          find.byIcon(Icons.picture_in_picture_alt_rounded),
+          findsOneWidget,
+        );
         expect(find.text('正在画中画窗口中播放'), findsOneWidget);
         expect(find.textContaining('画中画防黑屏测试短剧'), findsOneWidget);
 
-        // 3. 验证「恢复应用内播放」与「退出播放」两个核心按钮存在且可操作
-        expect(find.byKey(const ValueKey('player-pip-restore-btn')), findsOneWidget);
-        expect(find.byKey(const ValueKey('player-pip-exit-btn')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('player-pip-restore-btn')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('player-pip-exit-btn')),
+          findsOneWidget,
+        );
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
     });
 
-    testWidgets('6. 交互验证：轻触「恢复应用内播放」按钮触发 stopPictureInPicture 退出画中画并恢复应用内播放', (tester) async {
+    testWidgets('5.1 UI 验证：Android 平台进入画中画状态时，播控与遮罩面板彻底隐藏，确保画中画浮窗纯净播放无遮挡', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final store = LocalStore(prefs);
+        await store.setPlaybackPreferences(
+          store.playbackPreferences.copyWith(pictureInPicture: true),
+        );
+
+        final mockDrama = const Drama(
+          id: 'test_pip_drama_android',
+          title: 'Android画中画纯净无遮挡测试',
+          source: 'hongguo',
+          sourceId: '7694896136963755032',
+          cover: 'https://mock.snssdk.com/cover.png',
+          episodes: 5,
+        );
+        final mockDetail = DramaDetail(mockDrama, [
+          Episode(const {
+            'url': 'https://mock.snssdk.com/video/mp4/test_pip_drama.mp4',
+            'title': '第 1 集',
+          }, 1),
+        ]);
+        final mockPlayer = _MockPlayer();
+        final mockRepo = _MockRepo();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData.dark(),
+            home: PlayerScreen(
+              detail: mockDetail,
+              initialIndex: 0,
+              repository: mockRepo,
+              store: store,
+              playerFactory: () => mockPlayer,
+              videoBuilder: (controls) => Stack(children: [controls]),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final enterMessage = const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('pictureInPictureChanged', {'active': true}),
+        );
+        await messenger.handlePlatformMessage(
+          'duanju/device',
+          enterMessage,
+          null,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(
+          find.byKey(const ValueKey('player-pip-viewport-back')),
+          findsNothing,
+        );
+        expect(find.byIcon(Icons.picture_in_picture_alt_rounded), findsNothing);
+        expect(find.text('正在画中画窗口中播放'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('player-pip-restore-btn')),
+          findsNothing,
+        );
+        expect(find.byKey(const ValueKey('player-pip-exit-btn')), findsNothing);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('6. 交互验证：轻触「恢复应用内播放」按钮触发 stopPictureInPicture 退出画中画并恢复应用内播放', (
+      tester,
+    ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       try {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = LocalStore(prefs);
+        await store.setPlaybackPreferences(
+          store.playbackPreferences.copyWith(pictureInPicture: false),
+        );
         await store.setPlaybackPreferences(
           store.playbackPreferences.copyWith(pictureInPicture: true),
         );
@@ -365,37 +517,47 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        // 模拟画中画激活
-        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
         final enterMessage = const StandardMethodCodec().encodeMethodCall(
           const MethodCall('pictureInPictureChanged', {'active': true}),
         );
-        await messenger.handlePlatformMessage('duanju/device', enterMessage, null);
+        await messenger.handlePlatformMessage(
+          'duanju/device',
+          enterMessage,
+          null,
+        );
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
         final restoreBtn = find.byKey(const ValueKey('player-pip-restore-btn'));
         expect(restoreBtn, findsOneWidget);
 
-        // 点击「恢复应用内播放」
         await tester.tap(restoreBtn);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
         expect(stopCalled, isTrue);
-        // 画中画中央面板应消失，恢复正常视频播控
-        expect(find.byKey(const ValueKey('player-pip-restore-btn')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('player-pip-restore-btn')),
+          findsNothing,
+        );
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
     });
 
-    testWidgets('7. 交互验证：处于画中画状态时，点击「退出播放」或左上角返回按钮可安全退出播放页，杜绝卡死', (tester) async {
+    testWidgets('7. 交互验证：处于画中画状态时，点击「退出播放」或左上角返回按钮可安全退出播放页，杜绝卡死', (
+      tester,
+    ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       try {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = LocalStore(prefs);
+        await store.setPlaybackPreferences(
+          store.playbackPreferences.copyWith(pictureInPicture: false),
+        );
         await store.setPlaybackPreferences(
           store.playbackPreferences.copyWith(pictureInPicture: true),
         );
@@ -442,22 +604,24 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        // 模拟激活画中画
-        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
         final enterMessage = const StandardMethodCodec().encodeMethodCall(
           const MethodCall('pictureInPictureChanged', {'active': true}),
         );
-        await messenger.handlePlatformMessage('duanju/device', enterMessage, null);
+        await messenger.handlePlatformMessage(
+          'duanju/device',
+          enterMessage,
+          null,
+        );
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        // 点击中央卡片的「退出播放」按钮
         final exitBtn = find.byKey(const ValueKey('player-pip-exit-btn'));
         expect(exitBtn, findsOneWidget);
         await tester.tap(exitBtn);
         await tester.pumpAndSettle();
 
-        // 验证成功返回上一级主页面，绝不锁死
         expect(find.text('MAIN_FEED_PAGE'), findsOneWidget);
         expect(find.byType(PlayerScreen), findsNothing);
       } finally {
@@ -465,7 +629,9 @@ void main() {
       }
     });
 
-    testWidgets('8. 交互与反馈验证：点击画中画按钮提供即时启动反馈，按钮转换为 Loading 状态杜绝无反应', (tester) async {
+    testWidgets('8. 交互与反馈验证：点击画中画按钮提供即时启动反馈，按钮转换为 Loading 状态杜绝无反应', (
+      tester,
+    ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       try {
         final preferences = await SharedPreferences.getInstance();
@@ -508,15 +674,12 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
 
-        // 验证画中画按钮存在
         final pipBtn = find.byKey(const ValueKey('player-picture-in-picture'));
         expect(pipBtn, findsOneWidget);
 
-        // 点击画中画按钮
         await tester.tap(pipBtn);
         await tester.pump();
 
-        // 验证出现即时启动反馈提示和加载指示器
         expect(find.text('正在启动画中画...'), findsOneWidget);
         expect(find.byType(CircularProgressIndicator), findsOneWidget);
       } finally {
@@ -551,8 +714,8 @@ void main() {
         final mockPlayer = _MockPlayer();
         final mockRepo = _MockRepo();
 
-        // 模拟平台通道返回未就绪错误
-        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
         messenger.setMockMethodCallHandler(AppDevice.channel, (call) async {
           if (call.method == 'pictureInPictureStatus') {
             return {'supported': true, 'active': false};
@@ -562,7 +725,7 @@ void main() {
               'supported': true,
               'active': false,
               'requested': false,
-              'error': 'The operation cannot be completed'
+              'error': 'The operation cannot be completed',
             };
           }
           return null;
@@ -584,97 +747,213 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
 
-        // 验证点击画中画按钮
         final pipBtn = find.byKey(const ValueKey('player-picture-in-picture'));
         expect(pipBtn, findsOneWidget);
         await tester.tap(pipBtn);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
 
-        // 验证错误被本地化为用户友好的中文提示
         expect(find.text('系统画中画启动未就绪，请稍后重试'), findsOneWidget);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
     });
 
-    testWidgets('10. 跨页面恢复联动验证：处于画中画状态退出播放器页面后，收到 restorePictureInPictureUI 自动重新跳转回播放器', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      try {
-        final preferences = await SharedPreferences.getInstance();
-        preferences.setString(
-          'playback_preferences',
-          jsonEncode({'pictureInPicture': true}),
-        );
-        final store = LocalStore(preferences);
-        final mockDrama = const Drama(
-          id: 'test_pip_drama_10',
-          title: '画中画跨页面恢复测试短剧',
-          source: 'hongguo',
-          sourceId: '7694896136963755032',
-          cover: 'https://mock.snssdk.com/cover.png',
-          episodes: 5,
-        );
-        final mockDetail = DramaDetail(mockDrama, [
-          Episode(const {
-            'url': 'https://mock.snssdk.com/video/mp4/test_pip_drama.mp4',
-            'title': '第 1 集',
-          }, 1),
-        ]);
-        final mockRepo = _MockRepo();
-        final mockPlayer = _MockPlayer();
-        final navigatorKey = GlobalKey<NavigatorState>();
+    testWidgets(
+      '10. 跨页面恢复联动验证：处于画中画状态退出播放器页面后，收到 restorePictureInPictureUI 自动重新跳转回播放器',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        try {
+          final preferences = await SharedPreferences.getInstance();
+          preferences.setString(
+            'playback_preferences',
+            jsonEncode({'pictureInPicture': true}),
+          );
+          final store = LocalStore(preferences);
+          final mockDrama = const Drama(
+            id: 'test_pip_drama_10',
+            title: '画中画跨页面恢复测试短剧',
+            source: 'hongguo',
+            sourceId: '7694896136963755032',
+            cover: 'https://mock.snssdk.com/cover.png',
+            episodes: 5,
+          );
+          final mockDetail = DramaDetail(mockDrama, [
+            Episode(const {
+              'url': 'https://mock.snssdk.com/video/mp4/test_pip_drama.mp4',
+              'title': '第 1 集',
+            }, 1),
+          ]);
+          final mockRepo = _MockRepo();
+          final mockPlayer = _MockPlayer();
+          final navigatorKey = GlobalKey<NavigatorState>();
 
-        PipManager.instance.initialize(
-          navigatorKey: navigatorKey,
-          repository: mockRepo,
-          store: store,
-        );
-        PipManager.instance.playerFactory = () => mockPlayer;
-        PipManager.instance.videoBuilder = (controls) => Stack(children: [controls]);
-
-        // 登记画中画会话后模拟退出播放器页面（dispose）
-        PipManager.instance.registerPictureInPictureSession(
-          detail: mockDetail,
-          episodeIndex: 0,
-          positionMs: 12000,
-          onRestoreCurrentPlayer: (_) {},
-          onPictureInPictureStatusChanged: (status, pos, speed) {},
-        );
-        PipManager.instance.notifyPlayerDisposed();
-
-        // 模拟当前处于主页/详情页等非播放器界面
-        await tester.pumpWidget(
-          MaterialApp(
+          PipManager.instance.initialize(
             navigatorKey: navigatorKey,
-            theme: ThemeData.dark(),
-            home: const Scaffold(body: Text('其他主页面内容')),
-          ),
-        );
-        await tester.pump();
-        expect(find.text('其他主页面内容'), findsOneWidget);
+            repository: mockRepo,
+            store: store,
+          );
+          PipManager.instance.playerFactory = () => mockPlayer;
+          PipManager.instance.videoBuilder = (controls) =>
+              Stack(children: [controls]);
 
-        // 模拟 iOS 原生系统点击小窗恢复按钮触发 restorePictureInPictureUI
-        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-        final restoreMessage = const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('restorePictureInPictureUI', {
-            'position': 15000,
-            'episodeIndex': 0,
-          }),
-        );
-        await messenger.handlePlatformMessage(
-          'duanju/device',
-          restoreMessage,
-          null,
-        );
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 300));
+          PipManager.instance.registerPictureInPictureSession(
+            detail: mockDetail,
+            episodeIndex: 0,
+            positionMs: 12000,
+            onRestoreCurrentPlayer: (_) {},
+            onPictureInPictureStatusChanged: (status, pos, speed) {},
+          );
+          PipManager.instance.notifyPlayerDisposed();
 
-        // 验证自动重新 Push 并呈现了播放器页面
-        expect(find.byType(PlayerScreen), findsOneWidget);
-      } finally {
-        debugDefaultTargetPlatformOverride = null;
-      }
-    });
+          await tester.pumpWidget(
+            MaterialApp(
+              navigatorKey: navigatorKey,
+              theme: ThemeData.dark(),
+              home: const Scaffold(body: Text('其他主页面内容')),
+            ),
+          );
+          await tester.pump();
+          expect(find.text('其他主页面内容'), findsOneWidget);
+
+          final messenger =
+              TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+          final restoreMessage = const StandardMethodCodec().encodeMethodCall(
+            const MethodCall('restorePictureInPictureUI', {
+              'position': 15000,
+              'episodeIndex': 0,
+            }),
+          );
+          await messenger.handlePlatformMessage(
+            'duanju/device',
+            restoreMessage,
+            null,
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 300));
+
+          expect(find.byType(PlayerScreen), findsOneWidget);
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets(
+      '11. Android 画中画防遮挡验证：开启 PiP 立即关闭弹窗/SnackBar、隐藏控条且 topPadding=0，退出播放器关闭 autoEnter',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        final calls = <MethodCall>[];
+        try {
+          SharedPreferences.setMockInitialValues({});
+          final preferences = await SharedPreferences.getInstance();
+          preferences.setString(
+            'playback_preferences',
+            jsonEncode({'pictureInPicture': true}),
+          );
+          final store = LocalStore(preferences);
+          const mockDrama = Drama(
+            id: 'test_pip_android_11',
+            title: 'Android 画中画无遮挡验证短剧',
+            source: 'hongguo',
+            sourceId: '7694896136963755032',
+            cover: 'https://mock.snssdk.com/cover.png',
+            episodes: 5,
+          );
+          final mockDetail = DramaDetail(mockDrama, [
+            Episode(const {
+              'url': 'https://mock.snssdk.com/video/mp4/test_pip_drama.mp4',
+              'title': '第 1 集',
+            }, 1),
+          ]);
+          final mockPlayer = _MockPlayer();
+          final mockRepo = _MockRepo();
+          final messenger =
+              TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+          messenger.setMockMethodCallHandler(AppDevice.channel, (call) async {
+            calls.add(call);
+            if (call.method == 'pictureInPictureStatus') {
+              return {'supported': true, 'active': false};
+            }
+            if (call.method == 'updatePictureInPictureConfig') {
+              return {'supported': true, 'active': false};
+            }
+            if (call.method == 'enterPictureInPicture') {
+              return {'supported': true, 'active': true, 'requested': true};
+            }
+            return null;
+          });
+
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: ThemeData.dark(),
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(412, 915),
+                  padding: EdgeInsets.only(top: 48),
+                ),
+                child: PlayerScreen(
+                  detail: mockDetail,
+                  initialIndex: 0,
+                  repository: mockRepo,
+                  store: store,
+                  playerFactory: () => mockPlayer,
+                  videoBuilder: (controls) => Stack(children: [controls]),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 300));
+
+          // 唤起底部面板（如倍速），模拟用户开着面板触发画中画，以及通知提示
+          final bar = tester.widget<PlayerBottomBarView>(
+            find.byType(PlayerBottomBarView).first,
+          );
+          bar.onSpeed();
+          await tester.pumpAndSettle();
+          expect(find.byKey(const ValueKey('sheet-speed-1.5')), findsOneWidget);
+
+          // 若收到系统级画中画激活事件，正在展示的底部面板也必须立刻关闭且界面无控制层、topPadding=0
+          final activeMsg = const StandardMethodCodec().encodeMethodCall(
+            const MethodCall('pictureInPictureChanged', {'active': true}),
+          );
+          await messenger.handlePlatformMessage(
+            'duanju/device',
+            activeMsg,
+            null,
+          );
+          await tester.pumpAndSettle();
+
+          expect(find.byKey(const ValueKey('sheet-speed-1.5')), findsNothing);
+          expect(find.byType(PlayerBottomBarView), findsNothing);
+          expect(
+            find.byKey(const ValueKey('player-pip-restore-btn')),
+            findsNothing,
+          );
+          final viewport = tester.widget<PlayerViewportView>(
+            find.byType(PlayerViewportView),
+          );
+          expect(viewport.topPadding, 0.0);
+          expect(viewport.pictureInPictureVisible, isTrue);
+
+          // 销毁播放器时必须关闭原生 autoEnterEnabled，避免退出后误进 PiP
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          final updateCalls = calls
+              .where((c) => c.method == 'updatePictureInPictureConfig')
+              .toList();
+          expect(updateCalls, isNotEmpty);
+          final lastArgs = Map<String, dynamic>.from(
+            updateCalls.last.arguments as Map,
+          );
+          expect(lastArgs['autoEnter'], isFalse);
+        } finally {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(AppDevice.channel, null);
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
   });
 }

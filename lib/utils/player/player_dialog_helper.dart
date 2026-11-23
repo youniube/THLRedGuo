@@ -1,3 +1,4 @@
+import '../../views/account/hongguo_social_dialog.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 
@@ -109,6 +110,18 @@ class PlayerDialogHelper {
           data: menuTheme,
           child: PlayerMenu(
             section: section,
+            accountActions: HongguoSocialButton(
+              drama: detail.drama,
+              store: store,
+              episode: detail.episodes.isEmpty
+                  ? 1
+                  : detail
+                        .episodes[currentIndex.clamp(
+                          0,
+                          detail.episodes.length - 1,
+                        )]
+                        .number,
+            ),
             episodes: detail.episodes,
             currentIndex: currentIndex,
             preferences: preferences,
@@ -164,6 +177,7 @@ class PlayerDialogHelper {
     required String currentEngine,
     required int quality,
     required List<int> qualities,
+    int actualQuality = 0,
     required bool favorite,
     required VoidCallback onFavorite,
     required bool autoAdvance,
@@ -190,6 +204,7 @@ class PlayerDialogHelper {
             currentEngine: currentEngine,
             quality: quality,
             qualities: qualities,
+            actualQuality: actualQuality,
             favorite: favorite,
             onFavorite: onFavorite,
             autoAdvance: autoAdvance,

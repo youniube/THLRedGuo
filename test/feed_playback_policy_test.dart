@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/core/feed/feed_playback_policy.dart';
 import 'package:THLRedLook/core/feed/video_feed_controller.dart';
+import 'package:THLRedLook/core/js/js_source_models.dart';
+import 'package:THLRedLook/core/js/js_source_service.dart';
 import 'package:THLRedLook/core/store/local_store.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 import 'package:THLRedLook/models/catalog/vod_metadata.dart';
@@ -26,6 +28,16 @@ Drama sample({
 class _Repository extends AppRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _InstalledFeedSources extends JsSourceService {
+  _InstalledFeedSources(super.repository);
+
+  @override
+  List<JsSourceMeta> get sources => const [
+    JsSourceMeta(id: 'hongguo', name: '合成官方源', version: '1.0.0'),
+    JsSourceMeta(id: 'synthetic', name: '合成源', version: '1.0.0'),
+  ];
 }
 
 void main() {
@@ -302,8 +314,11 @@ void main() {
 
   test('短剧忽略站源推荐的高光集数和位置，只按正片历史续播', () async {
     SharedPreferences.setMockInitialValues({});
+    final repository = _Repository();
+    final sources = _InstalledFeedSources(repository);
+    addTearDown(sources.dispose);
     final store = LocalStore(await SharedPreferences.getInstance());
-    final feed = VideoFeedController(_Repository(), store);
+    final feed = VideoFeedController(repository, store);
     try {
       for (final source in ['hongguo', 'synthetic']) {
         final drama = sample(category: '短剧', source: source);

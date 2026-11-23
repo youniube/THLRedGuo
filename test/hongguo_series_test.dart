@@ -32,6 +32,8 @@ DramaDetail _detail(Drama drama) => DramaDetail(drama, [
 ]);
 
 class _SeriesRepository extends AppRepository {
+  final resolvedIds = <String>[];
+
   @override
   Future<String> cover(Drama drama, {bool force = false}) async => '';
 
@@ -50,7 +52,11 @@ class _SeriesRepository extends AppRepository {
     Drama drama,
     Episode episode, {
     int quality = 0,
-  }) async => const PlaybackPlan(url: 'https://example.invalid/synthetic.mp4');
+  }) async {
+    resolvedIds.add(drama.id);
+    return const PlaybackPlan(url: 'https://example.invalid/synthetic.mp4');
+  }
+
   @override
   Future<void> cancelPlayback() async {}
   @override
@@ -280,10 +286,7 @@ void main() {
     await tester.ensureVisible(fourth);
     await tester.tap(fourth);
     await advance();
-    expect(
-      tester.widget<PlayerScreen>(find.byType(PlayerScreen)).detail.drama.id,
-      _fourth.id,
-    );
+    expect(repository.resolvedIds.last, _fourth.id);
     Navigator.of(tester.element(find.byType(PlayerScreen))).pop();
     await advance();
     expect(
@@ -550,10 +553,7 @@ void main() {
     await tester.tap(old);
     await advance();
     expect(repository.detailIds, [_exactFourth.id]);
-    expect(
-      tester.widget<PlayerScreen>(find.byType(PlayerScreen)).detail.drama.id,
-      _exactFourth.id,
-    );
+    expect(repository.resolvedIds.last, _exactFourth.id);
     repository.firstSearch.complete(
       CatalogPage(const [_exactSecond, _exactFourth, _exactFifth]),
     );

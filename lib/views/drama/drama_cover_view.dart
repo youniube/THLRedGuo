@@ -34,8 +34,8 @@ class DramaBackdrop extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final fallbackColor = isDark
-        ? const Color(0xFF131419)
-        : const Color(0xFFF1F3F5);
+        ? AppColors.darkBackground
+        : AppColors.lightSurfaceHigh;
 
     Widget content = Stack(
       fit: StackFit.expand,
@@ -420,7 +420,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
         errorBuilder: (_, _, _) => _failed(null),
       );
     }
-    return _failed(null);
+    return _coverFailed ? _failed(null) : widget.placeholder;
   }
 
   Widget _buildImage(String path) {

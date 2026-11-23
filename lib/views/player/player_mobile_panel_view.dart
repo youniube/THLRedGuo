@@ -1,3 +1,4 @@
+import '../account/hongguo_social_dialog.dart';
 import 'package:flutter/material.dart';
 
 import 'package:THLRedLook/utils/theme/app_colors.dart';
@@ -57,8 +58,8 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
               style: TextStyle(
                 color: selected
                     ? (theme.brightness == Brightness.dark
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimaryLight)
+                          ? AppColors.textPrimaryDark
+                          : AppColors.textPrimaryLight)
                     : colorScheme.onSurfaceVariant,
                 fontSize: 13.5,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
@@ -106,7 +107,10 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                 height: 120,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: DramaCover(drama: drama, repository: widget.repository),
+                  child: DramaCover(
+                    drama: drama,
+                    repository: widget.repository,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -124,17 +128,25 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                       const SizedBox(height: 6),
                       Text(
                         meta.join(' · '),
-                        style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
-                    if (drama.onlineDate.isNotEmpty || drama.heat.isNotEmpty) ...[
+                    if (drama.onlineDate.isNotEmpty ||
+                        drama.heat.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       Text(
                         [
-                          if (drama.onlineDate.isNotEmpty) '${drama.onlineDate} 上线',
+                          if (drama.onlineDate.isNotEmpty)
+                            '${drama.onlineDate} 上线',
                           if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
                         ].join(' · '),
-                        style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ],
@@ -142,72 +154,117 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          _mobileFollowControl(drama),
           const SizedBox(height: 12),
-          Text(body, style: const TextStyle(height: 1.5, fontSize: 13)),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _mobileFollowControl(drama),
+              HongguoSocialButton(
+                drama: drama,
+                repository: widget.repository,
+                store: widget.store,
+                episode: widget.detail.episodes.isEmpty
+                    ? 1
+                    : widget
+                          .detail
+                          .episodes[widget.currentIndex.clamp(
+                            0,
+                            widget.detail.episodes.length - 1,
+                          )]
+                          .number,
+                likeOnly: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            body,
+            style: TextStyle(
+              height: 1.5,
+              fontSize: 13,
+              color: colors.onSurface.withValues(alpha: 0.90),
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _mobileFollowControl(Drama drama) {
-    final state = widget.store.following(drama.id);
-    return PopupMenuButton<String>(
-      key: const ValueKey('player-follow-status'),
-      tooltip: '追剧与观看状态',
-      onSelected: (value) async {
-        if (value == 'remove') {
-          await saveUserChange(
-            context,
-            () => widget.store.toggleFavorite(drama),
-          );
-        } else {
-          final status = FollowStatus.values.firstWhere(
-            (status) => status.name == value,
-          );
-          await saveUserChange(
-            context,
-            () => widget.store.setFollowStatus(drama, status),
-          );
-        }
-        if (mounted) setState(() {});
-      },
-      itemBuilder: (_) => [
-        for (final status in FollowStatus.values)
-          CheckedPopupMenuItem(
-            value: status.name,
-            checked: state?.status == status,
-            child: Text(status.label),
-          ),
-        if (state != null)
-          const PopupMenuItem(value: 'remove', child: Text('取消追剧')),
-      ],
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: state == null
-              ? Theme.of(context).colorScheme.surfaceContainerHighest
-              : Theme.of(context).colorScheme.secondaryContainer,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              state == null
-                  ? Icons.bookmark_add_outlined
-                  : Icons.bookmark_rounded,
-              size: 18,
+    return ListenableBuilder(
+      listenable: widget.store,
+      builder: (context, _) {
+        final state = widget.store.following(drama.id);
+        final theme = Theme.of(context);
+        final colors = theme.colorScheme;
+        final isFollowed = state != null;
+        final statusColor = isFollowed
+            ? (state.status == FollowStatus.watched
+                ? AppColors.success
+                : (state.status == FollowStatus.planned
+                    ? AppColors.hongguoAmber
+                    : AppColors.hongguoRed))
+            : colors.onSurface;
+
+        return Material(
+          color: Colors.transparent,
+          child: Tooltip(
+            message: isFollowed ? '取消追剧' : '加入追剧',
+            child: InkWell(
+              key: const ValueKey('player-follow-status'),
+              onTap: () => saveUserChange(
+                context,
+                () => widget.store.setFavorite(drama, !isFollowed),
+              ),
+              borderRadius: BorderRadius.circular(16),
+              child: Ink(
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: isFollowed
+                      ? statusColor.withValues(alpha: 0.14)
+                      : colors.surfaceContainerHighest.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isFollowed
+                        ? statusColor.withValues(alpha: 0.45)
+                        : colors.outlineVariant.withValues(alpha: 0.3),
+                    width: 0.8,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isFollowed
+                          ? Icons.bookmark_rounded
+                          : Icons.bookmark_add_outlined,
+                      size: 16,
+                      color: isFollowed ? statusColor : colors.onSurface,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isFollowed
+                          ? ((state.status != FollowStatus.planned)
+                              ? state.label
+                              : '已追剧')
+                          : '追剧',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight:
+                            isFollowed ? FontWeight.w700 : FontWeight.w600,
+                        color: isFollowed ? statusColor : colors.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            const SizedBox(width: 6),
-            Text(state?.label ?? '加入追剧'),
-            const SizedBox(width: 2),
-            const Icon(Icons.expand_more_rounded, size: 16),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -216,9 +273,7 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
     if (!widget.repository.supportsDownloads || !widget.store.canDownload) {
       return ColoredBox(
         color: colors.surface,
-        child: const Center(
-          child: Text('当前环境或权限暂未开放本地下载'),
-        ),
+        child: const Center(child: Text('当前环境或权限暂未开放本地下载')),
       );
     }
     return DownloadPicker(
@@ -245,14 +300,20 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
         children: [
           Row(
             children: [
-              const Icon(Icons.layers_rounded, size: 14, color: AppColors.hongguoRed),
+              const Icon(
+                Icons.layers_rounded,
+                size: 14,
+                color: AppColors.hongguoRed,
+              ),
               const SizedBox(width: 4),
               Text(
                 '系列多季',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
-                  color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                  color: isDark
+                      ? AppColors.textPrimaryDark
+                      : AppColors.textPrimaryLight,
                 ),
               ),
               const SizedBox(width: 6),
@@ -276,7 +337,9 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                 '点击快速切季',
                 style: TextStyle(
                   fontSize: 10.5,
-                  color: isDark ? AppColors.textTertiaryDark : AppColors.textTertiaryLight,
+                  color: isDark
+                      ? AppColors.textTertiaryDark
+                      : AppColors.textTertiaryLight,
                 ),
               ),
             ],
@@ -296,7 +359,8 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                           key: ValueKey('player-season-${entry.drama.id}'),
                           onTap: isCurrent || !entry.playable
                               ? null
-                              : () => widget.onSeasonSelected?.call(entry.drama),
+                              : () =>
+                                    widget.onSeasonSelected?.call(entry.drama),
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -307,15 +371,15 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                               color: isCurrent
                                   ? AppColors.hongguoRed
                                   : (isDark
-                                      ? AppColors.darkSurfaceHighest
-                                      : AppColors.lightSurface),
+                                        ? AppColors.darkSurfaceHighest
+                                        : AppColors.lightSurface),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
                                 color: isCurrent
                                     ? AppColors.hongguoRed
                                     : (isDark
-                                        ? AppColors.darkBorder
-                                        : AppColors.lightBorder),
+                                          ? AppColors.darkBorder
+                                          : AppColors.lightBorder),
                               ),
                             ),
                             child: Row(
@@ -339,8 +403,8 @@ class _PlayerMobilePanelViewState extends State<PlayerMobilePanelView> {
                                     color: isCurrent
                                         ? AppColors.white
                                         : (isDark
-                                            ? AppColors.textPrimaryDark
-                                            : AppColors.textPrimaryLight),
+                                              ? AppColors.textPrimaryDark
+                                              : AppColors.textPrimaryLight),
                                   ),
                                 ),
                               ],

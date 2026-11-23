@@ -10,7 +10,7 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
     private var taskMap: [String: URLSessionDownloadTask] = [:]
     private var resolvingTasks: [String: Task<Void, Never>] = [:]
     private var jobDecryptionKeys: [String: String] = [:]
-    private let storageKey = "zgj_tv_download_jobs"
+    private let jobStore = DownloadJobStore.shared
     private let maxConcurrentDownloads = 2
     private var lastProgressUpdateTime: [String: Date] = [:]
 
@@ -38,8 +38,8 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
     }
 
     private func loadJobs() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let list = try? JSONDecoder().decode([DownloadJob].self, from: data) {
+        do {
+            let list = try jobStore.load()
             self.jobs = list.map { job in
                 var j = job
                 if j.state == "downloading" {
@@ -49,28 +49,49 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
                     j.state = "queued"
                     j.error = ""
                 }
+                if j.isCompleted {
+                    let fallbackURL = downloadsDirectory.appendingPathComponent("\(j.id).mp4")
+                    if let path = j.localPath, FileManager.default.fileExists(atPath: path) {
+                        // 路径有效，保留
+                    } else if FileManager.default.fileExists(atPath: fallbackURL.path) {
+                        // 应对 tvOS 沙盒容器 UUID 变化，自动矫正路径
+                        j.localPath = fallbackURL.path
+                    } else {
+                        // 系统缓存可能在存储极度紧张时被自动清理
+                        j.state = "failed"
+                        j.error = "本地离线文件已被系统清理，请重新下载"
+                    }
+                }
                 return j
             }
+        } catch {
+            NSLog("[DownloadService] 读取下载记录失败，原记录已保留")
         }
     }
 
     private func saveJobs() {
-        if let data = try? JSONEncoder().encode(jobs) {
-            UserDefaults.standard.set(data, forKey: storageKey)
-        }
+        do { try jobStore.save(jobs) }
+        catch { NSLog("[DownloadService] 保存下载记录失败，未覆盖已有记录") }
     }
 
     /// 检查指定短剧集是否已有本地离线文件
     public func completedLocalURL(dramaId: String, episodeId: String) -> URL? {
-        guard let job = jobs.first(where: {
+        guard let index = jobs.firstIndex(where: {
             $0.drama.id == dramaId &&
             ($0.episode.id == episodeId || "\($0.episode.number)" == episodeId) &&
             $0.isCompleted
-        }), let path = job.localPath else {
+        }) else {
             return nil
         }
-        if FileManager.default.fileExists(atPath: path) {
+        let job = jobs[index]
+        if let path = job.localPath, FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
+        }
+        let fallbackURL = downloadsDirectory.appendingPathComponent("\(job.id).mp4")
+        if FileManager.default.fileExists(atPath: fallbackURL.path) {
+            jobs[index].localPath = fallbackURL.path
+            saveJobs()
+            return fallbackURL
         }
         return nil
     }
@@ -126,9 +147,13 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
 
     public func deleteJob(id: String) {
         pauseJob(id: id)
-        if let job = jobs.first(where: { $0.id == id }), let path = job.localPath {
-            try? FileManager.default.removeItem(atPath: path)
+        if let job = jobs.first(where: { $0.id == id }) {
+            if let path = job.localPath {
+                try? FileManager.default.removeItem(atPath: path)
+            }
         }
+        let fallbackURL = downloadsDirectory.appendingPathComponent("\(id).mp4")
+        try? FileManager.default.removeItem(at: fallbackURL)
         jobs.removeAll { $0.id == id }
         saveJobs()
         scheduleNext()
@@ -150,6 +175,8 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
             if let path = job.localPath {
                 try? FileManager.default.removeItem(atPath: path)
             }
+            let fallbackURL = downloadsDirectory.appendingPathComponent("\(job.id).mp4")
+            try? FileManager.default.removeItem(at: fallbackURL)
         }
         taskMap.values.forEach { $0.cancel() }
         taskMap.removeAll()
@@ -210,7 +237,7 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
                     downloadTask.taskDescription = jobId
                     self.taskMap[jobId] = downloadTask
                     downloadTask.resume()
-                    NSLog("📥 [DownloadService] 启动下载任务: jobId=%@, remoteURL=%@", jobId, remoteURL.absoluteString)
+                    NSLog("📥 [DownloadService] 启动下载任务: jobId=%@", jobId)
                 }
             } catch {
                 if Task.isCancelled { return }
@@ -271,7 +298,7 @@ public final class DownloadService: NSObject, ObservableObject, URLSessionDownlo
                 try? FileManager.default.removeItem(at: stagingURL)
             }
             do {
-                NSLog("📥 [DownloadService] 暂存成功，开始落盘与解密: id=%@, hexKey='%@'", id, hexKey)
+                NSLog("📥 [DownloadService] 暂存成功，开始落盘与解密: id=%@", id)
                 try CENCMP4Decryptor.shared.decryptDownloadedFile(at: stagingURL, hexKey: hexKey, destinationURL: targetURL)
 
                 let fileAttrs = try FileManager.default.attributesOfItem(atPath: targetURL.path)

@@ -346,13 +346,19 @@ final class EncryptedMediaStream {
             let rawURL = arguments["url"] as? String ?? ""
             guard id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil,
                   key.range(of: "^[a-fA-F0-9]{32}$", options: .regularExpression) != nil,
-                  let url = URL(string: rawURL), url.host != nil, (url.scheme == "https" || url.scheme == "http" && ["127.0.0.1", "::1"].contains(url.host!)) else {
+                  let url = URL(string: rawURL), url.host != nil, (url.scheme == "https" || url.scheme == "http") else {
                 result(FlutterError(code: "ios_stream_input", message: "加密媒体参数无效", details: nil))
                 return
             }
-            let bytes = stride(from: 0, to: 32, by: 2).map { index -> UInt8 in
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(16)
+            for index in stride(from: 0, to: 32, by: 2) {
                 let start = key.index(key.startIndex, offsetBy: index)
-                return UInt8(key[start..<key.index(start, offsetBy: 2)], radix: 16)!
+                guard let byte = UInt8(key[start..<key.index(start, offsetBy: 2)], radix: 16) else {
+                    result(FlutterError(code: "ios_stream_input", message: "加密媒体参数无效", details: nil))
+                    return
+                }
+                bytes.append(byte)
             }
             let session = CENCStreamSession(url: url, headers: arguments["headers"] as? [String: String] ?? [:], key: bytes)
             lock.lock()

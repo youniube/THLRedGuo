@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import '../account/hongguo_account_library.dart';
+import '../account/hongguo_account_session.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,11 +28,15 @@ class LocalStore extends ChangeNotifier {
   LocalStore(
     this.preferences, {
     Future<String> Function(String, String)? pinHasher,
-  }) : _pinHasher = pinHasher ?? hashProfilePin {
+    HongguoAccountLibrary? accountLibrary,
+  }) : _pinHasher = pinHasher ?? hashProfilePin,
+       _accountLibrary = accountLibrary ?? HongguoAccountLibrary.shared {
     _initialize();
+    _accountLibrary.addListener(_notify);
   }
 
   final SharedPreferences preferences;
+  final HongguoAccountLibrary _accountLibrary;
   final Future<String> Function(String pin, String salt) _pinHasher;
   LocalSnapshot? _snapshot;
   LanDocument? _lanDocumentCache;
@@ -40,7 +46,44 @@ class LocalStore extends ChangeNotifier {
   int get lanUrgentRevision => _lanUrgentRevision;
   final Map<String, WatchEntry> _history = {};
   final Map<String, Drama> _favorites = {};
+  final Map<String, Drama> _likedDramas = {};
+  final Map<String, Anchor> _followedAnchors = {};
+  bool isLiked(String dramaId) => _likedDramas.containsKey(dramaId);
+  List<Drama> get likedDramas => _likedDramas.values.toList();
+  bool isAnchorFollowed(String anchorId) => _followedAnchors.containsKey(anchorId);
+  List<Anchor> get followedAnchors => _followedAnchors.values.toList();
+
+  Future<void> toggleLike(Drama drama) async {
+    if (_likedDramas.containsKey(drama.id)) {
+      _likedDramas.remove(drama.id);
+    } else {
+      _likedDramas[drama.id] = drama;
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleFollowAnchor(Anchor anchor) async {
+    if (_followedAnchors.containsKey(anchor.id)) {
+      _followedAnchors.remove(anchor.id);
+    } else {
+      _followedAnchors[anchor.id] = anchor.copyWith(isFollowed: true);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setAnchorFollowed(Anchor anchor, bool follow) async {
+    if (follow) {
+      _followedAnchors[anchor.id] = anchor.copyWith(isFollowed: true);
+    } else {
+      _followedAnchors.remove(anchor.id);
+    }
+    notifyListeners();
+  }
   final Map<String, FollowState> _followStates = {};
+  final Map<String, int> _deletedFollows = {};
+  final Map<String, int> _deletedHistory = {};
+  Map<String, int> get deletedFollows => Map.unmodifiable(_deletedFollows);
+  Map<String, int> get deletedHistory => Map.unmodifiable(_deletedHistory);
   final Map<String, Drama> _seriesCandidates = {};
   final List<String> _feedSeenIds = [];
   final Set<String> _feedSeenSet = {};
@@ -123,6 +166,8 @@ class LocalStore extends ChangeNotifier {
     _history.clear();
     _favorites.clear();
     _followStates.clear();
+    _deletedFollows.clear();
+    _deletedHistory.clear();
     _seriesCandidates.clear();
     _feedSeenIds.clear();
     _feedSeenSet.clear();
@@ -326,6 +371,8 @@ class LocalStore extends ChangeNotifier {
     _history.clear();
     _favorites.clear();
     _followStates.clear();
+    _deletedFollows.clear();
+    _deletedHistory.clear();
     _seriesCandidates.clear();
     _feedSeenIds.clear();
     _feedSeenSet.clear();
@@ -368,6 +415,26 @@ class LocalStore extends ChangeNotifier {
         }
       } catch (_) {}
     }
+    final tombstoneCutoff =
+        DateTime.now().millisecondsSinceEpoch - 30 * 24 * 3600 * 1000;
+    try {
+      final dfMap = jsonDecode(_string(_key('deletedFollows')) ?? '{}') as Map;
+      for (final e in dfMap.entries) {
+        final ts = e.value is int
+            ? e.value as int
+            : int.tryParse(e.value.toString()) ?? 0;
+        if (ts > tombstoneCutoff) _deletedFollows[e.key.toString()] = ts;
+      }
+    } catch (_) {}
+    try {
+      final dhMap = jsonDecode(_string(_key('deletedHistory')) ?? '{}') as Map;
+      for (final e in dhMap.entries) {
+        final ts = e.value is int
+            ? e.value as int
+            : int.tryParse(e.value.toString()) ?? 0;
+        if (ts > tombstoneCutoff) _deletedHistory[e.key.toString()] = ts;
+      }
+    } catch (_) {}
     try {
       final raw = _string(_key('feedSeenDramas'));
       if (raw != null) {
@@ -432,14 +499,28 @@ class LocalStore extends ChangeNotifier {
       .toList()
       .reversed
       .toList();
+  bool usesAccountLibrary(String id) => _accountLibrary.handles(id);
+
+  Future<void> prepareAccountDrama(Drama drama) =>
+      _accountLibrary.handles(drama.id) && allowsSource(drama.source)
+      ? _accountLibrary.prepare(drama)
+      : Future.value();
+
   WatchEntry? watched(String id) {
+    if (_accountLibrary.handles(id)) {
+      return allowsSource('hongguo') ? _accountLibrary.watched(id) : null;
+    }
+    return localWatched(id);
+  }
+
+  WatchEntry? localWatched(String id) {
     WatchEntry? entry = _history[id];
     if (entry == null && !id.contains(':')) {
       entry = _history.values
           .where((e) => e.drama.id.endsWith(':$id'))
           .firstOrNull;
     }
-    if (entry == null && isFavorite(id)) {
+    if (entry == null && localIsFavorite(id)) {
       try {
         entry = lanDocument.records[id]?.watch;
       } catch (_) {}
@@ -452,6 +533,13 @@ class LocalStore extends ChangeNotifier {
   }
 
   bool isFavorite(String id) {
+    if (_accountLibrary.handles(id)) {
+      return allowsSource('hongguo') && _accountLibrary.following(id);
+    }
+    return localIsFavorite(id);
+  }
+
+  bool localIsFavorite(String id) {
     var drama = _favorites[id];
     if (drama == null && !id.contains(':')) {
       drama = _favorites.values.where((d) => d.id.endsWith(':$id')).firstOrNull;
@@ -460,6 +548,14 @@ class LocalStore extends ChangeNotifier {
   }
 
   FollowState? following(String id) {
+    final library = _accountLibrary;
+    if (library.handles(id)) {
+      if (!allowsSource('hongguo')) return null;
+      final drama = library.favorite(id);
+      return drama == null
+          ? null
+          : FollowState.initial(drama, library.watched(id));
+    }
     if (!isFavorite(id)) return null;
     var state = _followStates[id];
     if (state == null && !id.contains(':')) {
@@ -730,7 +826,9 @@ class LocalStore extends ChangeNotifier {
                 key == _key('history') ||
                 key == _key('followStates') ||
                 key == _key('playback') ||
-                key == _key('source'),
+                key == _key('source') ||
+                key == _key('deletedFollows') ||
+                key == _key('deletedHistory'),
           )) {
         _lanRevision++;
         if (syncUrgent) _lanUrgentRevision++;
@@ -830,25 +928,44 @@ class LocalStore extends ChangeNotifier {
     return _setting(_key('downloadPreferences'), jsonEncode(value.toJson()));
   }
 
+  Future<void> setFavorite(Drama drama, bool follow) {
+    if (_accountLibrary.handles(drama.id) && allowsSource(drama.source)) {
+      return _accountLibrary.setFollowing(drama, follow);
+    }
+    return isFavorite(drama.id) == follow
+        ? Future.value()
+        : toggleFavorite(drama);
+  }
+
   Future<void> toggleFavorite(Drama drama) {
+    if (_accountLibrary.handles(drama.id) && allowsSource(drama.source)) {
+      return _accountLibrary.setFollowing(
+        drama,
+        !_accountLibrary.following(drama.id),
+      );
+    }
     final epoch = _epoch;
     return _queue(() async {
       if (!allowsSource(drama.source) || epoch != _epoch) return;
       final entries = Map.of(_favorites);
       final states = Map.of(_followStates);
+      final deleted = Map.of(_deletedFollows);
       if (entries.containsKey(drama.id)) {
         entries.remove(drama.id);
         states.remove(drama.id);
+        deleted[drama.id] = DateTime.now().millisecondsSinceEpoch;
       } else {
         if (entries.length >= 20000) throw StateError('追剧数量已达上限，请先整理追剧');
         entries[drama.id] = drama;
         states[drama.id] = FollowState.initial(drama, _history[drama.id]);
+        deleted.remove(drama.id);
       }
       await _commit({
         _key('favorites'): jsonEncode(
           entries.values.map((entry) => entry.toJson()).toList(),
         ),
         _key('followStates'): _encodeFollowStates(states),
+        _key('deletedFollows'): jsonEncode(deleted),
       });
       _loadLibrary();
       _notify();
@@ -860,6 +977,12 @@ class LocalStore extends ChangeNotifier {
   });
 
   Future<void> setFollowStatus(Drama drama, FollowStatus status) {
+    if (_accountLibrary.handles(drama.id) && allowsSource(drama.source)) {
+      if (status != FollowStatus.planned) {
+        return Future.error(const HongguoAccountFailure('账号观看状态由实际播放进度决定'));
+      }
+      return _accountLibrary.setFollowing(drama, true);
+    }
     final epoch = _epoch;
     return _queue(() async {
       if (!allowsSource(drama.source) || epoch != _epoch) return;
@@ -874,11 +997,14 @@ class LocalStore extends ChangeNotifier {
               .observe(current)
               .withStatus(status);
       final states = Map.of(_followStates)..[drama.id] = state;
+      final deleted = Map.of(_deletedFollows);
+      final hadDeleted = deleted.remove(drama.id) != null;
       await _commit({
         _key('favorites'): jsonEncode(
           entries.values.map((entry) => entry.toJson()).toList(),
         ),
         _key('followStates'): _encodeFollowStates(states),
+        if (hadDeleted) _key('deletedFollows'): jsonEncode(deleted),
       });
       _loadLibrary();
       _notify();
@@ -886,6 +1012,7 @@ class LocalStore extends ChangeNotifier {
   }
 
   Future<void> markUpdatesRead(String id) {
+    if (_accountLibrary.handles(id)) return Future.value();
     final epoch = _epoch;
     return _queue(() async {
       if (!isFavorite(id) || epoch != _epoch) return;
@@ -919,7 +1046,16 @@ class LocalStore extends ChangeNotifier {
       entry.position >= 0 &&
       entry.duration > 0;
 
-  Future<void> saveWatch(WatchEntry entry) {
+  Future<void> saveWatch(
+    WatchEntry entry, {
+    String itemId = '',
+    bool force = false,
+  }) {
+    if (_accountLibrary.handles(entry.drama.id) &&
+        allowsSource(entry.drama.source)) {
+      if (!_validWatch(entry)) return Future.value();
+      return _accountLibrary.report(entry, itemId: itemId, force: force);
+    }
     if (!_validWatch(entry)) return Future.value();
     final epoch = _epoch;
     return _queue(() async {
@@ -945,10 +1081,13 @@ class LocalStore extends ChangeNotifier {
           current.drama,
         );
       }
+      final deleted = Map.of(_deletedHistory);
+      final hadDeleted = deleted.remove(entry.drama.id) != null;
       await _commit({
         _key('history'): jsonEncode(
           sorted.take(300).map((entry) => entry.toJson()).toList(),
         ),
+        if (hadDeleted) _key('deletedHistory'): jsonEncode(deleted),
         if (following != null) ...{
           _key('followStates'): _encodeFollowStates(states),
           _key('favorites'): jsonEncode(
@@ -1000,16 +1139,25 @@ class LocalStore extends ChangeNotifier {
   }
 
   Future<void> clearHistory({String? targetSource}) {
+    if (_accountLibrary.active &&
+        (targetSource == null || targetSource == 'hongguo')) {
+      return Future.error(
+        const HongguoAccountFailure('账号历史请在红果 App 管理，本地旧记录会保留'),
+      );
+    }
     final epoch = _epoch;
     return _queue(() async {
       if (locked || epoch != _epoch) return;
       final currentSource = targetSource ?? source;
       final entries = Map.of(_history);
       final removedIds = <String>{};
+      final deleted = Map.of(_deletedHistory);
+      final now = DateTime.now().millisecondsSinceEpoch;
       if (currentSource.isNotEmpty) {
         entries.removeWhere((id, entry) {
           if (_dramaSource(entry.drama) == currentSource) {
             removedIds.add(id);
+            deleted[id] = now;
             return true;
           }
           return false;
@@ -1019,12 +1167,16 @@ class LocalStore extends ChangeNotifier {
             _key('history'): jsonEncode(
               entries.values.map((entry) => entry.toJson()).toList(),
             ),
+            _key('deletedHistory'): jsonEncode(deleted),
           },
           clearSyncProgress: {...removedIds, ...lanDocument.records.keys},
         );
       } else {
+        for (final id in _history.keys) {
+          deleted[id] = now;
+        }
         await _commit(
-          {},
+          {_key('deletedHistory'): jsonEncode(deleted)},
           remove: [_key('history')],
           clearSyncProgress: {..._history.keys, ...lanDocument.records.keys},
         );
@@ -1035,15 +1187,23 @@ class LocalStore extends ChangeNotifier {
   }
 
   Future<void> removeHistory(String id) {
+    if (_accountLibrary.handles(id)) {
+      return Future.error(
+        const HongguoAccountFailure('账号历史暂不支持删除，请在红果 App 管理'),
+      );
+    }
     final epoch = _epoch;
     return _queue(() async {
       if (watched(id) == null || epoch != _epoch) return;
       final entries = Map.of(_history)..remove(id);
+      final deleted = Map.of(_deletedHistory)
+        ..[id] = DateTime.now().millisecondsSinceEpoch;
       await _commit(
         {
           _key('history'): jsonEncode(
             entries.values.map((entry) => entry.toJson()).toList(),
           ),
+          _key('deletedHistory'): jsonEncode(deleted),
         },
         clearSyncProgress: {id},
       );
@@ -1118,6 +1278,9 @@ class LocalStore extends ChangeNotifier {
     final updates = dramas.toList();
     return _queue(() async {
       if (locked || epoch != _epoch) return;
+      _accountLibrary.updateDramas(
+        updates.where((drama) => allowsSource(drama.source)),
+      );
       final changes = <String, Object>{};
       final favorites = Map.of(_favorites);
       final history = Map.of(_history);
@@ -1671,6 +1834,8 @@ class LocalStore extends ChangeNotifier {
     required List<WatchEntry> history,
     required Map<String, Drama> favorites,
     required Map<String, FollowState> followStates,
+    Map<String, int>? deletedFollows,
+    Map<String, int>? deletedHistory,
     String? source,
     PlaybackPreferences? playback,
   }) {
@@ -1686,6 +1851,12 @@ class LocalStore extends ChangeNotifier {
         ),
         _key('followStates'): _encodeFollowStates(followStates),
       };
+      if (deletedFollows != null) {
+        changes[_key('deletedFollows')] = jsonEncode(deletedFollows);
+      }
+      if (deletedHistory != null) {
+        changes[_key('deletedHistory')] = jsonEncode(deletedHistory);
+      }
       if (source != null && source.isNotEmpty && allowsSource(source)) {
         changes[_key('source')] = source;
       }
@@ -1701,6 +1872,7 @@ class LocalStore extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _accountLibrary.removeListener(_notify);
     super.dispose();
   }
 }

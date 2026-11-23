@@ -21,7 +21,6 @@ class HomeAppBarView extends StatelessWidget implements PreferredSizeWidget {
     required this.supportsSourceManagement,
     required this.sourcesEmpty,
     required this.loading,
-    required this.isUpdaterBusy,
     required this.catalogSortLabel,
     required this.isSortedOrFiltered,
     required this.screenWidth,
@@ -50,7 +49,6 @@ class HomeAppBarView extends StatelessWidget implements PreferredSizeWidget {
   final bool supportsSourceManagement;
   final bool sourcesEmpty;
   final bool loading;
-  final bool isUpdaterBusy;
   final String catalogSortLabel;
   final bool isSortedOrFiltered;
   final double screenWidth;
@@ -72,6 +70,9 @@ class HomeAppBarView extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
       toolbarHeight: television ? 64 : null,
       titleSpacing: 12,
       title: selectionMode
@@ -167,12 +168,6 @@ class HomeAppBarView extends StatelessWidget implements PreferredSizeWidget {
               onPressed: onToggleSearch,
             ),
           ],
-          IconButton(
-            key: const ValueKey('home-appbar-settings-button'),
-            tooltip: '设置',
-            icon: const Icon(Icons.settings_rounded),
-            onPressed: () => onMoreAction('settings'),
-          ),
         ],
       ],
     );

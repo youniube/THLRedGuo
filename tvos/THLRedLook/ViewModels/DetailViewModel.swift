@@ -1,23 +1,6 @@
 import Foundation
 import Combine
 
-public struct SeasonItem: Identifiable, Hashable {
-    public var id: String { drama.id }
-    public let drama: Drama
-    public let seasonNumber: Int
-    public let title: String
-    public let isCurrent: Bool
-    public let playable: Bool
-
-    public init(drama: Drama, seasonNumber: Int, title: String, isCurrent: Bool, playable: Bool = true) {
-        self.drama = drama
-        self.seasonNumber = seasonNumber
-        self.title = title
-        self.isCurrent = isCurrent
-        self.playable = playable
-    }
-}
-
 @MainActor
 public final class DetailViewModel: ObservableObject {
     @Published public var detail: DramaDetail?
@@ -56,6 +39,7 @@ public final class DetailViewModel: ObservableObject {
     }
 
     public func refreshWatchHistory() {
+        self.followState = store.followState(for: drama.id)
         self.lastWatchEntry = store.getWatchEntry(dramaId: drama.id)
     }
 
@@ -93,6 +77,8 @@ public final class DetailViewModel: ObservableObject {
         do {
             await JSSourceService.shared.initialize()
             let loaded = try await repository.loadDetail(drama: requestedDrama, store: store)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            try await HongguoAccountModel.shared.prepareLibrary(loaded.drama)
             guard generation == loadGeneration, !Task.isCancelled else { return }
             self.detail = loaded
             self.drama = loaded.drama
@@ -289,12 +275,34 @@ public final class DetailViewModel: ObservableObject {
     }
 
     public func toggleFavorite() {
+        if HongguoAccountLibraryCache.shared.handles(drama.id) {
+            let target = drama
+            Task {
+                do {
+                    try await HongguoAccountModel.shared.setFollowing(target, add: nil)
+                    if drama.id == target.id { followState = store.followState(for: target.id) }
+                }
+                catch { NSLog("[AccountLibrary] follow update failed") }
+            }
+            return
+        }
         setFollowState(followState == .none ? .wishlist : .none)
     }
 
     public func setFollowState(_ state: FollowState) {
-        followState = state
-        store.setFollowState(drama: drama, state: state)
+        if HongguoAccountLibraryCache.shared.handles(drama.id) {
+            let target = drama
+            Task {
+                do {
+                    try await HongguoAccountModel.shared.setFollowing(target, add: state != .none)
+                    if drama.id == target.id { followState = store.followState(for: target.id) }
+                }
+                catch { NSLog("[AccountLibrary] follow update failed") }
+            }
+        } else {
+            followState = state
+            store.setFollowState(drama: drama, state: state)
+        }
     }
 
     public func downloadAllEpisodes(quality: Int = 1080) {

@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import UIKit
 
 @MainActor
 public final class LibraryViewModel: ObservableObject {
@@ -8,17 +7,114 @@ public final class LibraryViewModel: ObservableObject {
     @Published public var selectedFollowFilter: FollowState = .none
     @Published public var searchQuery: String = ""
 
-    public enum LibraryTab: String, CaseIterable, Identifiable {
-        case history = "history"
-        case follows = "follows"
+    @Published private(set) var accountLists: [LibraryTab: [WatchEntry]] = [:]
+    @Published private(set) var accountErrors: [LibraryTab: String] = [:]
+    @Published private(set) var loadingTabs: Set<LibraryTab> = []
+    @Published private(set) var officialLikes: [HongguoLikedVideo] = []
+    @Published private(set) var officialAnchors: [Anchor] = []
+    @Published private(set) var moreTabs: Set<LibraryTab> = []
+    private var failedRefresh: Set<LibraryTab> = []
+    private var loadedTabs: Set<LibraryTab> = []
+    private var offsets: [LibraryTab: Int] = [:]
+    private var douyinOffset = 0
+    private var emptyPages: [LibraryTab: Int] = [:]
+    private var accountRevision: UInt64?
 
-        public var id: String { rawValue }
-        public var label: String {
-            switch self {
-            case .history: return "最近观看"
-            case .follows: return "我的收藏"
+    private(set) var fixtureMode = false
+    var officialAccount: Bool { fixtureMode || isAccountAvailable() }
+    var isAccountAvailable: () -> Bool = { HongguoAccountModel.shared.loggedIn }
+    var ownerRevision: () -> UInt64 = { HongguoAccountVault.shared.snapshot.revision }
+    var followingRequest: (Int, Int) async throws -> HongguoCollectionPage<Anchor> = { try await HongguoAccountModel.shared.followingCreators(offset: $0, douyinOffset: $1) }
+    var likesRequest: (Int) async throws -> HongguoCollectionPage<HongguoLikedVideo> = { try await HongguoAccountModel.shared.likedVideos(offset: $0) }
+    var profileRequest: (String) async throws -> Anchor = { try await HongguoAccountModel.shared.creatorProfile($0) }
+
+    func syncAccountOwner() {
+        let revision = ownerRevision()
+        guard revision != accountRevision else { return }
+        accountRevision = revision; accountLists = [:]; accountErrors = [:]; loadingTabs = []
+        officialLikes = []; officialAnchors = []; moreTabs = []; loadedTabs = []; failedRefresh = []; offsets = [:]; douyinOffset = 0; emptyPages = [:]
+    }
+
+    func loadAccount(_ tab: LibraryTab, refresh: Bool = false, more: Bool = false) async {
+        syncAccountOwner()
+        let isCurrentTabEmpty: Bool = {
+            switch tab {
+            case .anchors: return officialAnchors.isEmpty
+            case .liked: return officialLikes.isEmpty
+            default: return (accountLists[tab] ?? []).isEmpty
+            }
+        }()
+        let shouldRefresh = refresh || failedRefresh.contains(tab) || (!more && isCurrentTabEmpty)
+        let revision = accountRevision!
+        guard officialAccount, !loadingTabs.contains(tab),
+              shouldRefresh || (more ? moreTabs.contains(tab) : !loadedTabs.contains(tab)) else { return }
+        loadingTabs.insert(tab); accountErrors[tab] = nil
+        defer { if accountRevision == revision { loadingTabs.remove(tab) } }
+        let offset = refresh ? 0 : offsets[tab] ?? 0
+        let douyin = refresh ? 0 : douyinOffset
+        do {
+            switch tab {
+            case .anchors:
+                let page = try await followingRequest(offset, douyin)
+                guard accountRevision == revision, ownerRevision() == revision else { return }
+                try validateCursor(page, offset: offset, douyin: douyin)
+                let previousCount = refresh ? 0 : officialAnchors.count
+                officialAnchors = merge(refresh ? [] : officialAnchors, page.items, key: { $0.id })
+                acceptPage(tab, page: page, offset: offset, refresh: refresh, added: officialAnchors.count - previousCount)
+                douyinOffset = page.douyinOffset
+            case .liked:
+                let page = try await likesRequest(offset)
+                guard accountRevision == revision, ownerRevision() == revision else { return }
+                try validateCursor(page, offset: offset, douyin: 0)
+                let previousCount = refresh ? 0 : officialLikes.count
+                officialLikes = merge(refresh ? [] : officialLikes, page.items, key: { $0.id })
+                acceptPage(tab, page: page, offset: offset, refresh: refresh, added: officialLikes.count - previousCount)
+            default:
+                let entries = try await HongguoAccountModel.shared.library(history: tab == .history)
+                guard accountRevision == revision, ownerRevision() == revision else { return }
+                accountLists[tab] = entries
+            }
+            failedRefresh.remove(tab)
+            loadedTabs.insert(tab)
+        } catch {
+            guard accountRevision == revision, ownerRevision() == revision else { return }
+            if refresh { failedRefresh.insert(tab) }
+            accountErrors[tab] = (error as? HongguoAccountError)?.localizedDescription ?? "账号列表获取失败，请重试"
+        }
+    }
+
+    private func validateCursor<T>(_ page: HongguoCollectionPage<T>, offset: Int, douyin: Int) throws {
+        if page.hasMore {
+            guard let next = page.nextOffset, next >= offset, next > offset || page.douyinOffset > douyin else {
+                throw HongguoAccountError.interactionInvalid
             }
         }
+    }
+
+    private func acceptPage<T>(_ tab: LibraryTab, page: HongguoCollectionPage<T>, offset: Int, refresh: Bool, added: Int) {
+        offsets[tab] = page.nextOffset ?? offset
+        if page.hasMore { moreTabs.insert(tab) } else { moreTabs.remove(tab) }
+        emptyPages[tab] = added == 0 ? (refresh ? 0 : emptyPages[tab] ?? 0) + 1 : 0
+        if page.hasMore && emptyPages[tab, default: 0] >= 3 {
+            accountErrors[tab] = "连续多页暂无可展示内容，请稍后重试"
+        } else if page.hasMore && added == 0 {
+            Task { await Task.yield(); if selectedTab == tab { await loadAccount(tab, more: true) } }
+        }
+    }
+
+    private func merge<T>(_ previous: [T], _ incoming: [T], key: (T) -> String) -> [T] {
+        var result = previous
+        var indices = Dictionary(uniqueKeysWithValues: previous.enumerated().map { (key($0.element), $0.offset) })
+        for row in incoming {
+            if let index = indices[key(row)] { result[index] = row }
+            else { indices[key(row)] = result.count; result.append(row) }
+        }
+        return result
+    }
+
+    func loadMoreIfNeeded(_ tab: LibraryTab, index: Int, count: Int) async {
+        guard index >= count - 5, accountErrors[tab] == nil else { return }
+        await loadAccount(tab, more: true)
     }
 
     private let store: LocalStore
@@ -26,12 +122,67 @@ public final class LibraryViewModel: ObservableObject {
 
     public init(store: LocalStore = .shared) {
         self.store = store
+        #if DEBUG
+        configureCollectionFixtures()
+        #endif
         store.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+
+        HongguoAccountModel.shared.objectWillChange
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.objectWillChange.send()
+                Task { @MainActor in
+                    if self.officialAccount {
+                        let isEmpty: Bool
+                        switch self.selectedTab {
+                        case .anchors: isEmpty = self.officialAnchors.isEmpty
+                        case .liked: isEmpty = self.officialLikes.isEmpty
+                        default: isEmpty = (self.accountLists[self.selectedTab] ?? []).isEmpty
+                        }
+                        if isEmpty && !self.loadingTabs.contains(self.selectedTab) {
+                            await self.loadAccount(self.selectedTab)
+                        }
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
+
+    #if DEBUG
+    private func configureCollectionFixtures() {
+        guard let raw = ProcessInfo.processInfo.environment["THL_ACCOUNT_COLLECTION_FIXTURE"],
+              let data = raw.data(using: .utf8),
+              let fixture = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let anchors = fixture["creators"] as? [[String: Any]],
+              let likes = fixture["items"] as? [[String: Any]] else { return }
+        fixtureMode = true
+        selectedTab = .anchors
+        let size = max(1, fixture["pageSize"] as? Int ?? 10)
+        var failNextPage = fixture["failNextPageOnce"] as? Bool == true
+        followingRequest = { offset, _ in
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if offset > 0 && failNextPage { failNextPage = false; throw HongguoAccountError.network }
+            let end = min(offset + size, anchors.count)
+            let rows = offset < end ? Array(anchors[offset..<end]) : []
+            return HongguoCollectionPage(items: rows.compactMap { Anchor(official: $0) }, hasMore: end < anchors.count, nextOffset: end)
+        }
+        likesRequest = { offset in
+            let end = min(offset + size, likes.count)
+            let rows = offset < end ? Array(likes[offset..<end]) : []
+            return HongguoCollectionPage(items: rows.compactMap { HongguoLikedVideo(row: $0) }, hasMore: end < likes.count, nextOffset: end)
+        }
+        profileRequest = { id in
+            guard let row = anchors.first(where: { $0["id"] as? String == id }), let anchor = Anchor(official: row) else {
+                throw HongguoAccountError.interactionInvalid
+            }
+            return anchor
+        }
+    }
+    #endif
 
     public var currentSource: String {
         let src = !JSSourceService.shared.activeSourceId.isEmpty ? JSSourceService.shared.activeSourceId : store.currentSourceId
@@ -58,6 +209,20 @@ public final class LibraryViewModel: ObservableObject {
         return filtered.filter { $0.title.localizedCaseInsensitiveContains(searchQuery) }
     }
 
+    public var likedList: [Drama] {
+        guard officialAccount else { return [] }
+        let all = officialLikes.compactMap(\.drama)
+        guard !searchQuery.isEmpty else { return all }
+        return all.filter { $0.title.localizedCaseInsensitiveContains(searchQuery) }
+    }
+
+    public var followedAnchorsList: [Anchor] {
+        guard officialAccount else { return [] }
+        let all = officialAnchors
+        guard !searchQuery.isEmpty else { return all }
+        return all.filter { $0.name.localizedCaseInsensitiveContains(searchQuery) }
+    }
+
     public func clearHistory() {
         store.clearHistory(for: currentSource)
     }
@@ -65,350 +230,8 @@ public final class LibraryViewModel: ObservableObject {
     public func removeHistory(dramaId: String) {
         store.removeHistory(dramaId: dramaId)
     }
-}
 
-@MainActor
-public final class DownloadsViewModel: ObservableObject {
-    private let downloadService: DownloadService
-    private var cancellables = Set<AnyCancellable>()
-
-    public init(downloadService: DownloadService = .shared) {
-        self.downloadService = downloadService
-        downloadService.objectWillChange
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
+    public func removeFollow(dramaId: String) {
+        store.removeFollow(dramaId: dramaId)
     }
-
-    public var currentSource: String {
-        let src = !JSSourceService.shared.activeSourceId.isEmpty ? JSSourceService.shared.activeSourceId : LocalStore.shared.currentSourceId
-        return src
-    }
-
-    public var jobs: [DownloadJob] {
-        guard !currentSource.isEmpty else { return [] }
-        let target = currentSource.lowercased()
-        return downloadService.jobs.filter { $0.drama.source.lowercased() == target }
-    }
-
-    public func pauseJob(_ id: String) {
-        downloadService.pauseJob(id: id)
-    }
-
-    public func resumeJob(_ id: String) {
-        downloadService.startJob(id: id)
-    }
-
-    public func deleteJob(_ id: String) {
-        downloadService.deleteJob(id: id)
-    }
-
-    public func resumeAll() {
-        downloadService.resumeAll()
-    }
-
-    public func clearAll() {
-        let currentJobs = jobs
-        for job in currentJobs {
-            downloadService.deleteJob(id: job.id)
-        }
-    }
-}
-
-@MainActor
-public final class SettingsViewModel: ObservableObject {
-    @Published public var unlockPassword = ""
-    @Published public var unlockError: String?
-    @Published public var proxyMode: String = "direct"
-    @Published public var proxyUrl: String = ""
-    @Published public var concurrency: Int = 3
-    @Published public var intervalMs: Int = 250
-    @Published public var keepScreenOn: Bool = true
-    @Published public var currentSourceId: String = ""
-
-    private let store: LocalStore
-    private var cancellables = Set<AnyCancellable>()
-
-    public init(store: LocalStore = .shared) {
-        self.store = store
-        self.currentSourceId = store.currentSourceId
-        self.proxyMode = store.resourceSettings.proxyMode
-        self.proxyUrl = store.resourceSettings.proxyUrl
-        self.concurrency = store.resourceSettings.catalogConcurrency
-        self.intervalMs = store.resourceSettings.catalogIntervalMs
-        self.keepScreenOn = store.resourceSettings.keepScreenOn
-
-        store.$currentSourceId
-            .sink { [weak self] newId in
-                self?.currentSourceId = newId
-            }
-            .store(in: &cancellables)
-
-        store.$unlockedSources
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
-    }
-
-    public var currentSource: SourceSite {
-        SourceSite.byId(currentSourceId)
-    }
-
-    public var availableSources: [SourceSite] {
-        SourceSite.visibleValues(unlocked: store.unlockedSources)
-    }
-
-    public func selectSource(_ id: String) {
-        store.setSource(id)
-        currentSourceId = id
-    }
-
-    public var isUnlocked: Bool {
-        store.unlockedSources
-    }
-
-    public func attemptUnlock() -> Bool {
-        unlockError = nil
-        let success = store.unlockSources(password: unlockPassword)
-        if !success {
-            unlockError = "密码不正确，请重新输入"
-        } else {
-            unlockPassword = ""
-        }
-        return success
-    }
-
-    public func lockSources() {
-        store.lockSources()
-    }
-
-    public func saveSettings() {
-        var s = store.resourceSettings
-        s.proxyMode = proxyMode
-        s.proxyUrl = proxyUrl
-        s.catalogConcurrency = concurrency
-        s.catalogIntervalMs = intervalMs
-        s.keepScreenOn = keepScreenOn
-        store.resourceSettings = s
-        
-        // 立即应用 Wakelock 状态
-        DispatchQueue.main.async {
-            UIApplication.shared.isIdleTimerDisabled = s.keepScreenOn
-        }
-    }
-}
-
-@MainActor
-public final class JSSourceService: ObservableObject {
-    public static let shared = JSSourceService()
-
-    @Published public private(set) var sources: [[String: Any]] = []
-    @Published public private(set) var activeSourceId: String = "hongguo"
-
-    private let repository = NativeRepository.shared
-    private var initializationTask: Task<Void, Never>?
-
-    private init() {
-        let saved = LocalStore.shared.currentSourceId
-        let initial = saved.isEmpty ? "hongguo" : saved
-        self.activeSourceId = initial
-        self.sources = [[
-            "id": "hongguo",
-            "name": "官方内置",
-            "version": "1.0.0",
-            "author": "THL"
-        ]]
-    }
-
-    public func initialize() async {
-        if let task = initializationTask {
-            await task.value
-            return
-        }
-        let task = Task { await initializeSources() }
-        initializationTask = task
-        await task.value
-        initializationTask = nil
-    }
-
-    private func initializeSources() async {
-        // 1. 优先快速获取已安装源（毫秒级）
-        if let list = try? await repository.jsSourceList(), !list.isEmpty {
-            self.sources = list
-        } else {
-            _ = try? await repository.jsSourceScan()
-            if let list = try? await repository.jsSourceList(), !list.isEmpty {
-                self.sources = list
-            }
-        }
-
-        // 2. 检查是否包含官方内置源，若缺失才补充导入
-        if !self.sources.contains(where: { ($0["id"] as? String) == "hongguo" }) {
-            _ = await importBuiltInHongguoSource(autoSelect: true)
-        }
-
-        await refresh()
-
-        if self.activeSourceId.isEmpty {
-            await setActiveSource("hongguo")
-        }
-    }
-
-    public func refresh() async {
-        if let list = try? await repository.jsSourceList() {
-            self.sources = list
-        }
-        if self.sources.isEmpty {
-            self.activeSourceId = ""
-            LocalStore.shared.setSource("")
-            return
-        }
-        if let active = try? await repository.jsSourceGetActive(), !active.isEmpty {
-            if self.sources.contains(where: { ($0["id"] as? String) == active }) {
-                self.activeSourceId = active
-                LocalStore.shared.setSource(active)
-            } else if self.sources.contains(where: { ($0["id"] as? String) == "hongguo" }) {
-                self.activeSourceId = "hongguo"
-                LocalStore.shared.setSource("hongguo")
-            } else if let firstId = self.sources.first?["id"] as? String {
-                self.activeSourceId = firstId
-                LocalStore.shared.setSource(firstId)
-            } else {
-                self.activeSourceId = ""
-                LocalStore.shared.setSource("")
-            }
-        } else if self.sources.contains(where: { ($0["id"] as? String) == "hongguo" }) {
-            // 优先默认激活官方源
-            self.activeSourceId = "hongguo"
-            LocalStore.shared.setSource("hongguo")
-        } else if let firstId = self.sources.first?["id"] as? String {
-            self.activeSourceId = firstId
-            LocalStore.shared.setSource(firstId)
-        } else {
-            self.activeSourceId = ""
-            LocalStore.shared.setSource("")
-        }
-    }
-
-    public func setActiveSource(_ id: String) async {
-        let ok = (try? await repository.jsSourceSetActive(sourceId: id)) ?? false
-        if ok {
-            self.activeSourceId = id
-            LocalStore.shared.setSource(id)
-            await refresh()
-        }
-    }
-
-    /// 导入官方规范的内置免费短剧数据源，导入时默认选中该数据源
-    @discardableResult
-    public func importBuiltInHongguoSource(autoSelect: Bool = true) async -> Bool {
-        let script = BuiltInHongguoJSContent
-        let ok = (try? await repository.jsSourceSaveAndLoad(script: script, fileName: "hongguo.js", autoSelect: autoSelect)) ?? false
-        if ok {
-            await refresh()
-            if autoSelect || self.activeSourceId.isEmpty {
-                await setActiveSource("hongguo")
-            }
-        }
-        return ok
-    }
-
-    public func importFromURL(_ urlString: String, autoSelect: Bool = true) async throws -> Bool {
-        guard let url = URL(string: urlString) else {
-            throw NSError(domain: "JSSource", code: 400, userInfo: [NSLocalizedDescriptionKey: "无效的 URL 链接"])
-        }
-        
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResp = response as? HTTPURLResponse, (200...299).contains(httpResp.statusCode) else {
-            throw NSError(domain: "JSSource", code: 500, userInfo: [NSLocalizedDescriptionKey: "无法下载脚本文件：网络错误"])
-        }
-        
-        guard let script = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "JSSource", code: 500, userInfo: [NSLocalizedDescriptionKey: "无法解析脚本文件：非 UTF8 编码"])
-        }
-        
-        let fileName = url.lastPathComponent.isEmpty ? "imported_plugin.js" : url.lastPathComponent
-        let ok = try await repository.jsSourceSaveAndLoad(script: script, fileName: fileName, autoSelect: autoSelect)
-        
-        if ok {
-            await refresh()
-            let fileId = fileName.replacingOccurrences(of: ".js", with: "")
-            // 官方数据源导入时默认选择，或者当 autoSelect 开启 / 当前活跃源为空时自动选择
-            if autoSelect || fileId == "hongguo" || self.activeSourceId.isEmpty {
-                let targetId = self.sources.contains(where: { ($0["id"] as? String) == fileId }) ? fileId : (self.sources.contains(where: { ($0["id"] as? String) == "hongguo" }) ? "hongguo" : (sources.first?["id"] as? String ?? ""))
-                if !targetId.isEmpty {
-                    await setActiveSource(targetId)
-                }
-            }
-        }
-        return ok
-    }
-
-    @discardableResult
-    public func removeSource(_ id: String) async -> Bool {
-        guard id.lowercased() != "hongguo" else { return false }
-        let ok = (try? await repository.jsSourceRemove(sourceId: id)) ?? false
-        await refresh()
-        if self.activeSourceId == id || self.activeSourceId.isEmpty {
-            await setActiveSource("hongguo")
-        }
-        return ok
-    }
-
-    @discardableResult
-    public func clearAllSources() async -> Bool {
-        let ok = (try? await repository.jsSourceClearAll()) ?? false
-        await refresh()
-        await setActiveSource("hongguo")
-        return ok
-    }
-
-    @discardableResult
-    public func resetOfficialSourceAndSession() async -> Bool {
-        let ok = (try? await repository.jsSourceResetOfficial()) ?? false
-        await refresh()
-        await setActiveSource("hongguo")
-        return ok
-    }
-}
-
-/// 官方数据源脚本内容
-/// 优先从 App Bundle 动态读取，开发/测试期回退直接读取工程目录中的 assets/sources/hongguo.js，避免硬编码重复
-public var BuiltInHongguoJSContent: String {
-    // 1. 优先从 App Bundle 资源中读取
-    if let url = Bundle.main.url(forResource: "hongguo", withExtension: "js"),
-       let content = try? String(contentsOf: url, encoding: .utf8),
-       !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return content
-    }
-
-    // 2. 检查 Bundle 根目录资源
-    let bundleFile = URL(fileURLWithPath: Bundle.main.bundlePath).appendingPathComponent("hongguo.js")
-    if let content = try? String(contentsOf: bundleFile, encoding: .utf8),
-       !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return content
-    }
-
-    // 3. 模拟器/测试/本地调试回退：定位工程 assets/sources/hongguo.js 动态读取
-    let projectRoot = URL(fileURLWithPath: #file)
-        .deletingLastPathComponent() // ViewModels
-        .deletingLastPathComponent() // THLRedLook
-        .deletingLastPathComponent() // tvos
-        .deletingLastPathComponent() // 工程根目录
-    let sourceFile = projectRoot.appendingPathComponent("assets/sources/hongguo.js")
-    if let content = try? String(contentsOf: sourceFile, encoding: .utf8),
-       !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return content
-    }
-
-    // 4. 兜底回退工程路径
-    let fallbackPath = "/Volumes/MacintoshData/Work/MY/Project/Product/THLRedGuo/assets/sources/hongguo.js"
-    if let content = try? String(contentsOfFile: fallbackPath, encoding: .utf8),
-       !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return content
-    }
-
-    return ""
 }

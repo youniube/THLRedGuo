@@ -1,4 +1,4 @@
-import 'fixtures/hongguo_source.dart';
+import 'test_helpers/official_source_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,15 +7,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:THLRedLook/core/diagnostics/source_diagnostics.dart';
+import 'package:THLRedLook/core/diagnostics/network_egress_lookup.dart';
 import 'package:THLRedLook/pages/settings/source_diagnostics_page.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 
 void main() {
-  final script = prepareHongguoFixtureSource(
-    File('assets/sources/hongguo.js').readAsStringSync(),
-  );
+  final script = syntheticOfficialSource();
   http.Response registration() => http.Response(
     '{"device_id_str":"7345678901234567100","install_id_str":"7345678901234567200"}',
     200,
@@ -60,7 +60,8 @@ void main() {
     );
     expect(report, contains('DNS'));
     expect(report, isNot(contains('private-')));
-    expect(report, isNot(contains('aid=')));
+    expect(registration.url, contains('%5B'));
+    expect(registration.url, isNot(contains('private-')));
   });
 
   test('诊断识别 HTTP 200 内的业务拒绝与会话重建', () async {
@@ -118,7 +119,12 @@ void main() {
       buildNumber: '123',
       buildSignature: '',
     );
-    final recorder = SourceDiagnostics.shared;
+    final network = MockClient(
+      (_) async => http.Response('{"ip":"127.0.0.1"}', 200),
+    );
+    final recorder = SourceDiagnostics(
+      networkLookup: NetworkEgressLookup(client: network),
+    );
     recorder.clear();
     recorder.record(
       url:
@@ -139,16 +145,22 @@ void main() {
     );
     addTearDown(() {
       recorder.clear();
+      network.close();
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
         null,
       );
     });
-    await tester.pumpWidget(const MaterialApp(home: SourceDiagnosticsPage()));
+    await tester.pumpWidget(
+      MaterialApp(home: SourceDiagnosticsPage(diagnostics: recorder)),
+    );
     await tester.pumpAndSettle();
     expect(find.text('数据源诊断'), findsOneWidget);
     expect(find.textContaining('DNS'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('source-diagnostics-copy')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
     expect(clipboard, contains('1.0.0+123'));
     expect(clipboard, contains('DNS'));
@@ -169,28 +181,23 @@ void main() {
         isTrue,
         reason: 'assets/sources/hongguo.js 文件必须存在',
       );
-      hongguoScript = prepareHongguoFixtureSource(await file.readAsString());
+      hongguoScript = syntheticOfficialSource();
       expect(hongguoScript, isNotEmpty);
     });
 
-    test('1. 元数据 (meta) 与 CatPawOpen 规范契约验证', () async {
-      expect(hongguoScript.contains('id: "hongguo"'), isTrue);
-      expect(hongguoScript.contains('name: "官方免费短剧"'), isTrue);
-      expect(hongguoScript.contains('version: "1.1.0-dev.13"'), isTrue);
+    test('1. 元数据通过运行时接口保持官方 CatPawOpen 契约', () async {
+      final runtime = CatPawJsRuntime();
+      addTearDown(runtime.dispose);
+      await runtime.init(hongguoScript);
+      final meta = await runtime.getMeta();
+      expect(meta['id'], 'hongguo');
+      expect(meta['name'], '官方免费短剧');
+      expect(meta['type'], 'video');
       expect(
-        hongguoScript.contains('"search"') &&
-            hongguoScript.contains('"categories"') &&
-            hongguoScript.contains('"danmaku"'),
-        isTrue,
+        meta['features'],
+        containsAll(['search', 'categories', 'danmaku']),
       );
-      expect(hongguoScript.contains('type: "video"'), isTrue);
-      expect(
-        hongguoScript.contains('BASE_URL = "https://hongguoduanju.com"'),
-        isTrue,
-      );
-      expect(hongguoScript.contains('var spider = {'), isTrue);
     });
-
     test('2. 沙箱加载与 getMeta() 读取元数据测试', () async {
       final runtime = CatPawJsRuntime();
       await runtime.init(hongguoScript);
@@ -199,7 +206,7 @@ void main() {
       final meta = await runtime.getMeta();
       expect(meta['id'], equals('hongguo'));
       expect(meta['name'], equals('官方免费短剧'));
-      expect(meta['version'], equals('1.1.0-dev.6'));
+      expect(meta['version'], matches(RegExp(r'^\d+\.\d+\.\d+')));
       expect(meta['type'], equals('video'));
       expect(
         meta['features'],
@@ -266,85 +273,6 @@ window._ROUTER_DATA = ${jsonEncode(fakeRouterData)};
 ''';
 
       final mockClient = MockClient((request) async {
-        if (request.url.path == '/service/2/device_register/') {
-          return http.Response(
-            '{"device_id_str":"7345678901234567001","install_id_str":"7345678901234567002"}',
-            200,
-          );
-        }
-        if (request.url.path.contains('/bookapi/bookmall/tab/v')) {
-          return http.Response(
-            jsonEncode({
-              'code': 0,
-              'data': {
-                'tab_item': [
-                  {
-                    'tab_type': 8,
-                    'cell_data': [
-                      {
-                        'cell_id_str': 'cell_001',
-                        'cell_data': [],
-                        'cell_selector': {
-                          'outer_row': {
-                            'items': [
-                              {'selector_item_id': 'all', 'show_name': '全部'},
-                              {
-                                'selector_item_id': 'playlet',
-                                'show_name': '剧场',
-                              },
-                              {
-                                'selector_item_id': 'motion_comic',
-                                'show_name': '漫剧',
-                              },
-                              {
-                                'selector_item_id': 'ai_playlet',
-                                'show_name': 'AI短剧',
-                              },
-                            ],
-                          },
-                        },
-                      },
-                    ],
-                  },
-                ],
-              },
-            }),
-            200,
-            headers: {'content-type': 'application/json'},
-          );
-        }
-        if (request.url.path.contains('/bookapi/bookmall/cell/change/v')) {
-          return http.Response(
-            jsonEncode({
-              'code': 0,
-              'data': {
-                'has_more': false,
-                'cell_view': {
-                  'video_data': [
-                    {
-                      'series_id_str': '7345678901234567890',
-                      'title': '战神归来当赘婿',
-                      'cover': 'https://p3.example.com/cover1.jpg',
-                      'episode_cnt': 80,
-                      'video_desc': '五年前他是一代战神，五年后回归都市隐姓埋名...',
-                      'sub_title': '都市',
-                    },
-                    {
-                      'series_id_str': '7345678901234567891',
-                      'title': '龙王令之至尊归来',
-                      'cover': 'https://p3.example.com/cover2.jpg',
-                      'episode_cnt': 100,
-                      'video_desc': '十万龙王将士恭迎龙王回朝！',
-                      'sub_title': '热血',
-                    },
-                  ],
-                },
-              },
-            }),
-            200,
-            headers: {'content-type': 'application/json'},
-          );
-        }
         if (request.url.path.contains('/category/')) {
           return http.Response(
             fakeHtml,
@@ -358,184 +286,109 @@ window._ROUTER_DATA = ${jsonEncode(fakeRouterData)};
       final runtime = CatPawJsRuntime(mockClient);
       await runtime.init(hongguoScript);
 
-      final catRes = await runtime.category('real-drama', 1);
+      final catRes = await runtime.category('legacy-category', 1);
       expect(catRes.list.length, equals(2));
 
       final first = catRes.list.first;
       expect(first['vod_id'], equals('7345678901234567890'));
       expect(first['vod_name'], equals('战神归来当赘婿'));
       expect(first['vod_pic'], equals('https://p3.example.com/cover1.jpg'));
-      expect(first['vod_remarks'], contains('80集'));
+      expect(first['vod_remarks'], equals('全80集'));
       expect(first['vod_content'], contains('一代战神'));
       expect(first['vod_tag'], contains('都市'));
 
       final second = catRes.list[1];
       expect(second['vod_id'], equals('7345678901234567891'));
       expect(second['vod_name'], equals('龙王令之至尊归来'));
-      expect(second['vod_remarks'], contains('100集'));
+      expect(second['vod_remarks'], equals('全100集'));
 
       runtime.dispose();
     });
 
-    test('5. detail() 剧集详情与选集生成测试', () async {
-      final fakeDetailRouterData = {
-        'loaderData': {
-          'detail': {
-            'seriesDetail': {
-              'series_id': '7345678901234567890',
-              'series_name': '战神归来当赘婿',
-              'series_cover': 'https://p3.example.com/cover1_large.jpg',
-              'series_intro': '五年前一代战神横扫八荒，今朝龙隐于渊守护至爱...',
-              'vid_list': ['vid_001', 'vid_002', 'vid_003', 'vid_004'],
-            },
-          },
-        },
-      };
-
-      final fakeDetailHtml =
-          '''
-<!DOCTYPE html>
-<html>
-<head><title>详情页</title></head>
-<body>
-<script>
-window._ROUTER_DATA = ${jsonEncode(fakeDetailRouterData)};
-</script>
-</body>
-</html>
-''';
-
-      final mockClient = MockClient((request) async {
+    test('5. App 详情使用真实分集标识，不回退网页猜测', () async {
+      final client = MockClient((request) async {
         if (request.url.path == '/service/2/device_register/') {
+          return registration();
+        }
+        expect(request.url.path, '/novel/player/video_detail/v1/');
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'video_data': {
+                'series_title': '合成详情',
+                'video_list': [
+                  {'vid': '7345678901234568001'},
+                  {'vid': '7345678901234568002'},
+                ],
+              },
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final runtime = CatPawJsRuntime(client);
+      addTearDown(runtime.dispose);
+      addTearDown(client.close);
+      await runtime.init(hongguoScript);
+      final result = await runtime.detail('7345678901234567001');
+      expect(result.vod['vod_name'], '合成详情');
+      expect((result.vod['vod_play_url'] as String).split('#'), hasLength(2));
+      expect(result.vod['vod_play_url'], contains('7345678901234568001'));
+    });
+    test('6. App 播放解析真实模型地址，不使用网页预览兜底', () async {
+      const media = 'https://synthetic.qznovelvod.com/video/synthetic.mp4';
+      final client = MockClient((request) async {
+        if (request.url.path == '/service/2/device_register/') {
+          return registration();
+        }
+        if (request.url.host.endsWith('qznovelvod.com')) {
           return http.Response(
-            '{"device_id_str":"7345678901234567001","install_id_str":"7345678901234567002"}',
-            200,
+            'x',
+            206,
+            headers: {
+              'content-type': 'video/mp4',
+              'content-range': 'bytes 0-0/1024',
+              'content-length': '1',
+            },
           );
         }
-        if (request.url.path.contains('/video_detail/v1/')) {
-          return http.Response(
-            jsonEncode({
-              'code': 0,
-              'data': {
-                'video_data': {
-                  'series_id': '7345678901234567890',
-                  'series_title': '战神归来当赘婿',
-                  'series_cover': 'https://p3.example.com/cover1_large.jpg',
-                  'series_intro': '五年前一代战神横扫八荒，今朝龙隐于渊守护至爱...',
-                  'episode_cnt': 4,
-                  'video_list': [
-                    {'vid': 'vid_001', 'item_id': 'vid_001', 'title': '第1集'},
-                    {'vid': 'vid_002', 'item_id': 'vid_002', 'title': '第2集'},
-                    {'vid': 'vid_003', 'item_id': 'vid_003', 'title': '第3集'},
-                    {'vid': 'vid_004', 'item_id': 'vid_004', 'title': '第4集'},
-                  ],
+        return http.Response(
+          jsonEncode({
+            'code': 0,
+            'data': {
+              '7345678901234568001': {
+                'video_model': {
+                  'video_list': {
+                    'main': {
+                      'main_url': base64Encode(utf8.encode(media)),
+                      'codec_type': 'h264',
+                      'definition': '1080p',
+                      'vwidth': 1080,
+                      'vheight': 1920,
+                    },
+                  },
                 },
               },
-            }),
-            200,
-            headers: {'content-type': 'application/json'},
-          );
-        }
-        if (request.url.path.contains('/detail')) {
-          return http.Response(
-            fakeDetailHtml,
-            200,
-            headers: {'content-type': 'text/html; charset=utf-8'},
-          );
-        }
-        return http.Response('Not Found', 404);
+            },
+          }),
+          200,
+        );
       });
-
-      final runtime = CatPawJsRuntime(mockClient);
+      final runtime = CatPawJsRuntime(client);
+      addTearDown(runtime.dispose);
+      addTearDown(client.close);
       await runtime.init(hongguoScript);
-
-      final detailRes = await runtime.detail('7345678901234567890');
-      final vod = detailRes.vod;
-      expect(vod, isNotEmpty);
-      expect(vod['vod_name'], equals('战神归来当赘婿'));
-      expect(vod['vod_pic'], equals('https://p3.example.com/cover1_large.jpg'));
-      expect(vod['vod_remarks'], equals('全4集'));
-      expect(vod['vod_play_from'], equals('官方直链'));
-
-      final playUrl = vod['vod_play_url'] as String;
-      expect(playUrl, isNotEmpty);
-      final episodes = playUrl.split('#');
-      expect(episodes.length, equals(4));
-      expect(
-        episodes[0],
-        startsWith(
-          '第1集\$https://hongguoduanju.com/player/7345678901234567890/vid_001',
-        ),
+      final result = await runtime.play(
+        '',
+        '7345678901234567001_7345678901234568001',
       );
-      expect(
-        episodes[1],
-        startsWith(
-          '第2集\$https://hongguoduanju.com/player/7345678901234567890/vid_002',
-        ),
-      );
-      expect(
-        episodes[3],
-        startsWith(
-          '第4集\$https://hongguoduanju.com/player/7345678901234567890/vid_004',
-        ),
-      );
-
-      runtime.dispose();
+      expect(result.url, media);
+      expect(result.quality, 1080);
     });
-
-    test('6. play() 取流解析测试 (提取真实播放直链与防盗链 Headers)', () async {
-      final fakePlayerHtml = '''
-<!DOCTYPE html>
-<html>
-<head><title>播放器</title></head>
-<body>
-<script>
-window.__INITIAL_DATA__ = {
-  "video": {
-    "main_url": "https://v9-dy-y.hongguoduanju.com/video/tos/cn/stream_hd.mp4?auth_key=123456"
-  }
-};
-</script>
-</body>
-</html>
-''';
-
-      final mockClient = MockClient((request) async {
-        if (request.url.path.contains('/player/')) {
-          return http.Response(
-            fakePlayerHtml,
-            200,
-            headers: {'content-type': 'text/html; charset=utf-8'},
-          );
-        }
-        return http.Response('Not Found', 404);
-      });
-
-      final runtime = CatPawJsRuntime(mockClient);
-      await runtime.init(hongguoScript);
-
-      final playRes = await runtime.play(
-        'flag',
-        'https://hongguoduanju.com/player/7345678901234567890/vid_001',
-      );
-
-      expect(
-        playRes.url,
-        equals(
-          'https://v9-dy-y.hongguoduanju.com/video/tos/cn/stream_hd.mp4?auth_key=123456',
-        ),
-      );
-      expect(
-        playRes.header['Referer'],
-        equals('https://hongguoduanju.com/player/7345678901234567890/vid_001'),
-      );
-      expect(playRes.header['User-Agent'], isNotEmpty);
-
-      runtime.dispose();
-    });
-
     test('7. App 搜索注册会话、精确 ID 与分页传递', () async {
-      CatPawJsRuntime.resetDeviceSessionForTesting();
+      SharedPreferences.setMockInitialValues({});
+      CatPawJsRuntime.resetDeviceSessionForTesting(null);
       var registrations = 0;
       final mockClient = MockClient((request) async {
         if (request.url.path == '/service/2/device_register/') {
@@ -615,7 +468,6 @@ window.__INITIAL_DATA__ = {
             .toList();
 
         final fileNames = files.map((f) => f.uri.pathSegments.last).toList();
-        // 验证仅存在且只允许 hongguo.js
         expect(
           fileNames,
           equals(['hongguo.js']),

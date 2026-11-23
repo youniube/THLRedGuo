@@ -295,15 +295,16 @@ class Drama {
     'cover': cover,
     'episodes': episodes,
     'category': category,
-    'rawCategory': rawCategory ?? category,
+    if (rawCategory != null && rawCategory != category)
+      'rawCategory': rawCategory,
     'vip': vipStatus,
     'heat': heat,
     'views': views,
     'onlineDate': onlineDate,
     'tags': tags,
     'releaseStatus': releaseStatus,
-    'year': year,
-    'mediaType': mediaType,
+    if (year > 0) 'year': year,
+    if (mediaType.isNotEmpty) 'mediaType': mediaType,
   };
 
   Drama merge(Drama fresh) {
@@ -328,7 +329,9 @@ class Drama {
       id: id,
       source: fresh.source.isEmpty ? source : fresh.source,
       sourceId: fresh.sourceId.isEmpty ? sourceId : fresh.sourceId,
-      title: fresh.title.isEmpty || fresh.title == '短剧' ? title : fresh.title,
+      title: _isPlaceholderTitle(fresh.title) && !_isPlaceholderTitle(title)
+          ? title
+          : fresh.title,
       description: fresh.description.isEmpty ? description : fresh.description,
       cover: fresh.cover.isEmpty ? cover : fresh.cover,
       episodes: fresh.episodes > 0 ? fresh.episodes : episodes,
@@ -346,6 +349,13 @@ class Drama {
       year: fresh.year > 0 ? fresh.year : year,
       mediaType: fresh.mediaType.isNotEmpty ? fresh.mediaType : mediaType,
     );
+  }
+
+  static bool _isPlaceholderTitle(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ||
+        trimmed == '短剧' ||
+        RegExp(r'^剧集\s*\d+$').hasMatch(trimmed);
   }
 }
 
@@ -628,7 +638,7 @@ class DownloadJob {
       Map<String, dynamic>.from(value['chapter'] as Map),
       intValue(value['index']),
     ),
-    state: value['state'] as String? ?? 'failed',
+    state: (value['state'] ?? value['status']) as String? ?? 'failed',
     bytes: intValue(value['bytes']),
     total: intValue(value['total']),
     progress: ((value['progress'] as num?)?.toDouble() ?? 0).clamp(0, 1),
@@ -650,4 +660,79 @@ List<Map<String, dynamic>> readJsonList(String? value) {
   } catch (_) {
     return [];
   }
+}
+
+class Anchor {
+  const Anchor({
+    required this.id,
+    required this.name,
+    this.avatar = '',
+    this.bio = '',
+    this.fansCount,
+    this.dramasCount,
+    this.isFollowed = false,
+    this.officialFollowing,
+    this.canFollow = false,
+    this.relativeType = 2,
+  });
+  final String id, name, avatar, bio;
+  final int? fansCount, dramasCount;
+  final bool isFollowed;
+  final bool? officialFollowing;
+  final bool canFollow;
+  final int relativeType;
+
+  Anchor copyWith({
+    String? id,
+    String? name,
+    String? avatar,
+    String? bio,
+    int? fansCount,
+    int? dramasCount,
+    bool? isFollowed,
+    bool? officialFollowing,
+    bool? canFollow,
+    int? relativeType,
+  }) => Anchor(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    avatar: avatar ?? this.avatar,
+    bio: bio ?? this.bio,
+    fansCount: fansCount ?? this.fansCount,
+    dramasCount: dramasCount ?? this.dramasCount,
+    isFollowed: isFollowed ?? this.isFollowed,
+    officialFollowing: officialFollowing ?? this.officialFollowing,
+    canFollow: canFollow ?? this.canFollow,
+    relativeType: relativeType ?? this.relativeType,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'avatar': avatar,
+    'bio': bio,
+    'fansCount': fansCount,
+    'dramasCount': dramasCount,
+    'isFollowed': isFollowed,
+  };
+  factory Anchor.fromJson(Map<String, dynamic> row) => Anchor(
+    id: row['id'] as String? ?? '',
+    name: row['name'] as String? ?? '',
+    avatar: row['avatar'] as String? ?? '',
+    bio: row['bio'] as String? ?? '',
+    fansCount: (row['fansCount'] as num?)?.toInt(),
+    dramasCount: (row['dramasCount'] as num?)?.toInt(),
+    isFollowed: row['isFollowed'] == true,
+  );
+  factory Anchor.fromOfficial(Map<String, dynamic> row) => Anchor(
+    id: row['id'] as String,
+    name: row['name'] as String? ?? '',
+    avatar: row['avatar'] as String? ?? '',
+    bio: row['description'] as String? ?? '',
+    dramasCount: (row['worksCount'] as num?)?.toInt(),
+    officialFollowing: row['following'] as bool?,
+    isFollowed: row['following'] == true,
+    canFollow: row['canFollow'] == true,
+    relativeType: (row['relativeType'] as num?)?.toInt() ?? 2,
+  );
 }

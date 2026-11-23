@@ -8,16 +8,22 @@ abstract final class AppColors {
   // ==========================================
   /// 品牌主色（明艳番茄红/活力红）
   static const Color hongguoRed = Color(0xFFFF2442);
+
   /// 品牌高亮/悬停浅红
   static const Color hongguoRedLight = Color(0xFFFF4863);
+
   /// 品牌深色/按下态深红
   static const Color hongguoRedDark = Color(0xFFE01835);
+
   /// 品牌辅助暖橙色（渐变高光）
   static const Color hongguoOrange = Color(0xFFFF6433);
+
   /// 暖金皇冠/精选角标
   static const Color hongguoGold = Color(0xFFFFC028);
+
   /// 琥珀金高光
   static const Color hongguoAmber = Color(0xFFFF9800);
+
   /// 极光蓝辅助色
   static const Color hongguoCyan = Color(0xFF00E5FF);
 
@@ -44,39 +50,52 @@ abstract final class AppColors {
   // ==========================================
   // 3. 深色主题环境色彩 (Dark Mode Surfaces)
   // ==========================================
-  /// 深色深邃背景（纯正影院级黑底）
-  static const Color darkBackground = Color(0xFF0D0E13);
-  /// 深色主面板/导航底色
-  static const Color darkSurface = Color(0xFF15171F);
+  /// 深色深邃背景（融入淡淡暖橙微调，告别冷黑压抑）
+  static const Color darkBackground = Color(0xFF1F1714);
+
+  /// 深色主面板/导航底色（暖木炭黑）
+  static const Color darkSurface = Color(0xFF261D19);
+
   /// 深色卡片/条目表面
-  static const Color darkCard = Color(0xFF1C1F2A);
+  static const Color darkCard = Color(0xFF2E221D);
+
   /// 深色悬浮/弹窗表面
-  static const Color darkSurfaceHigh = Color(0xFF242836);
+  static const Color darkSurfaceHigh = Color(0xFF382923);
+
   /// 深色抬升表面
-  static const Color darkSurfaceElevated = Color(0xFF242836);
+  static const Color darkSurfaceElevated = Color(0xFF382923);
+
   /// 深色高亮微卡片
-  static const Color darkSurfaceHighest = Color(0xFF2D3244);
+  static const Color darkSurfaceHighest = Color(0xFF45322A);
+
   /// 深色描边与分隔线
-  static const Color darkBorder = Color(0xFF262A38);
+  static const Color darkBorder = Color(0xFF3E2D26);
+
   /// 深色弱化边框
-  static const Color darkBorderSubtle = Color(0xFF1E212E);
+  static const Color darkBorderSubtle = Color(0xFF30231D);
   static const Color darkControlBorder = Color(0xFF73798C);
 
   // ==========================================
   // 4. 浅色主题环境色彩 (Light Mode Surfaces)
   // ==========================================
-  /// 浅色干净浅灰背景
-  static const Color lightBackground = Color(0xFFF6F7FB);
+  /// 浅色干净柔和背景（淡淡暖橙象牙柔白）
+  static const Color lightBackground = Color(0xFFFAF7F2);
+
   /// 浅色白底表面
   static const Color lightSurface = Color(0xFFFFFFFF);
+
   /// 浅色卡片
   static const Color lightCard = Color(0xFFFFFFFF);
+
   /// 浅色次级面板
   static const Color lightSurfaceHigh = Color(0xFFEEF0F6);
+
   /// 浅色高亮小部件
   static const Color lightSurfaceHighest = Color(0xFFE4E7F0);
+
   /// 浅色细边框
   static const Color lightBorder = Color(0xFFE5E7EB);
+
   /// 浅色弱化线条
   static const Color lightBorderSubtle = Color(0xFFEDEDF2);
 
@@ -85,20 +104,28 @@ abstract final class AppColors {
   // ==========================================
   /// 深色主标题
   static const Color textPrimaryDark = Color(0xFFFFFFFF);
+
   /// 深色次级说明
   static const Color textSecondaryDark = Color(0xFF9EA3B2);
+
   /// 深色占位符/弱化文本
   static const Color textTertiaryDark = Color(0xFF676C7D);
+
   /// 默认主文本（深色环境纯白）
   static const Color textPrimary = textPrimaryDark;
+
   /// 默认次级文本
   static const Color textSecondary = textSecondaryDark;
+
   /// 默认弱化文本
   static const Color textTertiary = textTertiaryDark;
+
   /// 浅色主标题
   static const Color textPrimaryLight = Color(0xFF1A1C24);
+
   /// 浅色次级说明
   static const Color textSecondaryLight = Color(0xFF5A6072);
+
   /// 浅色弱化文本
   static const Color textTertiaryLight = Color(0xFF959BAE);
 
@@ -107,38 +134,78 @@ abstract final class AppColors {
   // ==========================================
   /// 播放器环境黑场
   static const Color playerSceneDark = Color(0xFF07090E);
+
   /// 播放器容器底色
   static const Color playerSurface = Color(0xFF0D121C);
+
   /// 顶部微暗遮罩渐变起止
   static const Color playerMaskTop = Color(0xAA000000);
+
   /// 底部深黑遮罩渐变起止
   static const Color playerMaskBottom = Color(0xE6000000);
+
   /// 半透明控制层毛玻璃底色
   static const Color playerControlsOverlay = Color(0x5C000000);
+
   /// 顶部/底部半透明胶囊按钮底色
   static const Color playerPillButton = Color(0x4D000000);
+
   /// 播放器覆盖按钮背景色
   static const Color playerOverlayButton = playerPillButton;
+
   /// 播放器进度条底槽颜色
   static const Color playerProgressInactive = Color(0x3DFFFFFF);
+
   /// 播放器缓存进度颜色
   static const Color playerProgressBuffered = Color(0x66FFFFFF);
+
   /// 播放器激活高亮颜色（品牌活力红）
   static const Color playerProgressActive = Color(0xFFFF2442);
+
   /// 弹幕开关激活背景
   static const Color danmakuActiveBg = Color(0xFFFF2442);
+
   /// 播放器手势 HUD 卡片半透明背景
   static const Color playerGestureHudBackground = Color(0xCC000000);
+
   /// 播放器手势 HUD 卡片边框微光
   static const Color playerGestureHudBorder = Color(0x1FFFFFFF);
+
   /// 播放器手势 HUD 阴影色彩
   static const Color playerGestureHudShadow = Color(0x73000000);
+
   /// 播放器手势 HUD 进度条底槽颜色
   static const Color playerGestureHudTrack = Color(0x3DFFFFFF);
+
   /// 播放器手势 HUD 进度高亮色（琥珀金/活力橙）
   static const Color playerGestureHudHighlight = Color(0xFFFF9800);
+
   /// 播放器手势 HUD 次级说明文本
   static const Color playerGestureHudTextSecondary = Color(0xB3FFFFFF);
+
+  /// 播放器中央主播放按钮毛玻璃深色背景
+  static const Color playerCenterMainBg = Color(0x73000000);
+
+  /// 播放器中央主播放按钮悬停/高光背景 (融入微弱暖红微光)
+  static const Color playerCenterMainBgHover = Color(0x8A1A0B0E);
+
+  /// 播放器中央主播放按钮高光微白边框
+  static const Color playerCenterMainBorder = Color(0x40FFFFFF);
+
+  /// 播放器中央主播放按钮悬停边框
+  static const Color playerCenterMainBorderHover = Color(0x8CFFFFFF);
+
+  /// 播放器中央切集按钮毛玻璃背景
+  static const Color playerCenterSkipBg = Color(0x4D000000);
+
+  /// 播放器中央切集按钮悬停背景
+  static const Color playerCenterSkipBgHover = Color(0x6E000000);
+
+  /// 播放器中央切集按钮边框
+  static const Color playerCenterSkipBorder = Color(0x26FFFFFF);
+
+  /// 播放器中央切集按钮悬停边框
+  static const Color playerCenterSkipBorderHover = Color(0x66FFFFFF);
 
   // ==========================================
   // 7. 电影大片视觉微光与粒子 (Cinematic Glow & Sparks)
@@ -169,16 +236,22 @@ abstract final class AppColors {
   // ==========================================
   /// 选中的微高亮卡片背景 (品牌红 12% 透明)
   static const Color accentSubtle12 = Color(0x1FFF2442);
+
   /// 微弱品牌红背景 (品牌红 8% 透明)
   static const Color accentSubtle08 = Color(0x14FF2442);
+
   /// 边框微弱品牌红 (品牌红 40% 透明)
   static const Color accentBorder40 = Color(0x66FF2442);
+
   /// 滑块激活轨道弱红 (品牌红 35% 透明)
   static const Color accentTrack35 = Color(0x59FF2442);
+
   /// 成功态轻量浅绿背景 (成功绿 15% 透明)
   static const Color successSubtle15 = Color(0x2600C853);
+
   /// 深色微卡片半透底 (深色最高表面 70% 透明)
-  static const Color darkSurfaceHighest70 = Color(0xB32D3244);
+  static const Color darkSurfaceHighest70 = Color(0xB345322A);
+
   /// 轻量遮罩纯黑半透底 (纯黑 20% 透明)
   static const Color blackSubtle20 = Color(0x33000000);
 
@@ -219,72 +292,50 @@ abstract final class AppGradients {
   static const LinearGradient primaryHorizontal = LinearGradient(
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
-    colors: [
-      AppColors.hongguoRedLight,
-      AppColors.hongguoOrange,
-    ],
+    colors: [AppColors.hongguoRedLight, AppColors.hongguoOrange],
   );
 
   /// 金牌 VIP / 排行榜前三名耀金渐变
   static const LinearGradient gold = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      AppColors.hongguoGold,
-      AppColors.hongguoAmber,
-    ],
+    colors: [AppColors.hongguoGold, AppColors.hongguoAmber],
   );
 
-  /// 深色影院级背景纵深氛围微渐变（顶部极暗红晕 -> 纯净影院黑）
+  /// 深色影院级背景纵深氛围微渐变（顶部暖橙微晕 -> 柔和温润暖调黑底）
   static const LinearGradient darkAtmosphere = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [
-      Color(0xFF161118),
-      Color(0xFF0D0E13),
-      Color(0xFF0A0B10),
-    ],
-    stops: [0.0, 0.45, 1.0],
+    colors: [Color(0xFF332018), Color(0xFF241814), Color(0xFF1F1714)],
+    stops: [0.0, 0.35, 1.0],
   );
 
   /// 高阶微光立体卡片渐变（顶部透亮光泽 -> 沉稳微暗底色）
   static const LinearGradient surfaceCard = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      Color(0xFF222736),
-      Color(0xFF181B24),
-    ],
+    colors: [Color(0xFF32241E), Color(0xFF231915)],
   );
 
-  /// 激活卡片微光渐变（融入 10% 品牌红光的暗夜高光卡片）
+  /// 激活卡片微光渐变（融入暖橙微光的暗夜高光卡片）
   static const LinearGradient surfaceActiveCard = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      Color(0xFF2E1C24),
-      Color(0xFF1E1720),
-    ],
+    colors: [Color(0xFF42251B), Color(0xFF2C1913)],
   );
 
   /// 磨砂玻璃/半透明卡片微光细边框渐变
   static const LinearGradient glassBorder = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      Color(0x38FFFFFF),
-      Color(0x0AFFFFFF),
-    ],
+    colors: [Color(0x38FFFFFF), Color(0x0AFFFFFF)],
   );
 
   /// 激活状态渐变发光描边
   static const LinearGradient activeBorder = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      AppColors.hongguoRedLight,
-      AppColors.hongguoOrange,
-    ],
+    colors: [AppColors.hongguoRedLight, AppColors.hongguoOrange],
   );
 
   /// 电影海报沉浸式底部渐变遮罩（全平滑多阶曲线）
@@ -304,32 +355,21 @@ abstract final class AppGradients {
   static const LinearGradient playerTopMask = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [
-      Color(0xCC000000),
-      Color(0x66000000),
-      Color(0x00000000),
-    ],
+    colors: [Color(0xCC000000), Color(0x66000000), Color(0x00000000)],
   );
 
   /// 播放器底部控制栏平滑上托黑渐变
   static const LinearGradient playerBottomMask = LinearGradient(
     begin: Alignment.bottomCenter,
     end: Alignment.topCenter,
-    colors: [
-      Color(0xF0000000),
-      Color(0x99000000),
-      Color(0x00000000),
-    ],
+    colors: [Color(0xF0000000), Color(0x99000000), Color(0x00000000)],
   );
 
-  /// 底部导航栏磨砂渐变底色
+  /// 底部导航栏磨砂渐变底色（暖调暗夜质感）
   static const LinearGradient bottomNavGlass = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [
-      Color(0xF215171F),
-      Color(0xFA0D0E13),
-    ],
+    colors: [Color(0xF5261D19), Color(0xFC1C1512)],
   );
 }
 

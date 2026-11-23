@@ -30,12 +30,12 @@ public struct TVCustomSplitView<Sidebar: View, Detail: View>: View {
             if columnVisibility != .detailOnly {
                 HStack(spacing: 0) {
                     sidebar()
-                        .frame(width: 380)
+                        .frame(width: 260)
                         .background(
                             Material.regular
                         )
                         .background(
-                            Color(red: 0.08, green: 0.07, blue: 0.09).opacity(0.88)
+                            TVColors.splitViewSidebarBg.opacity(0.88)
                         )
                         .cornerRadius(26)
                         .overlay(
@@ -43,8 +43,8 @@ public struct TVCustomSplitView<Sidebar: View, Detail: View>: View {
                                 .stroke(Color.white.opacity(0.14), lineWidth: 1.2)
                         )
                         .shadow(color: Color.black.opacity(0.85), radius: 36, x: 12, y: 0)
-                        .padding(.leading, 48)
-                        .padding(.vertical, 36)
+                        .padding(.leading, 32)
+                        .padding(.vertical, 32)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                         .focusSection()
 

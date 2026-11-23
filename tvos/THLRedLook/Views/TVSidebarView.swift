@@ -23,36 +23,35 @@ public struct TVSidebarView: View {
         self.onRefreshCurrentTab = onRefreshCurrentTab
     }
 
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 顶部 Logo 与应用名称区（采用真实 App 图标，与全局品牌视觉统一）
-            HStack(spacing: 16) {
+            // 顶部 Logo 与应用名称区（品牌标识统一为糖葫芦Haw）
+            HStack(spacing: 12) {
                 Image("applogo")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 14)
+                        RoundedRectangle(cornerRadius: 11)
                             .stroke(Color.white.opacity(0.18), lineWidth: 1.2)
                     )
-                    .shadow(color: TVTheme.primary.opacity(0.4), radius: 10, x: 0, y: 4)
+                    .shadow(color: TVTheme.primary.opacity(0.4), radius: 8, x: 0, y: 3)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("糖葫芦")
-                        .font(.system(size: 28, weight: .black, design: .rounded))
-                        .foregroundColor(.white)
-                        .tracking(1.2)
-                    Text("红果短剧")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(TVTheme.textSecondary)
-                }
+                Text("糖葫芦Haw")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundColor(.white)
+                    .tracking(0.5)
             }
-            .padding(.horizontal, 26)
-            .padding(.top, 40)
-            .padding(.bottom, 32)
+            .padding(.horizontal, 16)
+            .padding(.top, 36)
+            .padding(.bottom, 24)
 
-            // Tab 导航列表（垂直排列）
+            // Tab 导航列表（垂直排列，高度调至适中轻盈的 58pt，比例协调优雅）
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(TVAppTab.allCases) { tab in
                     let isFocused = (focusedNavTab.wrappedValue == tab)
@@ -73,141 +72,27 @@ public struct TVSidebarView: View {
                     .accessibilityIdentifier("nav.\(tab.rawValue)")
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 14)
             .focusSection()
             .defaultFocus(focusedNavTab, selectedTab)
 
             Spacer()
 
             // 底部版本与平台标识
-            VStack(alignment: .leading, spacing: 4) {
-                Text("THLRedLook v1.0.0")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("糖葫芦Haw v\(appVersion)")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundColor(Color.white.opacity(0.45))
-                Text("Apple TVOS • 原生独立播放")
+                Text("Apple TV • 原生播放")
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(Color.white.opacity(0.3))
             }
-            .padding(.horizontal, 26)
-            .padding(.bottom, 32)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 28)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onPlayPauseCommand {
             onRefreshCurrentTab?()
-        }
-    }
-}
-
-/// 侧边栏单个 Tab 按钮（参考 thldytv 的 SidebarTabButton 规范）
-public struct TVSidebarTabButton: View {
-    public let tab: TVAppTab
-    public let isSelected: Bool
-    public let isFocused: Bool
-    public let action: () -> Void
-    public let onMoveRight: () -> Void
-
-    public init(
-        tab: TVAppTab,
-        isSelected: Bool,
-        isFocused: Bool,
-        action: @escaping () -> Void,
-        onMoveRight: @escaping () -> Void
-    ) {
-        self.tab = tab
-        self.isSelected = isSelected
-        self.isFocused = isFocused
-        self.action = action
-        self.onMoveRight = onMoveRight
-    }
-
-    private var contentColor: Color {
-        if isFocused || isSelected {
-            return .white
-        }
-        return Color.white.opacity(0.75)
-    }
-
-    private var iconColor: Color {
-        if isFocused || isSelected {
-            return .white
-        }
-        return Color.white.opacity(0.6)
-    }
-
-    private var buttonBackgroundStyle: AnyShapeStyle {
-        if isFocused {
-            return AnyShapeStyle(
-                LinearGradient(
-                    colors: [TVTheme.primary, TVTheme.primaryHover],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-        } else if isSelected {
-            return AnyShapeStyle(Color.white.opacity(0.14))
-        } else {
-            return AnyShapeStyle(Color.white.opacity(0.04))
-        }
-    }
-
-    private var borderColor: Color {
-        if isFocused {
-            return TVTheme.focusedBorderColor
-        } else if isSelected {
-            return Color.white.opacity(0.2)
-        } else {
-            return Color.white.opacity(0.06)
-        }
-    }
-
-    private var borderWidth: CGFloat {
-        isFocused ? 2.5 : 1.0
-    }
-
-    private var shadowColor: Color {
-        isFocused ? TVTheme.focusedShadowColor : Color.clear
-    }
-
-    public var body: some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundColor(iconColor)
-                    .frame(width: 36)
-
-                Text(tab.title)
-                    .font(.system(size: 22, weight: isFocused || isSelected ? .bold : .semibold))
-                    .foregroundColor(contentColor)
-                    .lineLimit(1)
-
-                Spacer()
-            }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 22)
-            .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(buttonBackgroundStyle)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(borderColor, lineWidth: borderWidth)
-            )
-            .scaleEffect(isFocused ? 1.05 : 1.0)
-            .shadow(
-                color: shadowColor,
-                radius: isFocused ? 14 : 0,
-                x: 0,
-                y: isFocused ? 4 : 0
-            )
-            .animation(TVTheme.focusSpringAnimation, value: isFocused)
-        }
-        .buttonStyle(TVZeroHighlightButtonStyle())
-        .focusEffectDisabled()
-        .onMoveCommand { direction in
-            if direction == .right {
-                onMoveRight()
-            }
         }
     }
 }

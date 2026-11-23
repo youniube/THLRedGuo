@@ -17,7 +17,7 @@ Future<T?> showDanmakuDialog<T>({
 abstract final class DanmakuSettingsTheme {
   static Color accent(ColorScheme scheme) =>
       scheme.brightness == Brightness.dark
-      ? AppColors.hongguoRedLight
+      ? Color.lerp(AppColors.hongguoRedLight, scheme.onSurface, .14)!
       : AppColors.hongguoRedDark;
 
   static Color border(ColorScheme scheme) =>

@@ -21,9 +21,9 @@
 > 3. **网络数据版权归属**：应用中所有可访问的数据源均来源于第三方网络公开平台，其版权与知识产权均归原版权方所有，请自觉支持正版内容；
 > 4. **责任限制**：用户使用本软件及自配数据源产生的一切法律责任及版权纠纷均由使用者自行承担，与本项目及其代码贡献者无关。
 
-**糖葫芦Haw**（工程标识：`THLRedLook`，包名 / Application ID：`com.never88gone.redlook`）是一款基于 **Flutter + Apple tvOS 原生** 打造的全平台独立流媒体与短剧聚合应用。
+**糖葫芦Haw**（工程标识 `THLRedLook`，包名 `com.never88gone.redlook`）是一款基于 Flutter、Apple tvOS 原生和 HarmonyOS NEXT 原生的短剧聚合应用。
 
-应用内无需注册账号或登录。数据请求、签名和解析由设备端 JS 数据源完成，媒体解码、流式解密等底层能力由客户端提供，无需搭建远程中转或中心化代理服务。
+浏览和播放支持游客模式。官方源支持按需登录，同步账号的追剧和观看历史，并可在支持的页面查看评论。数据请求、解析和媒体播放均在设备端完成。
 
 ## JS 数据源
 
@@ -235,6 +235,7 @@ THLRedLook
 ├── ios/                   # iOS 原生平台工程、Podfile 与签名配置
 ├── macos/                 # macOS 桌面端平台工程与权限配置
 ├── windows/               # Windows 桌面端 Runner 与 CMake 构建系统
+├── harmonyos/             # HarmonyOS NEXT 原生工程（ArkTS + ArkUI）
 ├── tvos/                  # Apple tvOS 原生独立工程（SwiftUI + AVKit + Focus Engine）
 └── .github/ci/            # 构建、打包、官方 JS 校验与 TestFlight 工具
 ```
@@ -272,9 +273,12 @@ python3 .github/ci/build_windows.py
 python3 .github/ci/build_ios.py
 python3 .github/ci/build_macos.py
 python3 .github/ci/build_tvos.py
+python3 .github/ci/build_harmonyos.py
 ```
 
 Apple 平台的签名打包使用 `--export-options` 指定对应的 ExportOptions.plist；tvOS 归档另加 `--package`。tvOS 本地调试先在 `tvos/` 运行 `pod install`，再打开 `THLRedLook.xcworkspace`，选择 Apple TV 模拟器运行。
+
+HarmonyOS NEXT 使用 DevEco Studio 或 HarmonyOS CLI 工具链。打包脚本从仓库里的官方 JS 模板生成 HAP 所需的资源。
 
 应用版本保持 `1.0.0`。打包平台、GitHub Release 发布与 TestFlight 上传沿用工作流中的独立选项，手动运行时默认不发布、不上传；TestFlight 公开组不自动分发。官方 JS 工作流默认只生成构建产物，发布至 GitHub Releases 需在手动运行时明确勾选 `publish_release`。
 

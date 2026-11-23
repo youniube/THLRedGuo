@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import CoreImage.CIFilterBuiltins
 @testable import THLRedLook
 
 private final class SearchFixtureProtocol: URLProtocol {
@@ -60,8 +61,88 @@ private final class SearchFixtureProtocol: URLProtocol {
     }
 }
 
+private final class DiagnosticsContractProtocol: URLProtocol {
+    static var mode = "healthy"
+    static var registrations = 0
+    static var searches = 0
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let registration = request.url!.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "service/2/device_register"
+        if registration { Self.registrations += 1 } else { Self.searches += 1 }
+        if Self.mode == "dns" && registration {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotFindHost))
+            return
+        }
+        let status = Self.mode == "http" && !registration ? 403 : 200
+        let body = registration
+            ? "{\"device_id_str\":\"7345678901234567100\",\"install_id_str\":\"7345678901234567200\",\"device_token\":\"private-token-secret\"}"
+            : Self.mode == "business" ? "{\"code\":1001,\"message\":\"private-message-secret\"}" : "{\"code\":0,\"search_tabs\":[{\"tab_type\":29,\"data\":[],\"has_more\":false,\"next_offset\":0}]}"
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Set-Cookie":"private-cookie-secret"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 @MainActor
 final class OverseasSearchTests: XCTestCase {
+    func testDiagnosticsKeepFailureCausesAndRedactReport() async throws {
+        for mode in ["healthy", "dns", "http", "business"] {
+            DiagnosticsContractProtocol.mode = mode
+            DiagnosticsContractProtocol.registrations = 0
+            DiagnosticsContractProtocol.searches = 0
+            let recorder = SourceDiagnostics()
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [DiagnosticsContractProtocol.self]
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let bridge = NativeBridge(baseDirectory: folder, httpSession: session, diagnostics: recorder, persistentDeviceSession: false)
+            let script = BuiltInHongguoJSContent + "\nglobalThis.__hongguoLocalSign = function() { return {}; };"
+            _ = try await bridge.request(action: "jsSource.saveAndLoad", payload: ["script": script, "fileName": "hongguo.js"])
+            var succeeded = false
+            do {
+                _ = try await bridge.request(action: "catalog", payload: ["source":"hongguo", "query":"private-query-secret", "page":1])
+                succeeded = true
+            } catch {
+                XCTAssertTrue(recorder.entries.contains { $0.failed }, "mode=\(mode) error=\(error.localizedDescription) records=\(recorder.entries.map(\.text))")
+            }
+            XCTAssertTrue(succeeded == (mode == "healthy"), "mode=\(mode) succeeded=\(succeeded) records=\(recorder.entries.map(\.text))")
+            if mode == "dns" {
+                XCTAssertTrue(recorder.entries.first?.stage == "游客注册")
+                XCTAssertTrue(recorder.entries.first?.errorCode == "DNS:-1003")
+                XCTAssertTrue(DiagnosticsContractProtocol.searches == 0)
+            }
+            if mode == "http" { XCTAssertTrue(recorder.entries.contains { $0.status == 403 && $0.errorCode == "HTTP_403" }) }
+            if mode == "business" {
+                XCTAssertTrue(DiagnosticsContractProtocol.registrations == 2)
+                XCTAssertTrue(recorder.entries.contains { $0.status == 200 && $0.businessCode == "1001" && $0.errorCode == "BUSINESS_REJECTED" })
+            }
+            for text in [recorder.report, recorder.qrText] {
+                XCTAssertTrue(!text.contains("private-"))
+                XCTAssertTrue(!text.contains("7345678901234567100"))
+                XCTAssertTrue(!text.contains("x-medusa"))
+            }
+            for _ in 0..<70 { recorder.add(SourceDiagnosticEntry(context:"测试",stage:"搜索",errorCode:"HTTP_403")) }
+            XCTAssertTrue(recorder.entries.count == 60)
+            let qrText = recorder.qrText
+            XCTAssertTrue(qrText.utf8.count <= 2300)
+            let filter = CIFilter.qrCodeGenerator()
+            filter.message = Data(qrText.utf8)
+            filter.correctionLevel = "L"
+            let image = filter.outputImage!.transformed(by: CGAffineTransform(scaleX: 4, y: 4))
+            let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: CIContext(), options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])!
+            let decoded = detector.features(in: image).compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            XCTAssertTrue(decoded.contains(qrText))
+            recorder.clear()
+            XCTAssertTrue(recorder.entries.isEmpty)
+        }
+        XCTAssertTrue(SourceDiagnostics.networkCode(URLError(.timedOut)) == "TIMEOUT:-1001")
+        XCTAssertTrue(SourceDiagnostics.networkCode(URLError(.secureConnectionFailed)) == "TLS:-1200")
+    }
+
     private func bridge(_ recorder: SourceDiagnostics) throws -> NativeBridge {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -56,6 +56,14 @@ add_subdirectory("runner")
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
+if(TARGET media_kit_video_plugin)
+  include("runner/media_kit_video.cmake")
+endif()
+if(TARGET flutter_inappwebview_windows_plugin)
+  target_compile_definitions(flutter_inappwebview_windows_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+  include("runner/webview_shutdown.cmake")
+endif()
 
 
 # === Installation ===

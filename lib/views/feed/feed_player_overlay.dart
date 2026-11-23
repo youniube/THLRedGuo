@@ -28,6 +28,9 @@ class FeedPlayerOverlay extends StatefulWidget {
     this.panelOpen = false,
     this.onFullscreen,
     this.onDetail,
+    this.onLike,
+    this.liked = false,
+    this.onOpenAnchorDetail,
   });
 
   final String title;
@@ -50,6 +53,9 @@ class FeedPlayerOverlay extends StatefulWidget {
   final bool panelOpen;
   final VoidCallback? onFullscreen;
   final VoidCallback? onDetail;
+  final VoidCallback? onLike;
+  final bool liked;
+  final VoidCallback? onOpenAnchorDetail;
 
   @override
   State<FeedPlayerOverlay> createState() => _FeedPlayerOverlayState();
@@ -159,6 +165,20 @@ class _FeedPlayerOverlayState extends State<FeedPlayerOverlay> {
             widget.onDanmaku,
           ),
         _action('detail', Icons.info_outline, '剧集详情', widget.onDetail),
+        if (widget.onLike != null)
+          _action(
+            'like',
+            widget.liked ? Icons.favorite : Icons.favorite_border,
+            widget.liked ? '取消点赞' : '点赞',
+            widget.onLike,
+          ),
+        if (widget.onOpenAnchorDetail != null)
+          _action(
+            'anchor',
+            Icons.person_outline,
+            '主播详情',
+            widget.onOpenAnchorDetail,
+          ),
         _action('settings', Icons.tune, '播放设置', widget.onSettings),
       ];
       final progress = widget.duration.inMilliseconds > 0

@@ -13,9 +13,11 @@ import 'package:THLRedLook/core/diagnostics/network_egress_lookup.dart';
 import 'package:THLRedLook/core/js/catpaw_js_runtime.dart';
 import 'package:THLRedLook/pages/settings/source_diagnostics_page.dart';
 
+import 'test_helpers/official_source_fixture.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final script = File('assets/sources/hongguo.js').readAsStringSync();
+  final script = syntheticOfficialSource();
   const registration =
       '{"device_id_str":"7345678901234567100","install_id_str":"7345678901234567200"}';
   const emptyTabs =

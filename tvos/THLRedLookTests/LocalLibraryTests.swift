@@ -1,8 +1,124 @@
 import XCTest
 @testable import THLRedLook
 
+final class DownloadJobStoreTests: XCTestCase {
+    private func fixture() throws -> (UserDefaults, URL) {
+        let name = "THLRedLook.QA.DownloadMetadata." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: name)
+            try? FileManager.default.removeItem(at: root)
+        }
+        return (defaults, root)
+    }
+
+    private func jobs(_ count: Int) -> [DownloadJob] {
+        let drama = Drama(id: "synthetic:storage", title: "合成下载存储", description: String(repeating: "a", count: 800))
+        return (1...count).map {
+            DownloadJob(id: "fixture-\($0)", drama: drama, episode: Episode(id: "\($0)", title: "\($0)", number: $0), state: "completed", bytes: 1024, total: 1024, progress: 1, quality: 1080, localPath: "/synthetic/\($0).mp4")
+        }
+    }
+
+    func testLargeLegacyDownloadListMigratesWithoutChangingLibraryOrSession() throws {
+        let (defaults, root) = try fixture()
+        let original = jobs(539)
+        let data = try JSONEncoder().encode(original)
+        XCTAssertGreaterThan(data.count, 512_000)
+        XCTAssertLessThan(data.count, 950_000)
+        let history = Data("retained-history-and-progress".utf8)
+        defaults.set(history, forKey: "zgj_tv_history")
+        defaults.set(["favorite": "watching"], forKey: "zgj_tv_follows")
+        defaults.set("synthetic-session", forKey: "thl_tv_hongguo_device_session")
+        defaults.set(data, forKey: DownloadJobStore.legacyKey)
+        let file = root.appendingPathComponent("metadata/jobs.json")
+        try DownloadJobStore(defaults: defaults, fileURL: file).migrateLegacyJobs()
+        XCTAssertNil(defaults.object(forKey: DownloadJobStore.legacyKey))
+        XCTAssertEqual(try Data(contentsOf: file), data)
+        XCTAssertEqual(defaults.data(forKey: "zgj_tv_history"), history)
+        XCTAssertEqual(defaults.dictionary(forKey: "zgj_tv_follows") as? [String: String], ["favorite": "watching"])
+        XCTAssertEqual(defaults.string(forKey: "thl_tv_hongguo_device_session"), "synthetic-session")
+        let restarted = DownloadJobStore(defaults: defaults, fileURL: file)
+        try restarted.migrateLegacyJobs()
+        XCTAssertEqual(try restarted.load(), original)
+    }
+
+    func testDownloadRecordsOverOneMegabyteStayOutOfPreferences() throws {
+        let (defaults, root) = try fixture()
+        let file = root.appendingPathComponent("jobs.json")
+        let original = jobs(1_500)
+        XCTAssertGreaterThan(try JSONEncoder().encode(original).count, 1_048_576)
+        try DownloadJobStore(defaults: defaults, fileURL: file).save(original)
+        XCTAssertNil(defaults.object(forKey: DownloadJobStore.legacyKey))
+        XCTAssertEqual(try DownloadJobStore(defaults: defaults, fileURL: file).load(), original)
+    }
+
+    func testFailedMigrationLeavesLegacyRecordsIntact() throws {
+        let (defaults, root) = try fixture()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let blocker = root.appendingPathComponent("not-a-directory")
+        try Data([1]).write(to: blocker)
+        let data = try JSONEncoder().encode(jobs(1))
+        defaults.set(data, forKey: DownloadJobStore.legacyKey)
+        let store = DownloadJobStore(defaults: defaults, fileURL: blocker.appendingPathComponent("jobs.json"))
+        XCTAssertThrowsError(try store.migrateLegacyJobs())
+        XCTAssertEqual(defaults.data(forKey: DownloadJobStore.legacyKey), data)
+    }
+}
+
 @MainActor
 final class LocalLibraryTests: XCTestCase {
+    func testLegacySeasonIdentityPreservesSavedLibraryAndProgress() throws {
+        let oldFourth = Drama(id: "hongguo:7688558312157089000", sourceId: "7688558312157089000", title: "满院亲戚全是上古大妖第四季", episodes: 155)
+        let fourth = Drama(id: "hongguo:7688558312157088793", sourceId: "7688558312157088793", title: "满院亲戚全是上古大妖第四季", episodes: 155)
+        let oldSecond = Drama(id: "hongguo:7678338044344159000", sourceId: "7678338044344159000", title: "满院亲戚全是上古大妖第二季", episodes: 100)
+        let second = Drama(id: "hongguo:7678338044344159256", sourceId: "7678338044344159256", title: "满院亲戚全是上古大妖第二季", episodes: 100)
+        let other = Drama(id: "hongguo:synthetic-unrelated", title: "合成隔离记录")
+        XCTAssertTrue(HongguoSeriesIdentity.isRounded(oldFourth))
+        XCTAssertTrue(!HongguoSeriesIdentity.isRounded(fourth))
+        let ambiguous = Drama(id: "hongguo:7688558312157088794", title: fourth.title)
+        XCTAssertTrue(HongguoSeriesIdentity.replacements(previous: [oldFourth], fresh: [fourth, ambiguous]).isEmpty)
+        XCTAssertTrue(HongguoSeriesIdentity.replacements(previous: [oldFourth], fresh: [oldFourth, fourth]).isEmpty)
+        let different = Drama(id: fourth.id, sourceId: fourth.sourceId, title: "合成另一部短剧第四季")
+        XCTAssertTrue(HongguoSeriesIdentity.replacements(previous: [oldFourth], fresh: [different]).isEmpty)
+        XCTAssertTrue(HongguoSeriesIdentity.replacements(previous: [fourth], fresh: [oldFourth]).isEmpty)
+        let variant = Drama(id: oldFourth.id, title: "满院亲戚全是上古大妖 第4季 (全集)")
+        XCTAssertTrue(HongguoSeriesIdentity.replacements(previous: [variant], fresh: [fourth])[variant.id]?.id == fourth.id)
+        let suite = "THLRedLook.Regression." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let seeded = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        seeded.setFollowState(drama: oldFourth, state: .watching)
+        seeded.setFollowState(drama: oldSecond, state: .wishlist)
+        seeded.recordWatch(drama: oldFourth, episode: 12, position: 37.5, duration: 158)
+        seeded.recordWatch(drama: oldSecond, episode: 5, position: 7, duration: 100)
+        seeded.recordWatch(drama: other, episode: 2, position: 42, duration: 120)
+        let store = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        let oldTime = store.getWatchEntry(dramaId: oldFourth.id)!.updatedAt
+        let otherEntry = store.getWatchEntry(dramaId: other.id)!
+        let changed = store.refreshDramas([fourth, second])
+        XCTAssertTrue(changed[oldFourth.id]?.id == fourth.id)
+        let restored = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        XCTAssertTrue(restored.followState(for: fourth.id) == .watching)
+        XCTAssertTrue(restored.followState(for: second.id) == .wishlist)
+        XCTAssertTrue(restored.followState(for: oldFourth.id) == .none)
+        XCTAssertTrue(restored.followedDramas.count == 2)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: oldFourth.id) == nil)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: fourth.id)?.episode == 12)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: fourth.id)?.position == 37.5)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: fourth.id)?.updatedAt == oldTime)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: second.id)?.episode == 5)
+        XCTAssertTrue(restored.getWatchEntry(dramaId: other.id) == otherEntry)
+        XCTAssertTrue(restored.refreshDramas([fourth, second]).isEmpty)
+        restored.setFollowState(drama: oldFourth, state: .watched)
+        restored.recordWatch(drama: fourth, episode: 33, position: 17, duration: 80)
+        restored.refreshDramas([fourth])
+        let merged = LocalStore(defaults: defaults, cloudUpload: { _ in })
+        XCTAssertTrue(merged.followedDramas.count == 2)
+        XCTAssertTrue(merged.followState(for: fourth.id) == .watched)
+        XCTAssertTrue(merged.getWatchEntry(dramaId: fourth.id)?.episode == 33)
+    }
+
     private func storage() throws -> (UserDefaults, String) {
         let name = "THLRedLook.QA.Library." + UUID().uuidString
         return (try XCTUnwrap(UserDefaults(suiteName: name)), name)
@@ -95,7 +211,7 @@ final class LocalLibraryTests: XCTestCase {
         let bridges = ["播放", "下一集", "推荐", "弹幕"].enumerated().map { index, context in
             NativeBridge(baseDirectory: root.appendingPathComponent(String(index)), httpSession: session,
                          diagnostics: SourceDiagnostics(), diagnosticContext: context, deviceDefaults: defaults,
-                         playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision })
+                         playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision }, accountSnapshot: { (nil, 0) })
         }
         let payload: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567000"]]
         for bridge in bridges {
@@ -148,7 +264,7 @@ final class LocalLibraryTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let bridge = NativeBridge(baseDirectory: root, httpSession: session, diagnostics: SourceDiagnostics(), deviceDefaults: defaults,
-                                  playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision })
+                                  playbackProfileLoader: { try profile.load() }, playbackProfileRevision: { profile.revision }, accountSnapshot: { (nil, 0) })
         let payload: [String: Any] = ["source": "hongguo", "drama": ["id": "hongguo:7345678901234567000"]]
         _ = try await bridge.request(action: "detail", payload: payload)
         XCTAssertEqual(LocalProfileDetailProtocol.requestCount, 1)
@@ -254,6 +370,35 @@ final class LocalLibraryTests: XCTestCase {
         second.toggleDanmaku()
         XCTAssertTrue(LocalStore(defaults: defaults).danmakuEnabled)
         print("THL_TV_LOCAL danmakuPreference=true reload=true")
+    }
+
+    func testDanmakuStyleAutoSavesOnChange() throws {
+        let (defaults, name) = try storage()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = LocalStore(defaults: defaults)
+        let drama = Drama(id: "test_local_danmaku_style", title: "弹幕样式自动保存验证")
+        let player = PlayerViewModel(drama: drama, allEpisodes: [], store: store)
+        defer { player.onDisappear() }
+
+        player.setDanmakuFontSize(34.0)
+        XCTAssertEqual(store.danmakuStyle.fontSize, 34.0)
+        XCTAssertEqual(LocalStore(defaults: defaults).danmakuStyle.fontSize, 34.0)
+
+        player.setDanmakuOpacity(0.5)
+        XCTAssertEqual(store.danmakuStyle.opacity, 0.5)
+        XCTAssertEqual(LocalStore(defaults: defaults).danmakuStyle.opacity, 0.5)
+
+        player.setDanmakuLaneCount(8)
+        XCTAssertEqual(store.danmakuStyle.laneCount, 8)
+        XCTAssertEqual(LocalStore(defaults: defaults).danmakuStyle.laneCount, 8)
+
+        player.danmakuEnabled = false
+        XCTAssertFalse(store.danmakuEnabled)
+        XCTAssertFalse(LocalStore(defaults: defaults).danmakuEnabled)
+
+        player.danmakuEnabled = true
+        XCTAssertTrue(store.danmakuEnabled)
+        XCTAssertTrue(LocalStore(defaults: defaults).danmakuEnabled)
     }
     func testInactivePlayerRestoresLatestHistoryAfterDetailPlayback() throws {
         let (defaults, name) = try storage()

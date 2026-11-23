@@ -1,4 +1,3 @@
-// ignore_for_file: avoid_print
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:THLRedLook/core/engine/dart_core_engine.dart';
@@ -6,14 +5,38 @@ import 'package:THLRedLook/core/bridge/core_bridge.dart';
 import 'package:THLRedLook/models/catalog/models.dart';
 
 void main() {
+  late Directory directory;
   setUpAll(() async {
-    final jsFile = File('assets/sources/hongguo.js');
-    final script = await jsFile.readAsString();
+    directory = await Directory.systemTemp.createTemp('thl-series-');
+    const script = r'''
+var spider = {
+  meta: {id:'hongguo', name:'Synthetic', version:'1.0.0', type:'video'},
+  detail: async function (id) {
+    return {vod: {vod_id:id, vod_play_from:'direct',
+      vod_play_url:id === '7648598645096320024'
+        ? Array.from({length:50}, function (_, index) { return '第'+(index+1)+'集$video'+index; }).join('#')
+        : ''}};
+  },
+  play: async function () { return {url:'https://media.example.invalid/video.mp4'}; }
+};
+''';
     final engine = DartCoreEngine.instance;
-    await engine.dispatch({'action': 'initialize', 'directory': Directory.systemTemp.path});
-    await engine.dispatch({'action': 'jsSource.saveAndLoad', 'script': script, 'fileName': 'hongguo.js'});
-    await engine.dispatch({'action': 'jsSource.setActive', 'source': 'hongguo'});
+    await engine.dispatch({
+      'action': 'initialize',
+      'directory': directory.path,
+    });
+    final loaded = await engine.dispatch({
+      'action': 'jsSource.saveAndLoad',
+      'script': script,
+      'fileName': 'hongguo.js',
+    });
+    expect(loaded['ok'], isTrue);
+    await engine.dispatch({
+      'action': 'jsSource.setActive',
+      'source': 'hongguo',
+    });
   });
+  tearDownAll(() => directory.delete(recursive: true));
 
   test('Drama.fromJson 能够自动清洗带前缀和为空的 sourceId', () {
     final d1 = Drama.fromJson({
@@ -71,16 +94,14 @@ void main() {
     expect(detail2.episodes.length, greaterThanOrEqualTo(50));
 
     // 3. 验证播放解析
-    print('episode raw: ${detail1.episodes.first.raw}');
     final playbackRes = await repo.resolve(
       detail1.drama,
       detail1.episodes.first,
     );
-    print('playbackRes urlAvailable: ${playbackRes.url.isNotEmpty}');
-    expect(playbackRes.url.isNotEmpty, isTrue);
+    expect(playbackRes.url, 'https://media.example.invalid/video.mp4');
   });
 
-  test('网络接口无返回或空剧集时，根据已知集数兜底绝不抛出 Cannot add to an unmodifiable list', () async {
+  test('已知集数的剧集返回空播放列表时保留明确的缺集错误', () async {
     final repo = NativeRepository();
     final mockSeasonDrama = Drama(
       id: 'hongguo:9999999999999999999',
@@ -90,11 +111,15 @@ void main() {
       episodes: 80, // 已知有80集
     );
 
-    // 以前这里会抛出 Cannot add to an unmodifiable list
-    final detail = await repo.detail(mockSeasonDrama);
-    expect(detail.episodes.length, 80);
-    expect(detail.episodes.first.number, 1);
-    expect(detail.episodes.last.number, 80);
-    expect(detail.episodes.first.title, '第 1 集');
+    await expectLater(
+      repo.detail(mockSeasonDrama),
+      throwsA(
+        isA<AppFailure>().having(
+          (error) => error.code,
+          'code',
+          'MISSING_EPISODE',
+        ),
+      ),
+    );
   });
 }

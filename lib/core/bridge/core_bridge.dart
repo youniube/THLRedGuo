@@ -138,7 +138,7 @@ abstract class AppRepository {
   Future<void> moveDownloads(String directory) async =>
       throw AppFailure('当前环境不支持迁移');
   Future<int> workLease(String id, String command) async => 0;
-  bool get supportsDownloads => false;
+  bool get supportsDownloads => true;
   Future<List<DownloadJob>> downloads() async => [];
   Future<int> enqueueDownloads(
     DramaDetail detail,
@@ -999,7 +999,7 @@ class NativeRepository extends AppRepository {
   }
 
   @override
-  bool get supportsDownloads => access?.canDownload ?? true;
+  bool get supportsDownloads => true;
 
   @override
   Future<List<DownloadJob>> downloads() async {
