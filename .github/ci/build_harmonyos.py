@@ -166,41 +166,22 @@ def main():
         harmony_dir / 'entry' / 'build' / 'default' / 'outputs' / 'default' / 'entry-default-unsigned.hap'
     ]
 
-    target_hap = None
-    for p in hap_search_paths:
-        if p.is_file():
-            target_hap = p
-            break
-
-    if not target_hap:
-        all_haps = list(harmony_dir.glob('**/*.hap'))
-        if all_haps:
-            target_hap = all_haps[0]
-
-    if not target_hap:
+    hap_files = [path for path in hap_search_paths if path.is_file()]
+    if not hap_files:
+        hap_files = [path for path in harmony_dir.glob('**/*.hap') if path.is_file()]
+    if not hap_files:
         raise SystemExit("错误：未在构建输出目录找到生成的 .hap 文件！")
 
-    dest_hap = output_dir / f'{variant.slug}-1.0.0-{beijing_build}.hap'
+    target_hap = max(hap_files, key=lambda path: path.stat().st_mtime_ns)
+    dest_hap = output_dir / f'{variant.slug}-1.0.0-harmonyos.hap'
     shutil.copy2(target_hap, dest_hap)
     print(f"[SUCCESS] HAP 产物已导出至: {dest_hap}", flush=True)
 
-    signing_suffix = 'unsigned' if 'unsigned' in target_hap.stem else 'signed'
-    dest_fixed_hap = output_dir / f'{variant.slug}-1.0.0-harmonyos-{signing_suffix}.hap'
-    shutil.copy2(target_hap, dest_fixed_hap)
-    print(f"[SUCCESS] HAP 固定命名产物已导出至: {dest_fixed_hap}", flush=True)
-
-    dest_generic_hap = output_dir / f'{variant.slug}-1.0.0-harmonyos.hap'
-    shutil.copy2(target_hap, dest_generic_hap)
-    print(f"[SUCCESS] HAP 通用命名产物已导出至: {dest_generic_hap}", flush=True)
-
     # 计算 SHA256 校验和
-    checksum_file = output_dir / 'SHA256SUMS.txt'
-    lines = []
-    for f in [dest_hap, dest_fixed_hap, dest_generic_hap]:
-        digest = hashlib.sha256(f.read_bytes()).hexdigest()
-        lines.append(f"{digest}  {f.name}\n")
-        print(f"[SHA256] {digest}  {f.name}", flush=True)
-    checksum_file.write_text(''.join(lines), encoding='ascii')
+    checksum_file = output_dir / 'SHA256SUMS-harmonyos.txt'
+    digest = hashlib.sha256(dest_hap.read_bytes()).hexdigest()
+    checksum_file.write_text(f"{digest}  {dest_hap.name}\n", encoding='ascii')
+    print(f"[SHA256] {digest}  {dest_hap.name}", flush=True)
 
 
 if __name__ == '__main__':

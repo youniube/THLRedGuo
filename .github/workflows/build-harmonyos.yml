@@ -95,7 +95,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: harmonyos-hap-output
-          path: dist/harmonyos/*
+          path: |
+            dist/harmonyos/THLRedLook-1.0.0-harmonyos.hap
+            dist/harmonyos/SHA256SUMS-harmonyos.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -133,6 +135,13 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "更新已有 Release: $tag 资产"
             gh release upload "$tag" release/* --clobber
+            existing_assets=$(gh release view "$tag" --json assets --jq '.assets[].name')
+            while IFS= read -r old_hap; do
+              if [[ "$old_hap" =~ ^THLRedLook-1\.0\.0-(harmonyos-(signed|unsigned)|[0-9]{9})\.hap$ ]]; then
+                echo "清理旧 HAP 包: $old_hap"
+                gh release delete-asset "$tag" "$old_hap" --yes
+              fi
+            done <<< "$existing_assets"
           else
             echo "创建新 Release: $tag (Target: ${{ github.sha }})"
             gh release create "$tag" release/* \
