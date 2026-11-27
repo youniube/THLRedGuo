@@ -172,6 +172,20 @@ final class RunnerTests: XCTestCase {
     XCTAssertTrue(videoRegistrar?.messenger() is SafeBinaryMessengerProxy)
   }
 
+  func testSafePluginRegistrarLivesAsLongAsFlutterRegistry() {
+    var flutterRegistry: MockPluginRegistry? = MockPluginRegistry()
+    weak var registrar: SafePluginRegistrar?
+    autoreleasepool {
+      let safeRegistry = SafePluginRegistry(target: flutterRegistry!, disabledLifecyclePlugins: [])
+      registrar = safeRegistry.registrar(forPlugin: "FilePickerPlugin") as? SafePluginRegistrar
+    }
+
+    XCTAssertNotNil(registrar)
+    XCTAssertTrue(registrar?.target === flutterRegistry?.registrars["FilePickerPlugin"])
+    flutterRegistry = nil
+    XCTAssertNil(registrar)
+  }
+
   func testSafeBinaryMessengerDispatchesBackgroundSendToMainThread() {
     let target = MockBinaryMessenger()
     let expectedReply = Data([1, 2, 3])

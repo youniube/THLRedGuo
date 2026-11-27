@@ -1,7 +1,9 @@
 #import "SafePluginRegistry.h"
+#import <objc/runtime.h>
 #import <stdatomic.h>
 
 static atomic_bool gEngineStopping = ATOMIC_VAR_INIT(false);
+static char kSafePluginRegistrarsKey;
 
 @implementation THLAppLifecycleGuard
 
@@ -240,8 +242,17 @@ static atomic_bool gEngineStopping = ATOMIC_VAR_INIT(false);
     return nil;
   }
   BOOL disableLifecycle = [_disabledLifecyclePlugins containsObject:pluginKey];
-  return [[SafePluginRegistrar alloc] initWithTarget:targetRegistrar
-                           disableLifecycleDelegates:disableLifecycle];
+  SafePluginRegistrar* registrar = [[SafePluginRegistrar alloc] initWithTarget:targetRegistrar
+                                                    disableLifecycleDelegates:disableLifecycle];
+  NSMutableArray<SafePluginRegistrar*>* registrars =
+      objc_getAssociatedObject(_target, &kSafePluginRegistrarsKey);
+  if (registrars == nil) {
+    registrars = [NSMutableArray array];
+    objc_setAssociatedObject(_target, &kSafePluginRegistrarsKey, registrars,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  [registrars addObject:registrar];
+  return registrar;
 }
 
 - (BOOL)hasPlugin:(NSString*)pluginKey {
